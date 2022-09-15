@@ -1,0 +1,3 @@
+[submodule "submodules/durabletask-protobuf"]
+	path = submodules/durabletask-protobuf
+	url = https://github.com/microsoft/durabletask-protobuf
