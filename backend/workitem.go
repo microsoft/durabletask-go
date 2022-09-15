@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cgillum/durabletask-go/api"
-	"github.com/cgillum/durabletask-go/internal/protos"
+	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
 var ErrNoWorkItems = errors.New("no work items were found")

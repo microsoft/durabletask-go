@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cgillum/durabletask-go/internal/protos"
 	"github.com/google/uuid"
+	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )

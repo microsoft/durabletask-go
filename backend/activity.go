@@ -4,8 +4,8 @@ import (
 	context "context"
 	"fmt"
 
-	"github.com/cgillum/durabletask-go/api"
-	"github.com/cgillum/durabletask-go/internal/protos"
+	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
 type activityProcessor struct {

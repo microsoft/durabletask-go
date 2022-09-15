@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cgillum/durabletask-go/api"
-	"github.com/cgillum/durabletask-go/backend"
-	"github.com/cgillum/durabletask-go/internal/protos"
 	"github.com/google/uuid"
+	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/proto"
 
 	_ "github.com/mattn/go-sqlite3"

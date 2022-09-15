@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cgillum/durabletask-go/api"
-	"github.com/cgillum/durabletask-go/backend"
-	"github.com/cgillum/durabletask-go/internal/helpers"
-	"github.com/cgillum/durabletask-go/internal/protos"
-	"github.com/cgillum/durabletask-go/tests/mocks"
+	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/internal/helpers"
+	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/microsoft/durabletask-go/tests/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

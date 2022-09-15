@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/cgillum/durabletask-go/internal/protos"
+	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
 var (

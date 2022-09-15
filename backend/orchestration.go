@@ -6,9 +6,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/cgillum/durabletask-go/api"
-	"github.com/cgillum/durabletask-go/internal/helpers"
-	"github.com/cgillum/durabletask-go/internal/protos"
+	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/helpers"
+	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
 type OrchestratorExecutor interface {

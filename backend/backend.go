@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/cgillum/durabletask-go/api"
-	"github.com/cgillum/durabletask-go/internal/protos"
+	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
 var ErrTaskHubExists = errors.New("task hub already exists")

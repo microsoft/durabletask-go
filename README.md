@@ -1,6 +1,6 @@
 # Durable Task Framework for Go
 
-[![Build](https://github.com/cgillum/durabletask-go/actions/workflows/pr-validation.yml/badge.svg)](https://github.com/cgillum/durabletask-go/actions/workflows/pr-validation.yml)
+[![Build](https://github.com/microsoft/durabletask-go/actions/workflows/pr-validation.yml/badge.svg)](https://github.com/microsoft/durabletask-go/actions/workflows/pr-validation.yml)
 
 The Durable Task Framework is a lightweight, embeddable engine for writing durable, fault-tolerant business logic (*orchestrations*) as ordinary code. The engine itself is written in Go and intended to be embedded into other Go-based processes. It exposes a gRPC endpoint to support writing durable flows in any language. There are currently SDKs that consume this gRPC endpoint for [.NET](https://github.com/microsoft/durabletask-dotnet) and [Java](https://github.com/microsoft/durabletask-java), with more to come.
 
