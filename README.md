@@ -64,6 +64,14 @@ grpcServer.Serve(lis)
 
 Note that the Durable Task gRPC service implementation is designed to serve one client at a time, just like with any sidecar architecture. Scale out is achieved by adding new pod replicas that contain both the app process and the sidecar (connected to a common database).
 
+## Cloning this repository
+
+This repository contains submodules. Be sure to clone it with the option to include submodules. Otherwise you will not be able to generate the protobuf code.
+
+```bash
+git clone --recurse-submodules https://github.com/microsoft/durabletask-go 
+```
+
 ## Building the project
 
 This project requires go v1.18.x or greater. You can build a standalone executable by simply running `go build` at the project root.
@@ -74,7 +82,7 @@ Use the following command to generate the protobuf from the submodule.
 
 ```bash
 # NOTE: assumes the .proto file defines: option go_package = "/internal/protos"
-protoc --go_out=. --go-grpc_out=. submodules/durabletask-protobuf/protos/orchestrator_service.proto
+protoc --go_out=. --go-grpc_out=. -I submodules/durabletask-protobuf/protos orchestrator_service.proto
 ```
 
 ### Generating mocks for testing

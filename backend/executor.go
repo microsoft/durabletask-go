@@ -3,6 +3,8 @@ package backend
 import (
 	context "context"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -11,6 +13,7 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -41,6 +44,12 @@ type grpcExecutor struct {
 	pendingOrchestrators map[api.InstanceID]*ExecutionResults
 	pendingActivities    map[string]*activityExecutionResult
 	backend              Backend
+}
+
+// IsDurableTaskGrpcRequest returns true if the specified gRPC method name represents an operation
+// that is compatible with the gRPC executor.
+func IsDurableTaskGrpcRequest(fullMethodName string) bool {
+	return strings.Index(fullMethodName, "/TaskHubSidecarService") == 0
 }
 
 func NewGrpcExecutor(grpcServer *grpc.Server, be Backend) Executor {
@@ -126,10 +135,14 @@ func (grpcExecutor) Hello(ctx context.Context, empty *emptypb.Empty) (*emptypb.E
 
 // GetWorkItems implements protos.TaskHubSidecarServiceServer
 func (e grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream protos.TaskHubSidecarService_GetWorkItemsServer) error {
+	if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
+		log.Printf("work item stream established by user-agent: %v", md.Get("user-agent"))
+	}
 	// The worker client invokes this method, which streams back work-items as they arrive.
 	for {
 		select {
 		case <-stream.Context().Done():
+			log.Printf("work item stream closed")
 			return nil
 		case wi := <-e.workItemQueue:
 			if err := stream.Send(wi); err != nil {
