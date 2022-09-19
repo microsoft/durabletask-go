@@ -14,7 +14,9 @@ import (
 )
 
 // https://github.com/stretchr/testify/issues/519
-var anyContext = mock.Anything
+var (
+	anyContext = mock.Anything
+)
 
 func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 	ctx := context.Background()
@@ -32,7 +34,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 	ex := mocks.NewExecutor(t)
 	ex.EXPECT().ExecuteOrchestrator(anyContext, wi.InstanceID, state.OldEvents(), mock.Anything).Return(result, nil).Once()
 
-	worker := backend.NewOrchestrationWorker(be, ex)
+	worker := backend.NewOrchestrationWorker(be, ex, logger, nil)
 	ok, err := worker.ProcessNext(ctx)
 	worker.StopAndDrain()
 
@@ -46,7 +48,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_NoWorkItems(t *testing.T) {
 	be := mocks.NewBackend(t)
 	be.EXPECT().GetOrchestrationWorkItem(anyContext).Return(nil, backend.ErrNoWorkItems).Once()
 
-	w := backend.NewOrchestrationWorker(be, nil)
+	w := backend.NewOrchestrationWorker(be, nil, logger, nil)
 	ok, err := w.ProcessNext(ctx)
 	assert.Nil(t, err)
 	assert.False(t, ok)
@@ -90,7 +92,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	be.EXPECT().CompleteOrchestrationWorkItem(anyContext, wi).Return(nil).Once()
 
 	// Set up and run the test
-	worker := backend.NewOrchestrationWorker(be, ex)
+	worker := backend.NewOrchestrationWorker(be, ex, logger, nil)
 	ok, err := worker.ProcessNext(ctx)
 	worker.StopAndDrain()
 

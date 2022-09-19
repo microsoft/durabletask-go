@@ -2,7 +2,6 @@ package backend
 
 import (
 	context "context"
-	"log"
 	"sync"
 	"time"
 
@@ -33,7 +32,8 @@ type TaskProcessor interface {
 
 type worker struct {
 	backend Backend
-
+	options *WorkerOptions
+	logger  Logger
 	// dispatchSemaphore is for throttling orchestration concurrency.
 	dispatchSemaphore semaphore.Semaphore
 
@@ -42,20 +42,36 @@ type worker struct {
 
 	// cancel is used to cancel background polling.
 	// It will be nil if background polling isn't started.
-	cancel context.CancelFunc
-
+	cancel    context.CancelFunc
 	processor TaskProcessor
-
-	waiting bool
+	waiting   bool
 }
 
-func NewTaskWorker(be Backend, p TaskProcessor) TaskWorker {
+type WorkerOptions struct {
+	MaxParallelWorkItems int32
+}
+
+func NewWorkerOptions() *WorkerOptions {
+	return &WorkerOptions{
+		MaxParallelWorkItems: 1,
+	}
+}
+
+func NewTaskWorker(be Backend, p TaskProcessor, logger Logger, opts *WorkerOptions) TaskWorker {
+	if opts == nil {
+		opts = &WorkerOptions{}
+	}
+	if opts.MaxParallelWorkItems <= 0 {
+		opts.MaxParallelWorkItems = 1
+	}
 	return &worker{
 		backend:           be,
 		processor:         p,
-		dispatchSemaphore: semaphore.New(1), // TODO: configurable
+		logger:            logger,
+		dispatchSemaphore: semaphore.New(int(opts.MaxParallelWorkItems)),
 		pending:           &sync.WaitGroup{},
 		cancel:            nil, // assigned later
+		options:           opts,
 	}
 }
 
@@ -87,49 +103,63 @@ func (w *worker) Start(ctx context.Context) {
 		for range ticker.C {
 			select {
 			case <-ctx.Done():
+				w.logger.Infof("%v: received cancellation signal")
 				break loop
 			default:
 				if ok, err := w.ProcessNext(ctx); ok {
 					// found a work item - reset the timer to get the next one
 					b.Reset()
-				} else if err != nil {
-					// cancelled
+				} else if err != nil && err == ctx.Err() {
+					w.logger.Infof("%v: received cancellation signal")
 					break loop
+				} else if err != nil {
+					// log the error and inject some extra sleep to avoid tight failure loops
+					w.logger.Errorf("unexpected worker error: %v. Adding 5 extra seconds of backoff.", err)
+					// TODO: Make this a cancellable sleep
+					time.Sleep(5 * time.Second)
 				}
 			}
 		}
+
+		w.logger.Infof("%v: stopped listening for new work items", w.Name())
 	}()
 }
 
 func (w *worker) ProcessNext(ctx context.Context) (bool, error) {
 	if !w.dispatchSemaphore.TryAcquire(1) {
-		log.Printf("%v: waiting for one of %v in-flight execution(s) to complete", w.Name(), w.dispatchSemaphore.GetCount())
+		w.logger.Debugf("%v: waiting for one of %v in-flight execution(s) to complete", w.Name(), w.dispatchSemaphore.GetCount())
 		if err := w.dispatchSemaphore.Acquire(ctx, 1); err != nil {
 			// cancelled
 			return false, err
 		}
 	}
-
 	w.pending.Add(1)
+
+	processing := false
+	defer func() {
+		if !processing {
+			w.pending.Done()
+			w.dispatchSemaphore.Release(1)
+		}
+	}()
+
 	wi, err := w.processor.FetchWorkItem(ctx)
 	if err == ErrNoWorkItems || wi == nil {
 		if !w.waiting {
-			log.Printf("%v: waiting for new work items...", w.Name())
+			w.logger.Debugf("%v: waiting for new work items...", w.Name())
 			w.waiting = true
 		}
+		return false, nil
 	} else if err != nil {
-		log.Printf("%v: failed to fetch work item: %v", w.Name(), err)
+		w.logger.Errorf("%v: failed to fetch work item: %v", w.Name(), err)
+		return false, err
 	} else {
 		// process the work-item in the background
 		w.waiting = false
+		processing = true
 		go w.processWorkItem(ctx, wi)
 		return true, nil
 	}
-
-	// not processing - release semaphore & mutex
-	w.pending.Done()
-	w.dispatchSemaphore.Release(1)
-	return false, nil
 }
 
 func (w *worker) StopAndDrain() {
@@ -146,21 +176,21 @@ func (w *worker) processWorkItem(ctx context.Context, wi WorkItem) {
 	defer w.dispatchSemaphore.Release(1)
 	defer w.pending.Done()
 
-	log.Printf("%v: processing work item: %s", w.Name(), wi.Description())
+	w.logger.Debugf("%v: processing work item: %s", w.Name(), wi.Description())
 
 	if err := w.processor.ProcessWorkItem(ctx, wi); err != nil {
-		log.Printf("%v: failed to process work item: %v", w.Name(), err)
+		w.logger.Errorf("%v: failed to process work item: %v", w.Name(), err)
 		if err := w.processor.AbandonWorkItem(ctx, wi); err != nil {
-			log.Printf("%v: failed to abandon work item: %v", w.Name(), err)
+			w.logger.Errorf("%v: failed to abandon work item: %v", w.Name(), err)
 		}
 	}
 
 	if err := w.processor.CompleteWorkItem(ctx, wi); err != nil {
-		log.Printf("%v: failed to complete work item: %v", w.Name(), err)
+		w.logger.Errorf("%v: failed to complete work item: %v", w.Name(), err)
 		if err := w.processor.AbandonWorkItem(ctx, wi); err != nil {
-			log.Printf("%v: failed to abandon work item: %v", w.Name(), err)
+			w.logger.Errorf("%v: failed to abandon work item: %v", w.Name(), err)
 		}
 	}
 
-	log.Printf("%v: work item processed successfully", w.Name())
+	w.logger.Debugf("%v: work item processed successfully", w.Name())
 }

@@ -20,13 +20,14 @@ import (
 
 var (
 	ctx                   = context.Background()
+	logger                = backend.DefaultLogger()
 	sqliteInMemoryOptions = sqlite.NewSqliteOptions("")
 	sqliteFileOptions     = sqlite.NewSqliteOptions("test.sqlite3")
 )
 
 var backends = []backend.Backend{
-	sqlite.NewSqliteBackend(sqliteFileOptions),
-	sqlite.NewSqliteBackend(sqliteInMemoryOptions),
+	sqlite.NewSqliteBackend(sqliteFileOptions, logger),
+	sqlite.NewSqliteBackend(sqliteInMemoryOptions, logger),
 }
 
 var completionStatusValues = []protos.OrchestrationStatus{

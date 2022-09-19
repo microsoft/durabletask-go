@@ -30,7 +30,7 @@ This project includes a [sqlite](https://sqlite.org/) storage provider for persi
 ```go
 // Persists state to a file named test.sqlite3. Use "" for in-memory storage.
 options := sqlite.NewSqliteOptions("test.sqlite3")
-be := sqlite.NewSqliteBackend(options)
+be := sqlite.NewSqliteBackend(options, backend.DefaultLogger())
 ```
 
 Additional storage providers can be created by extending the `Backend` interface.
@@ -42,23 +42,26 @@ See the `main.go` file for an example of how to create a standalone gRPC sidecar
 The following code creates a `TaskHub` worker with sqlite `Backend` and a gRPC `Executor` implementations.
 
 ```go
+// Use the default logger or provide your own
+logger := backend.DefaultLogger()
+
+// Configure the sqlite backend that will store the runtime state
+sqliteOptions := sqlite.NewSqliteOptions(sqliteFilePath)
+be := sqlite.NewSqliteBackend(sqliteOptions, logger)
+
 // Create a gRPC server that the language SDKs will connect to
 grpcServer := grpc.NewServer()
-grpcExecutorFunc := func(be backend.Backend) backend.Executor {
-    return backend.NewGrpcExecutor(grpcServer, be)
-}
-configureFunc := func(opts *sqlite.SqliteOptions) {
-    opts.FilePath = "taskhub.sqlite3"
-}
+executor := backend.NewGrpcExecutor(server, be, logger)
 
-// The sqlite package has functions for initializing the worker.
-// The database will be created automatically if it doesn't already exist.
-worker := sqlite.NewTaskHubWorker(grpcExecutorFunc, configureFunc)
+// Construct and start the task hub worker object, which polls the backend for new work
+orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger, backend.NewWorkerOptions())
+activityWorker := backend.NewActivityTaskWorker(be, executor, logger, backend.NewWorkerOptions())
+taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
 worker.Start(context.Background())
 
 // Start listening.
 lis, _ := net.Listen("tcp", "localhost:4001")
-log.Printf("server listening at %v", lis.Addr())
+fmt.Printf("server listening at %v\n", lis.Addr())
 grpcServer.Serve(lis)
 ```
 

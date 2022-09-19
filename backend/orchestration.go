@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -22,10 +21,19 @@ type OrchestratorExecutor interface {
 type orchestratorProcessor struct {
 	be       Backend
 	executor OrchestratorExecutor
+	logger   Logger
 }
 
-func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor) TaskWorker {
-	return NewTaskWorker(be, &orchestratorProcessor{be: be, executor: executor})
+func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor, logger Logger, options *WorkerOptions) TaskWorker {
+	if options == nil {
+		options = NewWorkerOptions()
+	}
+	processor := &orchestratorProcessor{
+		be:       be,
+		executor: executor,
+		logger:   logger,
+	}
+	return NewTaskWorker(be, processor, logger, options)
 }
 
 // Name implements TaskProcessor
@@ -41,7 +49,7 @@ func (p *orchestratorProcessor) FetchWorkItem(ctx context.Context) (WorkItem, er
 // ProcessWorkItem implements TaskProcessor
 func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkItem) error {
 	wi := cwi.(*OrchestrationWorkItem)
-	log.Printf("%v: received work item with %d new event(s): %v", wi.InstanceID, len(wi.NewEvents), helpers.HistoryListSummary(wi.NewEvents))
+	w.logger.Debugf("%v: received work item with %d new event(s): %v", wi.InstanceID, len(wi.NewEvents), helpers.HistoryListSummary(wi.NewEvents))
 
 	// TODO: Caching
 	// In the fullness of time, we should consider caching executors and runtime state
@@ -53,14 +61,14 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 	} else {
 		wi.State = state
 	}
-	log.Printf("%v: got orchestration runtime state: %s", wi.InstanceID, getOrchestrationStateDescription(wi))
+	w.logger.Debugf("%v: got orchestration runtime state: %s", wi.InstanceID, getOrchestrationStateDescription(wi))
 
 	if w.applyWorkItem(wi) {
 		for continueAsNewCount := 0; ; continueAsNewCount++ {
 			if continueAsNewCount > 0 {
-				log.Printf("%v: continuing-as-new with %d event(s): %s", wi.InstanceID, len(wi.State.NewEvents()), helpers.HistoryListSummary(wi.State.NewEvents()))
+				w.logger.Debugf("%v: continuing-as-new with %d event(s): %s", wi.InstanceID, len(wi.State.NewEvents()), helpers.HistoryListSummary(wi.State.NewEvents()))
 			} else {
-				log.Printf("%v: invoking orchestrator", wi.InstanceID)
+				w.logger.Debugf("%v: invoking orchestrator", wi.InstanceID)
 			}
 
 			// Run the user orchestrator code, providing the old history and new events together.
@@ -68,7 +76,7 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 			if err != nil {
 				return fmt.Errorf("error executing orchestrator: %w", err)
 			}
-			log.Printf("%v: orchestrator returned %d action(s): %s", wi.InstanceID, len(results.Response.Actions), helpers.ActionListSummary(results.Response.Actions))
+			w.logger.Debugf("%v: orchestrator returned %d action(s): %s", wi.InstanceID, len(results.Response.Actions), helpers.ActionListSummary(results.Response.Actions))
 
 			// Apply the orchestrator outputs to the orchestration state.
 			continuedAsNew, err := wi.State.ApplyActions(results.Response.Actions)
@@ -80,7 +88,7 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 			// When continuing-as-new, we re-execute the orchestrator from the beginning with a truncated state in a tight loop
 			// until the orchestrator performs some non-continue-as-new action.
 			if continuedAsNew {
-				log.Printf("%v: continued-as-new with %d new event(s).", wi.InstanceID, len(wi.State.NewEvents()))
+				w.logger.Debugf("%v: continued-as-new with %d new event(s).", wi.InstanceID, len(wi.State.NewEvents()))
 
 				const MaxContinueAsNewCount = 20
 				if continueAsNewCount >= MaxContinueAsNewCount {
@@ -109,13 +117,13 @@ func (p *orchestratorProcessor) AbandonWorkItem(ctx context.Context, wi WorkItem
 func (w *orchestratorProcessor) applyWorkItem(wi *OrchestrationWorkItem) bool {
 	// Ignore work items for orchestrations that are completed or are in a corrupted state.
 	if !wi.State.IsValid() {
-		log.Printf("%v: orchestration state is invalid; dropping work item", wi.InstanceID)
+		w.logger.Warnf("%v: orchestration state is invalid; dropping work item", wi.InstanceID)
 		return false
 	} else if wi.State.IsCompleted() {
-		log.Printf("%v: orchestration already completed; dropping work item", wi.InstanceID)
+		w.logger.Warnf("%v: orchestration already completed; dropping work item", wi.InstanceID)
 		return false
 	} else if len(wi.NewEvents) == 0 {
-		log.Printf("%v: the work item had no events!", wi.InstanceID)
+		w.logger.Warnf("%v: the work item had no events!", wi.InstanceID)
 	}
 
 	// The orchestrator started event is used primarily for updating the current time as reported
@@ -129,9 +137,9 @@ func (w *orchestratorProcessor) applyWorkItem(wi *OrchestrationWorkItem) bool {
 	for _, e := range wi.NewEvents {
 		if err := wi.State.AddEvent(e); err != nil {
 			if err == ErrDuplicateEvent {
-				log.Printf("%v: dropping duplicate event: %v", wi.InstanceID, e)
+				w.logger.Warnf("%v: dropping duplicate event: %v", wi.InstanceID, e)
 			} else {
-				log.Printf("%v: dropping event: %v, %v", wi.InstanceID, e, err)
+				w.logger.Warnf("%v: dropping event: %v, %v", wi.InstanceID, e, err)
 			}
 		} else {
 			added++
@@ -139,7 +147,7 @@ func (w *orchestratorProcessor) applyWorkItem(wi *OrchestrationWorkItem) bool {
 	}
 
 	if added == 0 {
-		log.Printf("%v: all new events were dropped", wi.InstanceID)
+		w.logger.Warnf("%v: all new events were dropped", wi.InstanceID)
 		return false
 	}
 
@@ -147,10 +155,10 @@ func (w *orchestratorProcessor) applyWorkItem(wi *OrchestrationWorkItem) bool {
 }
 
 func (w *orchestratorProcessor) abortWorkItem(ctx context.Context, wi *OrchestrationWorkItem, err error, message string) {
-	log.Printf("aborting work item: %v: %v: %v", wi, message, err)
+	w.logger.Warnf("aborting work item: %v: %v: %v", wi, message, err)
 	err = w.be.AbandonOrchestrationWorkItem(ctx, wi)
 	if err != nil {
-		log.Printf("failed to abort work item: %v", wi)
+		w.logger.Errorf("failed to abort work item: %v", wi)
 		return
 	}
 }

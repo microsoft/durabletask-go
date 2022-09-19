@@ -14,8 +14,7 @@ var ErrNotInitialized = errors.New("backend not initialized")
 var ErrWorkItemLockLost = errors.New("lock on work-item was lost")
 
 type Backend interface {
-	// CreateTaskHub creates a new task hub for the current backend. It's up to the backend implementation
-	// and its configuration to determine how it gets created.
+	// CreateTaskHub creates a new task hub for the current backend. Task hub creation must be idempotent.
 	//
 	// If the task hub for this backend already exists, an error of type ErrTaskHubExists is returned.
 	CreateTaskHub(context.Context) error

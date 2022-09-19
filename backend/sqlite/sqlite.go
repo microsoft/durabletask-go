@@ -6,7 +6,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -35,32 +34,8 @@ type sqliteBackend struct {
 	dsn        string
 	db         *sql.DB
 	workerName string
+	logger     backend.Logger
 	options    *SqliteOptions
-}
-
-// NewTaskHubWorker creates a new TaskHubWorker with an initialized sqlite backend.
-//
-// Use executorFactory to configure an Executor object for use with the new backend.
-//
-// Use configure to configure options for the sqlite backend or specify `nil` to use the default configuration.
-func NewTaskHubWorker(executorFactory func(be backend.Backend) backend.Executor, configure func(opts *SqliteOptions)) backend.TaskHubWorker {
-	opts := NewSqliteOptions("")
-	if configure != nil {
-		configure(opts)
-	}
-
-	be := NewSqliteBackend(opts)
-	if err := be.CreateTaskHub(context.TODO()); err != nil && err != backend.ErrTaskHubExists {
-		log.Panicf("failed to initialize task hub: %v", err)
-	}
-
-	executor := executorFactory(be)
-	if executor == nil {
-		log.Panicf("executor factory returned a nil value")
-	}
-	ow := backend.NewOrchestrationWorker(be, executor)
-	aw := backend.NewActivityTaskWorker(be, executor)
-	return backend.NewTaskHubWorker(be, ow, aw)
 }
 
 // NewSqliteOptions creates a new options object for the sqlite backend provider.
@@ -76,7 +51,7 @@ func NewSqliteOptions(filePath string) *SqliteOptions {
 }
 
 // NewSqliteBackend creates a new sqlite-based Backend object.
-func NewSqliteBackend(opts *SqliteOptions) *sqliteBackend {
+func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backend {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
@@ -89,6 +64,7 @@ func NewSqliteBackend(opts *SqliteOptions) *sqliteBackend {
 		db:         nil,
 		workerName: fmt.Sprintf("%v,%d,%v", hostname, pid, uuidStr),
 		options:    opts,
+		logger:     logger,
 	}
 
 	if opts == nil {
@@ -357,7 +333,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 				var instanceID string
 				if err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, &instanceID); err != nil {
 					if err == backend.ErrDuplicateEvent {
-						log.Printf(
+						be.logger.Warnf(
 							"%v: dropping sub-orchestration creation event because an instance with the target ID (%v) already exists.",
 							wi.InstanceID,
 							es.OrchestrationInstance.InstanceId)
