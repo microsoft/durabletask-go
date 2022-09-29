@@ -3,15 +3,25 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"google.golang.org/protobuf/proto"
 )
 
-var ErrTaskHubExists = errors.New("task hub already exists")
-var ErrTaskHubNotFound = errors.New("task hub not found")
-var ErrNotInitialized = errors.New("backend not initialized")
-var ErrWorkItemLockLost = errors.New("lock on work-item was lost")
+var (
+	ErrTaskHubExists         = errors.New("task hub already exists")
+	ErrTaskHubNotFound       = errors.New("task hub not found")
+	ErrNotInitialized        = errors.New("backend not initialized")
+	ErrWorkItemLockLost      = errors.New("lock on work-item was lost")
+	ErrBackendAlreadyStarted = errors.New("backend is already started")
+)
+
+type (
+	HistoryEvent       = protos.HistoryEvent
+	TaskFailureDetails = protos.TaskFailureDetails
+)
 
 type Backend interface {
 	// CreateTaskHub creates a new task hub for the current backend. Task hub creation must be idempotent.
@@ -33,10 +43,10 @@ type Backend interface {
 
 	// CreateOrchestrationInstance creates a new orchestration instance with a history event that
 	// wraps a ExecutionStarted event.
-	CreateOrchestrationInstance(context.Context, *protos.HistoryEvent) error
+	CreateOrchestrationInstance(context.Context, *HistoryEvent) error
 
 	// AddNewEvent adds a new orchestration event to the specified orchestration instance.
-	AddNewOrchestrationEvent(context.Context, api.InstanceID, *protos.HistoryEvent) error
+	AddNewOrchestrationEvent(context.Context, api.InstanceID, *HistoryEvent) error
 
 	// GetOrchestrationWorkItem gets a pending work item from the task hub or returns ErrNoOrchWorkItems
 	// if there are no pending work items.
@@ -73,4 +83,13 @@ type Backend interface {
 	//
 	// This is called when an internal failure occurs during activity work-item processing.
 	AbandonActivityWorkItem(context.Context, *ActivityWorkItem) error
+}
+
+// MarshalHistoryEvent serializes the HistoryEvent into a protobuf byte array
+func MarshalHistoryEvent(e *HistoryEvent) ([]byte, error) {
+	if bytes, err := proto.Marshal(e); err != nil {
+		return nil, fmt.Errorf("failed to marshal history event: %w", err)
+	} else {
+		return bytes, nil
+	}
 }

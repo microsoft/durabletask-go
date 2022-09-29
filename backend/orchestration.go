@@ -55,11 +55,12 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 	// In the fullness of time, we should consider caching executors and runtime state
 	// so that we can skip the loading of state and/or the creation of executors. A cached
 	// executor should allow us to 1) skip runtime state loading and 2) execute only new events.
-
-	if state, err := w.be.GetOrchestrationRuntimeState(ctx, wi); err != nil {
-		return fmt.Errorf("failed to load orchestration state: %w", err)
-	} else {
-		wi.State = state
+	if wi.State == nil {
+		if state, err := w.be.GetOrchestrationRuntimeState(ctx, wi); err != nil {
+			return fmt.Errorf("failed to load orchestration state: %w", err)
+		} else {
+			wi.State = state
+		}
 	}
 	w.logger.Debugf("%v: got orchestration runtime state: %s", wi.InstanceID, getOrchestrationStateDescription(wi))
 
@@ -182,6 +183,6 @@ func getOrchestrationStateDescription(wi *OrchestrationWorkItem) string {
 			ageStr = age.Round(time.Second).String()
 		}
 	}
-	status := ToRuntimeStatusString(wi.State.RuntimeStatus())
+	status := helpers.ToRuntimeStatusString(wi.State.RuntimeStatus())
 	return fmt.Sprintf("name=%s, status=%s, events=%d, age=%s", name, status, len(wi.State.OldEvents()), ageStr)
 }

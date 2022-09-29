@@ -22,25 +22,26 @@ type OrchestrationRuntimeState struct {
 	pendingTimers   []*protos.HistoryEvent
 	pendingMessages []OrchestratorMessage
 
-	startEvent     *protos.ExecutionStartedEvent
-	completedEvent *protos.ExecutionCompletedEvent
-	createdTime    time.Time
-	completedTime  time.Time
-	continuedAsNew bool
+	startEvent      *protos.ExecutionStartedEvent
+	completedEvent  *protos.ExecutionCompletedEvent
+	createdTime     time.Time
+	lastUpdatedTime time.Time
+	completedTime   time.Time
+	continuedAsNew  bool
 
 	CustomStatus *wrapperspb.StringValue
 }
 
 type OrchestratorMessage struct {
-	HistoryEvent     *protos.HistoryEvent
+	HistoryEvent     *HistoryEvent
 	TargetInstanceID string
 }
 
-func NewOrchestrationRuntimeState(instanceID api.InstanceID, existingHistory []*protos.HistoryEvent) *OrchestrationRuntimeState {
+func NewOrchestrationRuntimeState(instanceID api.InstanceID, existingHistory []*HistoryEvent) *OrchestrationRuntimeState {
 	s := &OrchestrationRuntimeState{
 		instanceID: instanceID,
-		oldEvents:  make([]*protos.HistoryEvent, 0, len(existingHistory)),
-		newEvents:  make([]*protos.HistoryEvent, 0, 10),
+		oldEvents:  make([]*HistoryEvent, 0, len(existingHistory)),
+		newEvents:  make([]*HistoryEvent, 0, 10),
 	}
 
 	for _, e := range existingHistory {
@@ -51,11 +52,11 @@ func NewOrchestrationRuntimeState(instanceID api.InstanceID, existingHistory []*
 }
 
 // AddEvent appends a new history event to the orchestration history
-func (s *OrchestrationRuntimeState) AddEvent(e *protos.HistoryEvent) error {
+func (s *OrchestrationRuntimeState) AddEvent(e *HistoryEvent) error {
 	return s.addEvent(e, true)
 }
 
-func (s *OrchestrationRuntimeState) addEvent(e *protos.HistoryEvent, isNew bool) error {
+func (s *OrchestrationRuntimeState) addEvent(e *HistoryEvent, isNew bool) error {
 	if startEvent, ok := e.GetEventType().(*protos.HistoryEvent_ExecutionStarted); ok {
 		if s.startEvent != nil {
 			return ErrDuplicateEvent
@@ -78,6 +79,7 @@ func (s *OrchestrationRuntimeState) addEvent(e *protos.HistoryEvent, isNew bool)
 		s.oldEvents = append(s.oldEvents, e)
 	}
 
+	s.lastUpdatedTime = e.Timestamp.AsTime()
 	return nil
 }
 
@@ -212,6 +214,14 @@ func (s *OrchestrationRuntimeState) CreatedTime() (time.Time, error) {
 	return s.createdTime, nil
 }
 
+func (s *OrchestrationRuntimeState) LastUpdatedTime() (time.Time, error) {
+	if s.startEvent == nil {
+		return time.Time{}, api.ErrNotStarted
+	}
+
+	return s.lastUpdatedTime, nil
+}
+
 func (s *OrchestrationRuntimeState) CompletedTime() (time.Time, error) {
 	if s.completedEvent == nil {
 		return time.Time{}, api.ErrNotCompleted
@@ -224,15 +234,15 @@ func (s *OrchestrationRuntimeState) IsCompleted() bool {
 	return s.completedEvent != nil
 }
 
-func (s *OrchestrationRuntimeState) OldEvents() []*protos.HistoryEvent {
+func (s *OrchestrationRuntimeState) OldEvents() []*HistoryEvent {
 	return s.oldEvents
 }
 
-func (s *OrchestrationRuntimeState) NewEvents() []*protos.HistoryEvent {
+func (s *OrchestrationRuntimeState) NewEvents() []*HistoryEvent {
 	return s.newEvents
 }
 
-func (s *OrchestrationRuntimeState) FailureDetails() (*protos.TaskFailureDetails, error) {
+func (s *OrchestrationRuntimeState) FailureDetails() (*TaskFailureDetails, error) {
 	if s.completedEvent == nil {
 		return nil, api.ErrNotCompleted
 	} else if s.completedEvent.FailureDetails == nil {
@@ -242,11 +252,11 @@ func (s *OrchestrationRuntimeState) FailureDetails() (*protos.TaskFailureDetails
 	return s.completedEvent.FailureDetails, nil
 }
 
-func (s *OrchestrationRuntimeState) PendingTimers() []*protos.HistoryEvent {
+func (s *OrchestrationRuntimeState) PendingTimers() []*HistoryEvent {
 	return s.pendingTimers
 }
 
-func (s *OrchestrationRuntimeState) PendingTasks() []*protos.HistoryEvent {
+func (s *OrchestrationRuntimeState) PendingTasks() []*HistoryEvent {
 	return s.pendingTasks
 }
 
@@ -259,15 +269,5 @@ func (s *OrchestrationRuntimeState) ContinuedAsNew() bool {
 }
 
 func (s *OrchestrationRuntimeState) String() string {
-	return fmt.Sprintf("%v:%v", s.instanceID, ToRuntimeStatusString(s.RuntimeStatus()))
-}
-
-func ToRuntimeStatusString(status protos.OrchestrationStatus) string {
-	name := protos.OrchestrationStatus_name[int32(status)]
-	return name[len("ORCHESTRATION_STATUS_"):]
-}
-
-func FromRuntimeStatusString(status string) protos.OrchestrationStatus {
-	runtimeStatus := "ORCHESTRATION_STATUS_" + status
-	return protos.OrchestrationStatus(protos.OrchestrationStatus_value[runtimeStatus])
+	return fmt.Sprintf("%v:%v", s.instanceID, helpers.ToRuntimeStatusString(s.RuntimeStatus()))
 }

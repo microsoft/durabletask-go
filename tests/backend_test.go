@@ -154,17 +154,11 @@ func Test_CompleteOrchestration(t *testing.T) {
 				assert.False(t, metadata.IsRunning())
 
 				if expectedStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED {
-					fd, err := metadata.FailureDetails()
-					if assert.NoError(t, err) && assert.NotNil(t, fd) {
-						assert.Equal(t, "MyError", fd.ErrorType)
-						assert.Equal(t, "Kah-BOOOM!!", fd.ErrorMessage)
-						assert.Equal(t, expectedStackTrace, fd.StackTrace.GetValue())
-					}
+					assert.Equal(t, "MyError", metadata.FailureDetails.ErrorType)
+					assert.Equal(t, "Kah-BOOOM!!", metadata.FailureDetails.ErrorMessage)
+					assert.Equal(t, expectedStackTrace, metadata.FailureDetails.StackTrace.GetValue())
 				} else {
-					output, err := metadata.SerializedOutput()
-					if assert.NoError(t, err) {
-						assert.Equal(t, expectedResult, output)
-					}
+					assert.Equal(t, expectedResult, metadata.SerializedOutput)
 				}
 			}
 
@@ -410,10 +404,10 @@ func workItemProcessingTestLogic(
 
 							// Validate orchestration metadata
 							if metadata, ok := getOrchestrationMetadata(t, be, state.InstanceID()); ok {
-								assert.Equal(t, defaultName, metadata.Name())
-								assert.Equal(t, defaultInput, metadata.SerializedInput())
-								assert.Equal(t, createdTime, metadata.CreatedAt())
-								assert.Equal(t, state.RuntimeStatus(), metadata.RuntimeStatus())
+								assert.Equal(t, defaultName, metadata.Name)
+								assert.Equal(t, defaultInput, metadata.SerializedInput)
+								assert.Equal(t, createdTime, metadata.CreatedAt)
+								assert.Equal(t, state.RuntimeStatus(), metadata.RuntimeStatus)
 
 								validateMetadata(metadata)
 							}
@@ -463,7 +457,7 @@ func getOrchestrationRuntimeState(t assert.TestingT, be backend.Backend, wi *bac
 func getOrchestrationMetadata(t assert.TestingT, be backend.Backend, iid api.InstanceID) (*api.OrchestrationMetadata, bool) {
 	metadata, err := be.GetOrchestrationMetadata(ctx, iid)
 	if assert.NoError(t, err) && assert.NotNil(t, metadata) {
-		return metadata, assert.Equal(t, iid, metadata.InstanceID())
+		return metadata, assert.Equal(t, iid, metadata.InstanceID)
 	}
 
 	return nil, false

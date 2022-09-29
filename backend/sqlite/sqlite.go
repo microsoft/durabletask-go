@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/proto"
 
@@ -211,7 +212,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 			isCreated = true
 			sqlSB.WriteString("[CreatedTime] = ?, [RuntimeStatus] = ?, [Input] = ?, ")
 			sqlUpdateArgs = append(sqlUpdateArgs, e.Timestamp.AsTime())
-			sqlUpdateArgs = append(sqlUpdateArgs, backend.ToRuntimeStatusString(protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING))
+			sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING))
 			sqlUpdateArgs = append(sqlUpdateArgs, es.Input.GetValue())
 		} else if ec := e.GetExecutionCompleted(); ec != nil {
 			if isCompleted {
@@ -221,7 +222,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 			isCompleted = true
 			sqlSB.WriteString("[CompletedTime] = ?, [RuntimeStatus] = ?, [Output] = ?, [FailureDetails] = ?, ")
 			sqlUpdateArgs = append(sqlUpdateArgs, now)
-			sqlUpdateArgs = append(sqlUpdateArgs, backend.ToRuntimeStatusString(ec.OrchestrationStatus))
+			sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(ec.OrchestrationStatus))
 			sqlUpdateArgs = append(sqlUpdateArgs, ec.Result.GetValue())
 			if ec.FailureDetails != nil {
 				bytes, err := proto.Marshal(ec.FailureDetails)
@@ -388,7 +389,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 }
 
 // CreateOrchestrationInstance implements backend.Backend
-func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *protos.HistoryEvent) error {
+func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *backend.HistoryEvent) error {
 	if err := be.ensureDB(); err != nil {
 		return err
 	}
@@ -427,7 +428,7 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *pro
 	return nil
 }
 
-func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *protos.HistoryEvent, tx *sql.Tx, instanceID *string) error {
+func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx, instanceID *string) error {
 	if e == nil {
 		return errors.New("HistoryEvent must be non-nil")
 	} else if e.Timestamp == nil {
@@ -476,16 +477,16 @@ func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context
 	return nil
 }
 
-func (be *sqliteBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.InstanceID, e *protos.HistoryEvent) error {
+func (be *sqliteBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.InstanceID, e *backend.HistoryEvent) error {
 	if e == nil {
 		return errors.New("HistoryEvent must be non-nil")
 	} else if e.Timestamp == nil {
 		return errors.New("HistoryEvent must have a non-nil timestamp")
 	}
 
-	eventPayload, err := proto.Marshal(e)
+	eventPayload, err := backend.MarshalHistoryEvent(e)
 	if err != nil {
-		return fmt.Errorf("failed to marshal history event: %w", err)
+		return err
 	}
 
 	_, err = be.db.ExecContext(
@@ -562,7 +563,7 @@ func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.I
 	metadata := api.NewOrchestrationMetadata(
 		iid,
 		*name,
-		backend.FromRuntimeStatusString(*runtimeStatus),
+		helpers.FromRuntimeStatusString(*runtimeStatus),
 		*createdAt,
 		*lastUpdatedAt,
 		*input,
@@ -570,7 +571,7 @@ func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.I
 		*customStatus,
 		failureDetails,
 	)
-	return &metadata, nil
+	return metadata, nil
 }
 
 // GetOrchestrationRuntimeState implements backend.Backend

@@ -306,6 +306,16 @@ func GetTaskId(e *protos.HistoryEvent) int32 {
 	}
 }
 
+func ToRuntimeStatusString(status protos.OrchestrationStatus) string {
+	name := protos.OrchestrationStatus_name[int32(status)]
+	return name[len("ORCHESTRATION_STATUS_"):]
+}
+
+func FromRuntimeStatusString(status string) protos.OrchestrationStatus {
+	runtimeStatus := "ORCHESTRATION_STATUS_" + status
+	return protos.OrchestrationStatus(protos.OrchestrationStatus_value[runtimeStatus])
+}
+
 func getHistoryEventTypeName(e *protos.HistoryEvent) string {
 	// PERFORMANCE: Replace this with a switch statement or a map lookup to avoid this use of reflection
 	return reflect.TypeOf(e.EventType).Elem().Name()[len("HistoryEvent_"):]

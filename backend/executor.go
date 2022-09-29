@@ -201,25 +201,7 @@ func (g *grpcExecutor) GetInstance(ctx context.Context, req *protos.GetInstanceR
 		return &protos.GetInstanceResponse{Exists: false}, nil
 	}
 
-	state := &protos.OrchestrationState{
-		InstanceId:           req.InstanceId,
-		Name:                 metadata.Name(),
-		OrchestrationStatus:  metadata.RuntimeStatus(),
-		CreatedTimestamp:     timestamppb.New(metadata.CreatedAt()),
-		LastUpdatedTimestamp: timestamppb.New(metadata.LastUpdatedAt()),
-	}
-
-	if req.GetInputsAndOutputs {
-		state.Input = wrapperspb.String(metadata.SerializedInput())
-		state.CustomStatus = wrapperspb.String(metadata.SerializedCustomStatus())
-		if o, err := metadata.SerializedOutput(); err == nil {
-			state.Output = wrapperspb.String(o)
-		}
-		if fd, err := metadata.FailureDetails(); err == nil {
-			state.FailureDetails = fd
-		}
-	}
-	return &protos.GetInstanceResponse{Exists: true, OrchestrationState: state}, nil
+	return createGetInstanceResponse(req, metadata), nil
 }
 
 // PurgeInstances implements protos.TaskHubSidecarServiceServer
@@ -273,7 +255,7 @@ func (g *grpcExecutor) WaitForInstanceCompletion(ctx context.Context, req *proto
 // WaitForInstanceStart implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) WaitForInstanceStart(ctx context.Context, req *protos.GetInstanceRequest) (*protos.GetInstanceResponse, error) {
 	return g.waitForInstance(ctx, req, func(m *api.OrchestrationMetadata) bool {
-		return m.RuntimeStatus() != protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
+		return m.RuntimeStatus != protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
 	})
 }
 
@@ -323,21 +305,17 @@ func (grpcExecutor) mustEmbedUnimplementedTaskHubSidecarServiceServer() {
 func createGetInstanceResponse(req *protos.GetInstanceRequest, metadata *api.OrchestrationMetadata) *protos.GetInstanceResponse {
 	state := &protos.OrchestrationState{
 		InstanceId:           req.InstanceId,
-		Name:                 metadata.Name(),
-		OrchestrationStatus:  metadata.RuntimeStatus(),
-		CreatedTimestamp:     timestamppb.New(metadata.CreatedAt()),
-		LastUpdatedTimestamp: timestamppb.New(metadata.LastUpdatedAt()),
+		Name:                 metadata.Name,
+		OrchestrationStatus:  metadata.RuntimeStatus,
+		CreatedTimestamp:     timestamppb.New(metadata.CreatedAt),
+		LastUpdatedTimestamp: timestamppb.New(metadata.LastUpdatedAt),
 	}
 
 	if req.GetInputsAndOutputs {
-		state.Input = wrapperspb.String(metadata.SerializedInput())
-		state.CustomStatus = wrapperspb.String(metadata.SerializedCustomStatus())
-		if o, err := metadata.SerializedOutput(); err == nil {
-			state.Output = wrapperspb.String(o)
-		}
-		if fd, err := metadata.FailureDetails(); err == nil {
-			state.FailureDetails = fd
-		}
+		state.Input = wrapperspb.String(metadata.SerializedInput)
+		state.CustomStatus = wrapperspb.String(metadata.SerializedCustomStatus)
+		state.Output = wrapperspb.String(metadata.SerializedOutput)
+		state.FailureDetails = metadata.FailureDetails
 	}
 
 	return &protos.GetInstanceResponse{Exists: true, OrchestrationState: state}

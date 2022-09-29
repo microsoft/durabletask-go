@@ -51,7 +51,7 @@ be := sqlite.NewSqliteBackend(sqliteOptions, logger)
 
 // Create a gRPC server that the language SDKs will connect to
 grpcServer := grpc.NewServer()
-executor := backend.NewGrpcExecutor(server, be, logger)
+executor := backend.NewGrpcExecutor(grpcServer, be, logger)
 
 // Construct and start the task hub worker object, which polls the backend for new work
 orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger, backend.NewWorkerOptions())
