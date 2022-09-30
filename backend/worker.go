@@ -103,14 +103,14 @@ func (w *worker) Start(ctx context.Context) {
 		for range ticker.C {
 			select {
 			case <-ctx.Done():
-				w.logger.Infof("%v: received cancellation signal")
+				w.logger.Infof("%v: received cancellation signal", w.Name())
 				break loop
 			default:
 				if ok, err := w.ProcessNext(ctx); ok {
 					// found a work item - reset the timer to get the next one
 					b.Reset()
 				} else if err != nil && err == ctx.Err() {
-					w.logger.Infof("%v: received cancellation signal")
+					w.logger.Infof("%v: received cancellation signal", w.Name())
 					break loop
 				} else if err != nil {
 					// log the error and inject some extra sleep to avoid tight failure loops

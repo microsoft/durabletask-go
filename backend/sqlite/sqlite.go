@@ -274,9 +274,9 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 		args := make([]interface{}, 0, newHistoryCount*3)
 		nextSequenceNumber := len(wi.State.OldEvents())
 		for _, e := range wi.State.NewEvents() {
-			eventPayload, err := proto.Marshal(e)
+			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
-				return fmt.Errorf("failed to marshal history event: %w", err)
+				return err
 			}
 
 			args = append(args, string(wi.InstanceID), nextSequenceNumber, eventPayload)
@@ -297,9 +297,9 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 
 		sqlInsertArgs := make([]interface{}, 0, newActivityCount*2)
 		for _, e := range wi.State.PendingTasks() {
-			eventPayload, err := proto.Marshal(e)
+			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
-				return fmt.Errorf("failed to marshal history event: %w", err)
+				return err
 			}
 
 			sqlInsertArgs = append(sqlInsertArgs, string(wi.InstanceID), eventPayload)
@@ -319,9 +319,9 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 
 		sqlInsertArgs := make([]interface{}, 0, newEventCount*3)
 		for _, e := range wi.State.PendingTimers() {
-			eventPayload, err := proto.Marshal(e)
+			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
-				return fmt.Errorf("failed to marshal history event: %w", err)
+				return err
 			}
 
 			visibileTime := e.GetTimerFired().GetFireAt().AsTime()
@@ -344,9 +344,9 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 				}
 			}
 
-			eventPayload, err := proto.Marshal(msg.HistoryEvent)
+			eventPayload, err := backend.MarshalHistoryEvent(msg.HistoryEvent)
 			if err != nil {
-				return fmt.Errorf("failed to marshal history event: %w", err)
+				return err
 			}
 
 			sqlInsertArgs = append(sqlInsertArgs, msg.TargetInstanceID, eventPayload, nil)
@@ -405,9 +405,9 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 		return err
 	}
 
-	eventPayload, err := proto.Marshal(e)
+	eventPayload, err := backend.MarshalHistoryEvent(e)
 	if err != nil {
-		return fmt.Errorf("failed to marshal ExecutionStarted event: %w", err)
+		return err
 	}
 
 	_, err = tx.ExecContext(
@@ -597,9 +597,9 @@ func (be *sqliteBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *b
 			return nil, fmt.Errorf("failed to read history event: %w", err)
 		}
 
-		e := new(protos.HistoryEvent)
-		if err := proto.Unmarshal(eventPayload, e); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal history event: %w", err)
+		e, err := backend.UnmarshalHistoryEvent(eventPayload)
+		if err != nil {
+			return nil, err
 		}
 
 		existingEvents = append(existingEvents, e)
@@ -684,9 +684,9 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 			maxDequeueCount = dequeueCount
 		}
 
-		e := new(protos.HistoryEvent)
-		if err := proto.Unmarshal(eventPayload, e); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal history event: %w", err)
+		e, err := backend.UnmarshalHistoryEvent(eventPayload)
+		if err != nil {
+			return nil, err
 		}
 
 		newEvents = append(newEvents, e)
@@ -744,9 +744,9 @@ func (be *sqliteBackend) GetActivityWorkItem(ctx context.Context) (*backend.Acti
 		return nil, fmt.Errorf("failed to scan the activity work-item: %w", err)
 	}
 
-	e := new(protos.HistoryEvent)
-	if err := proto.Unmarshal(eventPayload, e); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal history event: %w", err)
+	e, err := backend.UnmarshalHistoryEvent(eventPayload)
+	if err != nil {
+		return nil, err
 	}
 
 	wi := &backend.ActivityWorkItem{
@@ -768,9 +768,9 @@ func (be *sqliteBackend) CompleteActivityWorkItem(ctx context.Context, wi *backe
 	}
 	defer tx.Rollback()
 
-	bytes, err := proto.Marshal(wi.Result)
+	bytes, err := backend.MarshalHistoryEvent(wi.Result)
 	if err != nil {
-		return fmt.Errorf("failed to marshal activity result event: %w", err)
+		return err
 	}
 
 	_, err = tx.ExecContext(ctx, "INSERT INTO NewEvents ([InstanceID], [EventPayload]) VALUES (?, ?)", string(wi.InstanceID), bytes)

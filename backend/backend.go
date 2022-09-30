@@ -26,13 +26,13 @@ type (
 type Backend interface {
 	// CreateTaskHub creates a new task hub for the current backend. Task hub creation must be idempotent.
 	//
-	// If the task hub for this backend already exists, an error of type ErrTaskHubExists is returned.
+	// If the task hub for this backend already exists, an error of type [ErrTaskHubExists] is returned.
 	CreateTaskHub(context.Context) error
 
 	// DeleteTaskHub deletes an existing task hub configured for the current backend. It's up to the backend
 	// implementation to determine how the task hub data is deleted.
 	//
-	// If the task hub for this backend doesn't exist, an error of type ErrTaskHubNotFound is returned.
+	// If the task hub for this backend doesn't exist, an error of type [ErrTaskHubNotFound] is returned.
 	DeleteTaskHub(context.Context) error
 
 	// Start starts any background processing done by this backend.
@@ -48,7 +48,7 @@ type Backend interface {
 	// AddNewEvent adds a new orchestration event to the specified orchestration instance.
 	AddNewOrchestrationEvent(context.Context, api.InstanceID, *HistoryEvent) error
 
-	// GetOrchestrationWorkItem gets a pending work item from the task hub or returns ErrNoOrchWorkItems
+	// GetOrchestrationWorkItem gets a pending work item from the task hub or returns [ErrNoOrchWorkItems]
 	// if there are no pending work items.
 	GetOrchestrationWorkItem(context.Context) (*OrchestrationWorkItem, error)
 
@@ -56,11 +56,13 @@ type Backend interface {
 	GetOrchestrationRuntimeState(context.Context, *OrchestrationWorkItem) (*OrchestrationRuntimeState, error)
 
 	// GetOrchestrationMetadata gets the metadata associated with the given orchestration instance ID.
+	//
+	// Returns [api.ErrInstanceNotFound] if the orchestration instance doesn't exist.
 	GetOrchestrationMetadata(context.Context, api.InstanceID) (*api.OrchestrationMetadata, error)
 
 	// CompleteOrchestrationWorkItem completes a work item by saving the updated runtime state to durable storage.
 	//
-	// Returns ErrWorkItemLockLost if the work-item couldn't be completed due to a lock-lost conflict (e.g., split-brain).
+	// Returns [ErrWorkItemLockLost] if the work-item couldn't be completed due to a lock-lost conflict (e.g., split-brain).
 	CompleteOrchestrationWorkItem(context.Context, *OrchestrationWorkItem) error
 
 	// AbandonOrchestrationWorkItem undoes any state changes and returns the work item to the work item queue.
@@ -70,13 +72,13 @@ type Backend interface {
 	// completes with a failure is still considered a successfully processed work item).
 	AbandonOrchestrationWorkItem(context.Context, *OrchestrationWorkItem) error
 
-	// GetActivityWorkItem gets a pending activity work item from the task hub or returns ErrNoWorkItems
+	// GetActivityWorkItem gets a pending activity work item from the task hub or returns [ErrNoWorkItems]
 	// if there are no pending activity work items.
 	GetActivityWorkItem(context.Context) (*ActivityWorkItem, error)
 
 	// CompleteActivityWorkItem sends a message to the parent orchestration indicating activity completion.
 	//
-	// Returns ErrWorkItemLockLost if the work-item couldn't be completed due to a lock-lost conflict (e.g., split-brain).
+	// Returns [ErrWorkItemLockLost] if the work-item couldn't be completed due to a lock-lost conflict (e.g., split-brain).
 	CompleteActivityWorkItem(context.Context, *ActivityWorkItem) error
 
 	// AbandonActivityWorkItem returns the work-item back to the queue without committing any other chances.
@@ -85,11 +87,20 @@ type Backend interface {
 	AbandonActivityWorkItem(context.Context, *ActivityWorkItem) error
 }
 
-// MarshalHistoryEvent serializes the HistoryEvent into a protobuf byte array
+// MarshalHistoryEvent serializes the [HistoryEvent] into a protobuf byte array.
 func MarshalHistoryEvent(e *HistoryEvent) ([]byte, error) {
 	if bytes, err := proto.Marshal(e); err != nil {
 		return nil, fmt.Errorf("failed to marshal history event: %w", err)
 	} else {
 		return bytes, nil
 	}
+}
+
+// UnmarshalHistoryEvent deserializes a [HistoryEvent] from a protobuf byte array.
+func UnmarshalHistoryEvent(bytes []byte) (*HistoryEvent, error) {
+	e := &protos.HistoryEvent{}
+	if err := proto.Unmarshal(bytes, e); err != nil {
+		return nil, fmt.Errorf("unreadable history event payload: %w", err)
+	}
+	return e, nil
 }
