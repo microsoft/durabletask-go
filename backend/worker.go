@@ -151,7 +151,9 @@ func (w *worker) ProcessNext(ctx context.Context) (bool, error) {
 		}
 		return false, nil
 	} else if err != nil {
-		w.logger.Errorf("%v: failed to fetch work item: %v", w.Name(), err)
+		if err != ctx.Err() {
+			w.logger.Errorf("%v: failed to fetch work item: %v", w.Name(), err)
+		}
 		return false, err
 	} else {
 		// process the work-item in the background

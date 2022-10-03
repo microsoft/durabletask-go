@@ -97,6 +97,11 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 				}
 				continue
 			}
+
+			if wi.State.IsCompleted() {
+				name, _ := wi.State.Name()
+				w.logger.Infof("%v: '%s' completed with a %s status.", wi.InstanceID, name, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()))
+			}
 			break
 		}
 	}
@@ -144,6 +149,10 @@ func (w *orchestratorProcessor) applyWorkItem(wi *OrchestrationWorkItem) bool {
 			}
 		} else {
 			added++
+		}
+
+		if es := e.GetExecutionStarted(); es != nil {
+			w.logger.Infof("%v: starting new '%s' instance.", wi.InstanceID, es.Name)
 		}
 	}
 
