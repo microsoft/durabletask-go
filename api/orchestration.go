@@ -16,6 +16,8 @@ var (
 	ErrNotStarted       = errors.New("orchestration has not started")
 	ErrNotCompleted     = errors.New("orchestration has not yet completed")
 	ErrNoFailures       = errors.New("orchestration did not report failure details")
+
+	EmptyInstanceID = InstanceID("")
 )
 
 // InstanceID is a unique identifier for an orchestration instance.
