@@ -86,6 +86,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 	// TODO: Timeout logic - i.e. handle the case where we never hear back from the remote worker (due to a hang, etc.).
 	select {
 	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-result.complete:
 	}
 
