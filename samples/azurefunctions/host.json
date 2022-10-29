@@ -1,0 +1,13 @@
+{
+    "version": "2.0",
+    "customHandler": {
+        "description": {
+            "defaultExecutablePath": "./azurefunctions"
+        }
+    },
+    "extensions": {
+        "durableTask": {
+            "hubName": "golang"
+        }
+    }
+}

@@ -63,7 +63,9 @@ func NewOrchestratorStartedEvent() *protos.HistoryEvent {
 	return &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.Now(),
-		EventType: &protos.HistoryEvent_OrchestratorStarted{},
+		EventType: &protos.HistoryEvent_OrchestratorStarted{
+			OrchestratorStarted: &protos.OrchestratorStartedEvent{},
+		},
 	}
 }
 

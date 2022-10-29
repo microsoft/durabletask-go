@@ -54,10 +54,10 @@ grpcServer := grpc.NewServer()
 executor := backend.NewGrpcExecutor(grpcServer, be, logger)
 
 // Construct and start the task hub worker object, which polls the backend for new work
-orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger, backend.NewWorkerOptions())
-activityWorker := backend.NewActivityTaskWorker(be, executor, logger, backend.NewWorkerOptions())
+orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
+activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
 taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
-worker.Start(context.Background())
+taskHubWorker.Start(context.Background())
 
 // Start listening.
 lis, _ := net.Listen("tcp", "localhost:4001")
@@ -98,12 +98,63 @@ mockery --dir ./backend --name="^Backend|^Executor|^TaskWorker" --output ./tests
 
 ## Running tests
 
-All tests in the package under `./tests`. This was done to avoid circular package reference problems. Tests external to the package (i.e., [black box testing](https://en.wikipedia.org/wiki/Black-box_testing)) also makes it easier to catch accidental breaking API changes.
+All automated tests are under `./tests`. A separate test package hierarchy was chosen intentionally to prioritize [black box testing](https://en.wikipedia.org/wiki/Black-box_testing). This strategy also makes it easier to catch accidental breaking API changes.
 
 Run tests with the following command.
 
 ```bash
-go test ./tests -coverpkg ./api,./backend/...
+go test ./tests -coverpkg ./api,./task,./backend/...,./internal/helpers
+```
+
+## Running integration tests
+
+You can run pre-built container images to run full integration tests against the durable task host over gRPC.
+
+### .NET Durable Task client SDK tests
+
+Use the following docker command to run tests against a running worker.
+
+```bash
+docker run cgillum/durabletask-dotnet-tester:0.5.0-beta
+```
+
+Note that the test assumes the gRPC server can be reached over `localhost` on port `4001`. These values can be overridden with the following environment variables:
+
+* `GRPC_HOST`: Use this to change from the default `localhost` to some other value, for example `host.docker.internal` if using Docker Desktop for Mac or Windows.
+* `GRPC_PORT`: Set this environment variable to change the default port from `4001` to something else.
+
+Here's an example for doing localhost testing on a Windows machine:
+
+```bash
+docker run -e GRPC_HOST="host.docker.internal" cgillum/durabletask-dotnet-tester:0.5.0-beta
+```
+
+If successful, you should see output that looks like the following:
+
+```
+Test run for /root/out/bin/Debug/Microsoft.DurableTask.Tests/net6.0/Microsoft.DurableTask.Tests.dll (.NETCoreApp,Version=v6.0)
+Microsoft (R) Test Execution Command Line Tool Version 17.3.1 (x64)
+Copyright (c) Microsoft Corporation.  All rights reserved.
+
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.4.3+1b45f5407b (64-bit .NET 6.0.10)
+[xUnit.net 00:00:00.82]   Discovering: Microsoft.DurableTask.Tests
+[xUnit.net 00:00:00.90]   Discovered:  Microsoft.DurableTask.Tests
+[xUnit.net 00:00:00.90]   Starting:    Microsoft.DurableTask.Tests
+  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.ExternalEvents(eventCount: 100) [6 s]
+  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.ExternalEvents(eventCount: 1) [309 ms]
+  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.LongTimer [8 s]
+  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.SubOrchestration [1 s]
+  ...
+  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.ActivityFanOut [914 ms]
+[xUnit.net 00:01:01.04]   Finished:    Microsoft.DurableTask.Tests
+  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.SingleActivity_Async [365 ms]
+
+Test Run Successful.
+Total tests: 33
+     Passed: 33
+ Total time: 1.0290 Minutes
 ```
 
 ## Running locally

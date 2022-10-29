@@ -1,0 +1,3 @@
+# Azure Functions build output (when using extensions.csproj)
+bin/
+obj/

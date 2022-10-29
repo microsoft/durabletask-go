@@ -17,9 +17,9 @@ type ActivityExecutor interface {
 	ExecuteActivity(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error)
 }
 
-func NewActivityTaskWorker(be Backend, executor ActivityExecutor, logger Logger, options *WorkerOptions) TaskWorker {
+func NewActivityTaskWorker(be Backend, executor ActivityExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
 	processor := newActivityProcessor(be, executor)
-	return NewTaskWorker(be, processor, logger, options)
+	return NewTaskWorker(be, processor, logger, opts...)
 }
 
 func newActivityProcessor(be Backend, executor ActivityExecutor) TaskProcessor {

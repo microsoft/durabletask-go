@@ -67,7 +67,6 @@ func NewTaskHubGrpcClient(cc grpc.ClientConnInterface) *grpcClient {
 }
 
 // ScheduleNewOrchestration schedules a new orchestration instance with a specified set of options for execution.
-// TODO: Change to options pattern to make opts into an optional parameter (preferred over nil)
 func (c *grpcClient) ScheduleNewOrchestration(ctx context.Context, orchestrator string, opts ...NewOrchestrationOptions) (InstanceID, error) {
 	req := &protos.CreateInstanceRequest{Name: orchestrator}
 	for _, configure := range opts {
@@ -105,7 +104,6 @@ func (c *grpcClient) FetchOrchestrationMetadata(ctx context.Context, id Instance
 // metadata about the started instance.
 //
 // ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
-// TODO: Change to options pattern to make opts into an optional parameter (preferred over nil)
 func (c *grpcClient) WaitForOrchestrationStart(ctx context.Context, id InstanceID, opts ...FetchOrchestrationMetadataOptions) (*OrchestrationMetadata, error) {
 	req := makeGetInstanceRequest(id, opts)
 	resp, err := c.client.WaitForInstanceStart(ctx, req)

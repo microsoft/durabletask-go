@@ -24,16 +24,13 @@ type orchestratorProcessor struct {
 	logger   Logger
 }
 
-func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor, logger Logger, options *WorkerOptions) TaskWorker {
-	if options == nil {
-		options = NewWorkerOptions()
-	}
+func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
 	processor := &orchestratorProcessor{
 		be:       be,
 		executor: executor,
 		logger:   logger,
 	}
-	return NewTaskWorker(be, processor, logger, options)
+	return NewTaskWorker(be, processor, logger, opts...)
 }
 
 // Name implements TaskProcessor

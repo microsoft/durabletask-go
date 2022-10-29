@@ -1,7 +1,7 @@
 package backend
 
 import (
-	context "context"
+	"context"
 	"sync"
 	"time"
 
@@ -47,6 +47,8 @@ type worker struct {
 	waiting   bool
 }
 
+type NewTaskWorkerOptions func(*WorkerOptions)
+
 type WorkerOptions struct {
 	MaxParallelWorkItems int32
 }
@@ -57,21 +59,25 @@ func NewWorkerOptions() *WorkerOptions {
 	}
 }
 
-func NewTaskWorker(be Backend, p TaskProcessor, logger Logger, opts *WorkerOptions) TaskWorker {
-	if opts == nil {
-		opts = &WorkerOptions{}
+func WithMaxParallelism(n int32) NewTaskWorkerOptions {
+	return func(o *WorkerOptions) {
+		o.MaxParallelWorkItems = n
 	}
-	if opts.MaxParallelWorkItems <= 0 {
-		opts.MaxParallelWorkItems = 1
+}
+
+func NewTaskWorker(be Backend, p TaskProcessor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
+	options := &WorkerOptions{MaxParallelWorkItems: 1}
+	for _, configure := range opts {
+		configure(options)
 	}
 	return &worker{
 		backend:           be,
 		processor:         p,
 		logger:            logger,
-		dispatchSemaphore: semaphore.New(int(opts.MaxParallelWorkItems)),
+		dispatchSemaphore: semaphore.New(int(options.MaxParallelWorkItems)),
 		pending:           &sync.WaitGroup{},
 		cancel:            nil, // assigned later
-		options:           opts,
+		options:           options,
 	}
 }
 
