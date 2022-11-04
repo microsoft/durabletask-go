@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -79,11 +80,21 @@ func (c *backendClient) WaitForOrchestrationCompletion(ctx context.Context, id a
 }
 
 func (c *backendClient) waitForOrchestrationCondition(ctx context.Context, id api.InstanceID, condition func(metadata *api.OrchestrationMetadata) bool) (*api.OrchestrationMetadata, error) {
+	b := backoff.ExponentialBackOff{
+		InitialInterval:     100 * time.Millisecond,
+		MaxInterval:         10 * time.Second,
+		Multiplier:          1.5,
+		RandomizationFactor: 0.05,
+		Stop:                backoff.Stop,
+		Clock:               backoff.SystemClock,
+	}
+	b.Reset()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(1 * time.Second):
+		case <-time.After(b.NextBackOff()):
 			metadata, err := c.FetchOrchestrationMetadata(ctx, id)
 			if err != nil {
 				return nil, err
