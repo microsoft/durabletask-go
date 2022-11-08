@@ -191,6 +191,37 @@ func Test_ActivityFanOut(t *testing.T) {
 	}
 }
 
+func Test_ContinueAsNewOrchestration(t *testing.T) {
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
+		var input int32
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+
+		if input < 10 {
+			if err := ctx.CreateTimer(0).Await(nil); err != nil {
+				return nil, err
+			}
+			ctx.ContinueAsNew(input + 1)
+		}
+		return input, nil
+	})
+
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest", api.WithInput(0))
+	if assert.NoError(t, err) {
+		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+		if assert.NoError(t, err) {
+			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+			assert.Equal(t, `10`, metadata.SerializedOutput)
+		}
+	}
+}
+
 func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {
 	// TODO: Switch to options pattern
 	logger := backend.DefaultLogger()

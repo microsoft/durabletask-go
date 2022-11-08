@@ -23,14 +23,16 @@ type OrchestrationContext struct {
 	IsReplaying    bool
 	CurrentTimeUtc time.Time
 
-	registry       *TaskRegistry
-	rawInput       []byte
-	oldEvents      []*protos.HistoryEvent
-	newEvents      []*protos.HistoryEvent
-	historyIndex   int
-	sequenceNumber int32
-	pendingActions map[int32]*protos.OrchestratorAction
-	pendingTasks   map[int32]*completableTask
+	registry            *TaskRegistry
+	rawInput            []byte
+	oldEvents           []*protos.HistoryEvent
+	newEvents           []*protos.HistoryEvent
+	historyIndex        int
+	sequenceNumber      int32
+	pendingActions      map[int32]*protos.OrchestratorAction
+	pendingTasks        map[int32]*completableTask
+	continuedAsNew      bool
+	continuedAsNewInput any
 }
 
 // NewOrchestrationContext returns a new [OrchestrationContext] struct with the specified parameters.
@@ -170,6 +172,11 @@ func (ctx *OrchestrationContext) CreateTimer(delay time.Duration) Task {
 	return task
 }
 
+func (ctx *OrchestrationContext) ContinueAsNew(newInput any) {
+	ctx.continuedAsNew = true
+	ctx.continuedAsNewInput = newInput
+}
+
 func (ctx *OrchestrationContext) onExecutionStarted(es *protos.ExecutionStartedEvent) error {
 	orchestrator, ok := ctx.registry.orchestrators[es.Name]
 	if !ok {
@@ -184,12 +191,21 @@ func (ctx *OrchestrationContext) onExecutionStarted(es *protos.ExecutionStartedE
 		ctx.rawInput = []byte(es.Input.Value)
 	}
 
-	output, err := orchestrator(ctx)
-	if err != nil {
-		ctx.setFailed(err)
+	output, appError := orchestrator(ctx)
+
+	var err error
+	if appError != nil {
+		err = ctx.setFailed(appError)
+	} else if ctx.continuedAsNew {
+		err = ctx.setContinuedAsNew()
 	} else {
-		if err := ctx.setComplete(output); err != nil {
-			ctx.setFailed(err)
+		err = ctx.setComplete(output)
+	}
+
+	if appError == nil && err != nil {
+		completionErr := fmt.Errorf("failed to complete the orchestration: %w", err)
+		if err2 := ctx.setFailed(completionErr); err2 != nil {
+			return completionErr
 		}
 	}
 	return nil
@@ -270,41 +286,58 @@ func (ctx *OrchestrationContext) onTimerFired(tf *protos.TimerFiredEvent) error 
 }
 
 func (ctx *OrchestrationContext) setComplete(output any) error {
-	var rawOutput string
-	if output != nil {
-		bytes, err := json.Marshal(output)
+	status := protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
+	if err := ctx.setCompleteInternal(output, status, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ctx *OrchestrationContext) setFailed(appError error) error {
+	fd := &protos.TaskFailureDetails{
+		ErrorType:    reflect.TypeOf(appError).String(),
+		ErrorMessage: appError.Error(),
+	}
+
+	failedStatus := protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED
+	if err := ctx.setCompleteInternal(nil, failedStatus, fd); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ctx *OrchestrationContext) setContinuedAsNew() error {
+	status := protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW
+	if err := ctx.setCompleteInternal(ctx.continuedAsNewInput, status, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ctx *OrchestrationContext) setCompleteInternal(
+	result any,
+	status protos.OrchestrationStatus,
+	failureDetails *protos.TaskFailureDetails,
+) error {
+	var rawResult string
+	if result != nil {
+		bytes, err := json.Marshal(result)
 		if err != nil {
 			return fmt.Errorf("failed to marshal orchestrator output to JSON: %w", err)
 		}
-		rawOutput = string(bytes)
+		rawResult = string(bytes)
 	}
 
 	sequenceNumber := ctx.getNextSequenceNumber()
 	completedAction := helpers.NewCompleteOrchestrationAction(
 		sequenceNumber,
-		protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
-		rawOutput,
+		status,
+		rawResult,
 		nil, // carryoverEvents
-		nil, // failureDetails
+		failureDetails,
 	)
 	ctx.pendingActions[sequenceNumber] = completedAction
 	return nil
-}
-
-func (ctx *OrchestrationContext) setFailed(err error) {
-	fd := &protos.TaskFailureDetails{
-		ErrorType:    reflect.TypeOf(err).String(),
-		ErrorMessage: err.Error(),
-	}
-
-	sequenceNumber := ctx.getNextSequenceNumber()
-	failureAction := helpers.NewCompleteOrchestrationAction(
-		sequenceNumber,
-		protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,
-		"",  // result
-		nil, // carryoverEvents
-		fd)
-	ctx.pendingActions[sequenceNumber] = failureAction
 }
 
 func (ctx *OrchestrationContext) getNextSequenceNumber() int32 {
