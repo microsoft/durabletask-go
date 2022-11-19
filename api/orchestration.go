@@ -1,10 +1,14 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 var (
@@ -12,21 +16,23 @@ var (
 	ErrNotStarted       = errors.New("orchestration has not started")
 	ErrNotCompleted     = errors.New("orchestration has not yet completed")
 	ErrNoFailures       = errors.New("orchestration did not report failure details")
+
+	EmptyInstanceID = InstanceID("")
 )
 
 // InstanceID is a unique identifier for an orchestration instance.
 type InstanceID string
 
 type OrchestrationMetadata struct {
-	instanceID             InstanceID
-	name                   string
-	status                 protos.OrchestrationStatus
-	createdAt              time.Time
-	lastUpdatedAt          time.Time
-	serializedInput        string
-	serializedOutput       string
-	serializedCustomStatus string
-	failureDetails         *protos.TaskFailureDetails
+	InstanceID             InstanceID
+	Name                   string
+	RuntimeStatus          protos.OrchestrationStatus
+	CreatedAt              time.Time
+	LastUpdatedAt          time.Time
+	SerializedInput        string
+	SerializedOutput       string
+	SerializedCustomStatus string
+	FailureDetails         *protos.TaskFailureDetails
 }
 
 func NewOrchestrationMetadata(
@@ -38,75 +44,160 @@ func NewOrchestrationMetadata(
 	serializedInput string,
 	serializedOutput string,
 	serializedCustomStatus string,
-	failureDetails *protos.TaskFailureDetails) OrchestrationMetadata {
-	return OrchestrationMetadata{
-		instanceID:             iid,
-		name:                   name,
-		status:                 status,
-		createdAt:              createdAt,
-		lastUpdatedAt:          lastUpdatedAt,
-		serializedInput:        serializedInput,
-		serializedOutput:       serializedOutput,
-		serializedCustomStatus: serializedCustomStatus,
-		failureDetails:         failureDetails,
+	failureDetails *protos.TaskFailureDetails) *OrchestrationMetadata {
+	return &OrchestrationMetadata{
+		InstanceID:             iid,
+		Name:                   name,
+		RuntimeStatus:          status,
+		CreatedAt:              createdAt,
+		LastUpdatedAt:          lastUpdatedAt,
+		SerializedInput:        serializedInput,
+		SerializedOutput:       serializedOutput,
+		SerializedCustomStatus: serializedCustomStatus,
+		FailureDetails:         failureDetails,
 	}
 }
 
-func (o OrchestrationMetadata) InstanceID() InstanceID {
-	return o.instanceID
-}
+func (m *OrchestrationMetadata) MarshalJSON() ([]byte, error) {
+	obj := make(map[string]any, 16)
 
-func (o OrchestrationMetadata) Name() string {
-	return o.name
-}
+	// Required values
+	obj["id"] = m.InstanceID
+	obj["name"] = m.Name
+	obj["status"] = helpers.ToRuntimeStatusString(m.RuntimeStatus)
+	obj["createdAt"] = m.CreatedAt
+	obj["lastUpdatedAt"] = m.LastUpdatedAt
 
-func (o OrchestrationMetadata) RuntimeStatus() protos.OrchestrationStatus {
-	return o.status
-}
-
-func (o OrchestrationMetadata) CreatedAt() time.Time {
-	return o.createdAt
-}
-
-func (o OrchestrationMetadata) LastUpdatedAt() time.Time {
-	return o.lastUpdatedAt
-}
-
-func (o OrchestrationMetadata) SerializedInput() string {
-	return o.serializedInput
-}
-
-func (o OrchestrationMetadata) SerializedOutput() (string, error) {
-	if o.IsComplete() {
-		return o.serializedOutput, nil
+	// Optional values
+	if m.SerializedInput != "" {
+		obj["serializedInput"] = m.SerializedInput
+	}
+	if m.SerializedOutput != "" {
+		obj["serializedOutput"] = m.SerializedOutput
+	}
+	if m.SerializedCustomStatus != "" {
+		obj["serializedCustomStatus"] = m.SerializedCustomStatus
 	}
 
-	return "", ErrNotCompleted
+	// Optional failure details (recursive)
+	if m.FailureDetails != nil {
+		const fieldCount = 4
+		root := make(map[string]any, fieldCount)
+		current := root
+		f := m.FailureDetails
+		for {
+			current["type"] = f.ErrorType
+			current["message"] = f.ErrorMessage
+			if f.StackTrace != nil {
+				current["stackTrace"] = f.StackTrace.GetValue()
+			}
+			if f.InnerFailure == nil {
+				// base case
+				break
+			}
+			// recursive case
+			f = f.InnerFailure
+			inner := make(map[string]any, fieldCount)
+			current["innerFailure"] = inner
+			current = inner
+		}
+		obj["failureDetails"] = root
+	}
+	return json.Marshal(obj)
 }
 
-func (o OrchestrationMetadata) SerializedCustomStatus() string {
-	return o.serializedCustomStatus
+func (m *OrchestrationMetadata) UnmarshalJSON(data []byte) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if rerr, ok := r.(error); ok {
+				err = fmt.Errorf("failed to unmarshal the JSON payload: %w", rerr)
+			} else {
+				err = errors.New("failed to unmarshal the JSON payload")
+			}
+		}
+	}()
+
+	var obj map[string]any
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return fmt.Errorf("failed to unmarshal orchestration metadata json: %w", err)
+	}
+
+	if id, ok := obj["id"]; ok {
+		m.InstanceID = InstanceID(id.(string))
+	} else {
+		return errors.New("missing 'id' field")
+	}
+	if name, ok := obj["name"]; ok {
+		m.Name = name.(string)
+	} else {
+		return errors.New("missing 'name' field")
+	}
+	if status, ok := obj["status"]; ok {
+		m.RuntimeStatus = helpers.FromRuntimeStatusString(status.(string))
+	} else {
+		return errors.New("missing 'name' field")
+	}
+	if createdAt, ok := obj["createdAt"]; ok {
+		if time, err := time.Parse(time.RFC3339, createdAt.(string)); err == nil {
+			m.CreatedAt = time
+		} else {
+			return errors.New("invalid 'createdAt' field: must be RFC3339 format")
+		}
+	} else {
+		return errors.New("missing 'createdAt' field")
+	}
+	if lastUpdatedAt, ok := obj["lastUpdatedAt"]; ok {
+		if time, err := time.Parse(time.RFC3339, lastUpdatedAt.(string)); err == nil {
+			m.LastUpdatedAt = time
+		} else {
+			return errors.New("invalid 'lastUpdatedAt' field: must be RFC3339 format")
+		}
+	} else {
+		return errors.New("missing 'lastUpdatedAt' field")
+	}
+	if input, ok := obj["serializedInput"]; ok {
+		m.SerializedInput = input.(string)
+	}
+	if output, ok := obj["serializedOutput"]; ok {
+		m.SerializedOutput = output.(string)
+	}
+	if output, ok := obj["serializedCustomStatus"]; ok {
+		m.SerializedCustomStatus = output.(string)
+	}
+
+	failureDetails, ok := obj["failureDetails"]
+	if ok {
+		m.FailureDetails = &protos.TaskFailureDetails{}
+		current := m.FailureDetails
+		obj = failureDetails.(map[string]any)
+		for {
+			current.ErrorType = obj["type"].(string)
+			current.ErrorMessage = obj["message"].(string)
+			if stackTrace, ok := obj["stackTrace"]; ok {
+				current.StackTrace = wrapperspb.String(stackTrace.(string))
+			}
+			if innerFailure, ok := obj["innerFailure"]; ok {
+				// recursive case
+				next := &protos.TaskFailureDetails{}
+				current.InnerFailure = next
+				current = next
+				obj = innerFailure.(map[string]any)
+			} else {
+				// base case
+				break
+			}
+		}
+	}
+	return nil
 }
 
-func (o OrchestrationMetadata) IsRunning() bool {
+func (o *OrchestrationMetadata) IsRunning() bool {
 	return !o.IsComplete()
 }
 
-func (o OrchestrationMetadata) IsComplete() bool {
-	return o.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED ||
-		o.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED ||
-		o.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED ||
-		o.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED
-}
-
-func (o OrchestrationMetadata) FailureDetails() (*protos.TaskFailureDetails, error) {
-	if !o.IsComplete() {
-		return nil, ErrNotCompleted
-	}
-
-	if o.failureDetails == nil {
-		return nil, ErrNoFailures
-	}
-
-	return o.failureDetails, nil
+func (o *OrchestrationMetadata) IsComplete() bool {
+	return o.RuntimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED ||
+		o.RuntimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED ||
+		o.RuntimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED ||
+		o.RuntimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED
 }

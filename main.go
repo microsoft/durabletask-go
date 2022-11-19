@@ -21,14 +21,7 @@ func main() {
 	flag.Parse()
 
 	grpcServer := grpc.NewServer()
-	grpcExecutorFunc := func(be backend.Backend) backend.Executor {
-		return backend.NewGrpcExecutor(grpcServer, be)
-	}
-	configureFunc := func(opts *sqlite.SqliteOptions) {
-		opts.FilePath = *dbFilePath
-	}
-
-	worker := sqlite.NewTaskHubWorker(grpcExecutorFunc, configureFunc)
+	worker := createTaskHubWorker(grpcServer, *dbFilePath, backend.DefaultLogger())
 	if err := worker.Start(ctx); err != nil {
 		log.Fatalf("failed to start worker: %v", err)
 	}
@@ -38,8 +31,18 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	log.Printf("server listening at %v", lis.Addr())
+	fmt.Printf("server listening at %v\n", lis.Addr())
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
+}
+
+func createTaskHubWorker(server *grpc.Server, sqliteFilePath string, logger backend.Logger) backend.TaskHubWorker {
+	sqliteOptions := sqlite.NewSqliteOptions(sqliteFilePath)
+	be := sqlite.NewSqliteBackend(sqliteOptions, logger)
+	executor := backend.NewGrpcExecutor(server, be, logger)
+	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
+	activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
+	taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
+	return taskHubWorker
 }

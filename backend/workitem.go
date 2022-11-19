@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
 var ErrNoWorkItems = errors.New("no work items were found")
@@ -17,10 +16,11 @@ type WorkItem interface {
 
 type OrchestrationWorkItem struct {
 	InstanceID api.InstanceID
-	NewEvents  []*protos.HistoryEvent
+	NewEvents  []*HistoryEvent
 	LockedBy   string
 	RetryCount int32
 	State      *OrchestrationRuntimeState
+	Properties map[string]interface{}
 }
 
 func (wi *OrchestrationWorkItem) Description() string {
@@ -42,9 +42,10 @@ func (wi *OrchestrationWorkItem) GetAbandonDelay() time.Duration {
 type ActivityWorkItem struct {
 	SequenceNumber int64
 	InstanceID     api.InstanceID
-	NewEvent       *protos.HistoryEvent
-	Result         *protos.HistoryEvent
+	NewEvent       *HistoryEvent
+	Result         *HistoryEvent
 	LockedBy       string
+	Properties     map[string]interface{}
 }
 
 // Description implements core.WorkItem

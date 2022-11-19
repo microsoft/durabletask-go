@@ -6,7 +6,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/proto"
 
@@ -35,32 +35,8 @@ type sqliteBackend struct {
 	dsn        string
 	db         *sql.DB
 	workerName string
+	logger     backend.Logger
 	options    *SqliteOptions
-}
-
-// NewTaskHubWorker creates a new TaskHubWorker with an initialized sqlite backend.
-//
-// Use executorFactory to configure an Executor object for use with the new backend.
-//
-// Use configure to configure options for the sqlite backend or specify `nil` to use the default configuration.
-func NewTaskHubWorker(executorFactory func(be backend.Backend) backend.Executor, configure func(opts *SqliteOptions)) backend.TaskHubWorker {
-	opts := NewSqliteOptions("")
-	if configure != nil {
-		configure(opts)
-	}
-
-	be := NewSqliteBackend(opts)
-	if err := be.CreateTaskHub(context.TODO()); err != nil && err != backend.ErrTaskHubExists {
-		log.Panicf("failed to initialize task hub: %v", err)
-	}
-
-	executor := executorFactory(be)
-	if executor == nil {
-		log.Panicf("executor factory returned a nil value")
-	}
-	ow := backend.NewOrchestrationWorker(be, executor)
-	aw := backend.NewActivityTaskWorker(be, executor)
-	return backend.NewTaskHubWorker(be, ow, aw)
 }
 
 // NewSqliteOptions creates a new options object for the sqlite backend provider.
@@ -76,7 +52,7 @@ func NewSqliteOptions(filePath string) *SqliteOptions {
 }
 
 // NewSqliteBackend creates a new sqlite-based Backend object.
-func NewSqliteBackend(opts *SqliteOptions) *sqliteBackend {
+func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backend {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
@@ -89,6 +65,7 @@ func NewSqliteBackend(opts *SqliteOptions) *sqliteBackend {
 		db:         nil,
 		workerName: fmt.Sprintf("%v,%d,%v", hostname, pid, uuidStr),
 		options:    opts,
+		logger:     logger,
 	}
 
 	if opts == nil {
@@ -235,7 +212,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 			isCreated = true
 			sqlSB.WriteString("[CreatedTime] = ?, [RuntimeStatus] = ?, [Input] = ?, ")
 			sqlUpdateArgs = append(sqlUpdateArgs, e.Timestamp.AsTime())
-			sqlUpdateArgs = append(sqlUpdateArgs, backend.ToRuntimeStatusString(protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING))
+			sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING))
 			sqlUpdateArgs = append(sqlUpdateArgs, es.Input.GetValue())
 		} else if ec := e.GetExecutionCompleted(); ec != nil {
 			if isCompleted {
@@ -245,7 +222,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 			isCompleted = true
 			sqlSB.WriteString("[CompletedTime] = ?, [RuntimeStatus] = ?, [Output] = ?, [FailureDetails] = ?, ")
 			sqlUpdateArgs = append(sqlUpdateArgs, now)
-			sqlUpdateArgs = append(sqlUpdateArgs, backend.ToRuntimeStatusString(ec.OrchestrationStatus))
+			sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(ec.OrchestrationStatus))
 			sqlUpdateArgs = append(sqlUpdateArgs, ec.Result.GetValue())
 			if ec.FailureDetails != nil {
 				bytes, err := proto.Marshal(ec.FailureDetails)
@@ -297,9 +274,9 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 		args := make([]interface{}, 0, newHistoryCount*3)
 		nextSequenceNumber := len(wi.State.OldEvents())
 		for _, e := range wi.State.NewEvents() {
-			eventPayload, err := proto.Marshal(e)
+			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
-				return fmt.Errorf("failed to marshal history event: %w", err)
+				return err
 			}
 
 			args = append(args, string(wi.InstanceID), nextSequenceNumber, eventPayload)
@@ -320,9 +297,9 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 
 		sqlInsertArgs := make([]interface{}, 0, newActivityCount*2)
 		for _, e := range wi.State.PendingTasks() {
-			eventPayload, err := proto.Marshal(e)
+			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
-				return fmt.Errorf("failed to marshal history event: %w", err)
+				return err
 			}
 
 			sqlInsertArgs = append(sqlInsertArgs, string(wi.InstanceID), eventPayload)
@@ -342,9 +319,9 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 
 		sqlInsertArgs := make([]interface{}, 0, newEventCount*3)
 		for _, e := range wi.State.PendingTimers() {
-			eventPayload, err := proto.Marshal(e)
+			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
-				return fmt.Errorf("failed to marshal history event: %w", err)
+				return err
 			}
 
 			visibileTime := e.GetTimerFired().GetFireAt().AsTime()
@@ -357,7 +334,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 				var instanceID string
 				if err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, &instanceID); err != nil {
 					if err == backend.ErrDuplicateEvent {
-						log.Printf(
+						be.logger.Warnf(
 							"%v: dropping sub-orchestration creation event because an instance with the target ID (%v) already exists.",
 							wi.InstanceID,
 							es.OrchestrationInstance.InstanceId)
@@ -367,9 +344,9 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 				}
 			}
 
-			eventPayload, err := proto.Marshal(msg.HistoryEvent)
+			eventPayload, err := backend.MarshalHistoryEvent(msg.HistoryEvent)
 			if err != nil {
-				return fmt.Errorf("failed to marshal history event: %w", err)
+				return err
 			}
 
 			sqlInsertArgs = append(sqlInsertArgs, msg.TargetInstanceID, eventPayload, nil)
@@ -412,7 +389,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 }
 
 // CreateOrchestrationInstance implements backend.Backend
-func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *protos.HistoryEvent) error {
+func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *backend.HistoryEvent) error {
 	if err := be.ensureDB(); err != nil {
 		return err
 	}
@@ -428,9 +405,9 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *pro
 		return err
 	}
 
-	eventPayload, err := proto.Marshal(e)
+	eventPayload, err := backend.MarshalHistoryEvent(e)
 	if err != nil {
-		return fmt.Errorf("failed to marshal ExecutionStarted event: %w", err)
+		return err
 	}
 
 	_, err = tx.ExecContext(
@@ -451,7 +428,7 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *pro
 	return nil
 }
 
-func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *protos.HistoryEvent, tx *sql.Tx, instanceID *string) error {
+func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx, instanceID *string) error {
 	if e == nil {
 		return errors.New("HistoryEvent must be non-nil")
 	} else if e.Timestamp == nil {
@@ -500,16 +477,16 @@ func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context
 	return nil
 }
 
-func (be *sqliteBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.InstanceID, e *protos.HistoryEvent) error {
+func (be *sqliteBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.InstanceID, e *backend.HistoryEvent) error {
 	if e == nil {
 		return errors.New("HistoryEvent must be non-nil")
 	} else if e.Timestamp == nil {
 		return errors.New("HistoryEvent must have a non-nil timestamp")
 	}
 
-	eventPayload, err := proto.Marshal(e)
+	eventPayload, err := backend.MarshalHistoryEvent(e)
 	if err != nil {
-		return fmt.Errorf("failed to marshal history event: %w", err)
+		return err
 	}
 
 	_, err = be.db.ExecContext(
@@ -586,7 +563,7 @@ func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.I
 	metadata := api.NewOrchestrationMetadata(
 		iid,
 		*name,
-		backend.FromRuntimeStatusString(*runtimeStatus),
+		helpers.FromRuntimeStatusString(*runtimeStatus),
 		*createdAt,
 		*lastUpdatedAt,
 		*input,
@@ -594,7 +571,7 @@ func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.I
 		*customStatus,
 		failureDetails,
 	)
-	return &metadata, nil
+	return metadata, nil
 }
 
 // GetOrchestrationRuntimeState implements backend.Backend
@@ -620,9 +597,9 @@ func (be *sqliteBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *b
 			return nil, fmt.Errorf("failed to read history event: %w", err)
 		}
 
-		e := new(protos.HistoryEvent)
-		if err := proto.Unmarshal(eventPayload, e); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal history event: %w", err)
+		e, err := backend.UnmarshalHistoryEvent(eventPayload)
+		if err != nil {
+			return nil, err
 		}
 
 		existingEvents = append(existingEvents, e)
@@ -707,9 +684,9 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 			maxDequeueCount = dequeueCount
 		}
 
-		e := new(protos.HistoryEvent)
-		if err := proto.Unmarshal(eventPayload, e); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal history event: %w", err)
+		e, err := backend.UnmarshalHistoryEvent(eventPayload)
+		if err != nil {
+			return nil, err
 		}
 
 		newEvents = append(newEvents, e)
@@ -767,9 +744,9 @@ func (be *sqliteBackend) GetActivityWorkItem(ctx context.Context) (*backend.Acti
 		return nil, fmt.Errorf("failed to scan the activity work-item: %w", err)
 	}
 
-	e := new(protos.HistoryEvent)
-	if err := proto.Unmarshal(eventPayload, e); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal history event: %w", err)
+	e, err := backend.UnmarshalHistoryEvent(eventPayload)
+	if err != nil {
+		return nil, err
 	}
 
 	wi := &backend.ActivityWorkItem{
@@ -791,9 +768,9 @@ func (be *sqliteBackend) CompleteActivityWorkItem(ctx context.Context, wi *backe
 	}
 	defer tx.Rollback()
 
-	bytes, err := proto.Marshal(wi.Result)
+	bytes, err := backend.MarshalHistoryEvent(wi.Result)
 	if err != nil {
-		return fmt.Errorf("failed to marshal activity result event: %w", err)
+		return err
 	}
 
 	_, err = tx.ExecContext(ctx, "INSERT INTO NewEvents ([InstanceID], [EventPayload]) VALUES (?, ?)", string(wi.InstanceID), bytes)

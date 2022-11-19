@@ -3,6 +3,7 @@ package backend
 import (
 	context "context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -11,6 +12,7 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -41,14 +43,22 @@ type grpcExecutor struct {
 	pendingOrchestrators map[api.InstanceID]*ExecutionResults
 	pendingActivities    map[string]*activityExecutionResult
 	backend              Backend
+	logger               Logger
 }
 
-func NewGrpcExecutor(grpcServer *grpc.Server, be Backend) Executor {
+// IsDurableTaskGrpcRequest returns true if the specified gRPC method name represents an operation
+// that is compatible with the gRPC executor.
+func IsDurableTaskGrpcRequest(fullMethodName string) bool {
+	return strings.Index(fullMethodName, "/TaskHubSidecarService") == 0
+}
+
+func NewGrpcExecutor(grpcServer *grpc.Server, be Backend, logger Logger) Executor {
 	executor := &grpcExecutor{
 		workItemQueue:        make(chan *protos.WorkItem),
 		pendingOrchestrators: make(map[api.InstanceID]*ExecutionResults),
 		pendingActivities:    make(map[string]*activityExecutionResult),
 		backend:              be,
+		logger:               logger,
 	}
 	protos.RegisterTaskHubSidecarServiceServer(grpcServer, executor)
 	return executor
@@ -76,6 +86,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 	// TODO: Timeout logic - i.e. handle the case where we never hear back from the remote worker (due to a hang, etc.).
 	select {
 	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-result.complete:
 	}
 
@@ -126,10 +137,14 @@ func (grpcExecutor) Hello(ctx context.Context, empty *emptypb.Empty) (*emptypb.E
 
 // GetWorkItems implements protos.TaskHubSidecarServiceServer
 func (e grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream protos.TaskHubSidecarService_GetWorkItemsServer) error {
+	if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
+		e.logger.Infof("work item stream established by user-agent: %v", md.Get("user-agent"))
+	}
 	// The worker client invokes this method, which streams back work-items as they arrive.
 	for {
 		select {
 		case <-stream.Context().Done():
+			e.logger.Infof("work item stream closed")
 			return nil
 		case wi := <-e.workItemQueue:
 			if err := stream.Send(wi); err != nil {
@@ -187,25 +202,7 @@ func (g *grpcExecutor) GetInstance(ctx context.Context, req *protos.GetInstanceR
 		return &protos.GetInstanceResponse{Exists: false}, nil
 	}
 
-	state := &protos.OrchestrationState{
-		InstanceId:           req.InstanceId,
-		Name:                 metadata.Name(),
-		OrchestrationStatus:  metadata.RuntimeStatus(),
-		CreatedTimestamp:     timestamppb.New(metadata.CreatedAt()),
-		LastUpdatedTimestamp: timestamppb.New(metadata.LastUpdatedAt()),
-	}
-
-	if req.GetInputsAndOutputs {
-		state.Input = wrapperspb.String(metadata.SerializedInput())
-		state.CustomStatus = wrapperspb.String(metadata.SerializedCustomStatus())
-		if o, err := metadata.SerializedOutput(); err == nil {
-			state.Output = wrapperspb.String(o)
-		}
-		if fd, err := metadata.FailureDetails(); err == nil {
-			state.FailureDetails = fd
-		}
-	}
-	return &protos.GetInstanceResponse{Exists: true, OrchestrationState: state}, nil
+	return createGetInstanceResponse(req, metadata), nil
 }
 
 // PurgeInstances implements protos.TaskHubSidecarServiceServer
@@ -259,7 +256,7 @@ func (g *grpcExecutor) WaitForInstanceCompletion(ctx context.Context, req *proto
 // WaitForInstanceStart implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) WaitForInstanceStart(ctx context.Context, req *protos.GetInstanceRequest) (*protos.GetInstanceResponse, error) {
 	return g.waitForInstance(ctx, req, func(m *api.OrchestrationMetadata) bool {
-		return m.RuntimeStatus() != protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
+		return m.RuntimeStatus != protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
 	})
 }
 
@@ -309,21 +306,17 @@ func (grpcExecutor) mustEmbedUnimplementedTaskHubSidecarServiceServer() {
 func createGetInstanceResponse(req *protos.GetInstanceRequest, metadata *api.OrchestrationMetadata) *protos.GetInstanceResponse {
 	state := &protos.OrchestrationState{
 		InstanceId:           req.InstanceId,
-		Name:                 metadata.Name(),
-		OrchestrationStatus:  metadata.RuntimeStatus(),
-		CreatedTimestamp:     timestamppb.New(metadata.CreatedAt()),
-		LastUpdatedTimestamp: timestamppb.New(metadata.LastUpdatedAt()),
+		Name:                 metadata.Name,
+		OrchestrationStatus:  metadata.RuntimeStatus,
+		CreatedTimestamp:     timestamppb.New(metadata.CreatedAt),
+		LastUpdatedTimestamp: timestamppb.New(metadata.LastUpdatedAt),
 	}
 
 	if req.GetInputsAndOutputs {
-		state.Input = wrapperspb.String(metadata.SerializedInput())
-		state.CustomStatus = wrapperspb.String(metadata.SerializedCustomStatus())
-		if o, err := metadata.SerializedOutput(); err == nil {
-			state.Output = wrapperspb.String(o)
-		}
-		if fd, err := metadata.FailureDetails(); err == nil {
-			state.FailureDetails = fd
-		}
+		state.Input = wrapperspb.String(metadata.SerializedInput)
+		state.CustomStatus = wrapperspb.String(metadata.SerializedCustomStatus)
+		state.Output = wrapperspb.String(metadata.SerializedOutput)
+		state.FailureDetails = metadata.FailureDetails
 	}
 
 	return &protos.GetInstanceResponse{Exists: true, OrchestrationState: state}

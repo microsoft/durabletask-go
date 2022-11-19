@@ -63,7 +63,9 @@ func NewOrchestratorStartedEvent() *protos.HistoryEvent {
 	return &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.Now(),
-		EventType: &protos.HistoryEvent_OrchestratorStarted{},
+		EventType: &protos.HistoryEvent_OrchestratorStarted{
+			OrchestratorStarted: &protos.OrchestratorStartedEvent{},
+		},
 	}
 }
 
@@ -304,6 +306,16 @@ func GetTaskId(e *protos.HistoryEvent) int32 {
 	} else {
 		return -1
 	}
+}
+
+func ToRuntimeStatusString(status protos.OrchestrationStatus) string {
+	name := protos.OrchestrationStatus_name[int32(status)]
+	return name[len("ORCHESTRATION_STATUS_"):]
+}
+
+func FromRuntimeStatusString(status string) protos.OrchestrationStatus {
+	runtimeStatus := "ORCHESTRATION_STATUS_" + status
+	return protos.OrchestrationStatus(protos.OrchestrationStatus_value[runtimeStatus])
 }
 
 func getHistoryEventTypeName(e *protos.HistoryEvent) string {
