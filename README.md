@@ -2,26 +2,13 @@
 
 [![Build](https://github.com/microsoft/durabletask-go/actions/workflows/pr-validation.yml/badge.svg)](https://github.com/microsoft/durabletask-go/actions/workflows/pr-validation.yml)
 
-The Durable Task Framework is a lightweight, embeddable engine for writing durable, fault-tolerant business logic (*orchestrations*) as ordinary code. The engine itself is written in Go and intended to be embedded into other Go-based processes. It exposes a gRPC endpoint to support writing durable flows in any language. There are currently SDKs that consume this gRPC endpoint for [.NET](https://github.com/microsoft/durabletask-dotnet) and [Java](https://github.com/microsoft/durabletask-java), with more to come.
+The Durable Task Framework is a lightweight, embeddable engine for writing durable, fault-tolerant business logic (*orchestrations*) as ordinary code. The engine itself is written in Go and intended to be embedded into other Go-based processes. It exposes a gRPC endpoint to support writing durable flows in any language. There are currently SDKs that consume this gRPC endpoint for [.NET](https://github.com/microsoft/durabletask-dotnet) and [Java](https://github.com/microsoft/durabletask-java), with more to come. It's also possible to write orchestrations directly in Go and run them in the local process.
 
-This project is largely a Go clone of the [.NET-based Durable Task Framework](https://github.com/Azure/durabletask), which is used by various cloud service teams at Microsoft for building reliable control planes and managing infrastructure. It also takes inspiration from the [Go Workflows](https://github.com/cschleiden/go-workflows) project, which itself is a Go project that borrows heavily from both the Durable Task Framework and [Temporal](https://github.com/temporalio/temporal). The main difference is that this engine is designed to be used in sidecar architectures.
+This project is largely a Go clone of the [.NET-based Durable Task Framework](https://github.com/Azure/durabletask), which is used by various cloud service teams at Microsoft for building reliable control planes and managing infrastructure. It also takes inspiration from the [Go Workflows](https://github.com/cschleiden/go-workflows) project, which itself is a Go project that borrows heavily from both the Durable Task Framework and [Temporal](https://github.com/temporalio/temporal). The main difference is that the Durable Task engine is designed to be used in sidecar architectures.
 
-This engine is also intended to be used as the basis for the [Dapr embedded workflow engine](https://github.com/dapr/dapr/issues/4576).
+The Durable Task engine is also intended to be used as the basis for the [Dapr embedded workflow engine](https://github.com/dapr/dapr/issues/4576).
 
 > This project is a work-in-progress and should not be used for production workloads. The public API surface is also not yet stable. The project itself is also in the very early stages and is missing some of the basics, such as contribution guidelines, etc.
-
-## Language SDKs
-
-The Durable Task Framework for Go currently supports writing orchestrations in the following languages:
-
-| Language/Stack | Package | Project Home | Samples |
-| - | - | - | - |
-| .NET | [![NuGet](https://img.shields.io/nuget/v/Microsoft.DurableTask.Client.svg?style=flat)](https://www.nuget.org/packages/Microsoft.DurableTask.Client/) | [GitHub](https://github.com/microsoft/durabletask-dotnet) | [Samples](https://github.com/microsoft/durabletask-dotnet/tree/main/samples) |
-| Java | [![Maven Central](https://img.shields.io/maven-central/v/com.microsoft/durabletask-client?label=durabletask-client)](https://search.maven.org/artifact/com.microsoft/durabletask-client) | [GitHub](https://github.com/microsoft/durabletask-java) | [Samples](https://github.com/microsoft/durabletask-java/tree/main/samples/src/main/java/io/durabletask/samples) |
-
-More language SDKs are planned to be added in the future. In particular, SDKs for Python and JavaScript/TypeScript. Anyone can theoretically create an SDK using a language that supports gRPC. However, there is not yet a guide for how to do this, so developers would need to reference existing SDK code as a reference. Starting with the Java implementation is recommended. The gRPC API is defined [here](https://github.com/microsoft/durabletask-protobuf).
-
-Support for Go is also planned, but using a local interface rather than gRPC.
 
 ## Storage providers
 
@@ -66,6 +53,117 @@ grpcServer.Serve(lis)
 ```
 
 Note that the Durable Task gRPC service implementation is designed to serve one client at a time, just like with any sidecar architecture. Scale out is achieved by adding new pod replicas that contain both the app process and the sidecar (connected to a common database).
+
+### Language SDKs for gRPC
+
+The Durable Task Framework for Go currently supports writing orchestrations in the following languages:
+
+| Language/Stack | Package | Project Home | Samples |
+| - | - | - | - |
+| .NET | [![NuGet](https://img.shields.io/nuget/v/Microsoft.DurableTask.Client.svg?style=flat)](https://www.nuget.org/packages/Microsoft.DurableTask.Client/) | [GitHub](https://github.com/microsoft/durabletask-dotnet) | [Samples](https://github.com/microsoft/durabletask-dotnet/tree/main/samples) |
+| Java | [![Maven Central](https://img.shields.io/maven-central/v/com.microsoft/durabletask-client?label=durabletask-client)](https://search.maven.org/artifact/com.microsoft/durabletask-client) | [GitHub](https://github.com/microsoft/durabletask-java) | [Samples](https://github.com/microsoft/durabletask-java/tree/main/samples/src/main/java/io/durabletask/samples) |
+
+More language SDKs are planned to be added in the future. In particular, SDKs for Python and JavaScript/TypeScript. Anyone can theoretically create an SDK using a language that supports gRPC. However, there is not yet a guide for how to do this, so developers would need to reference existing SDK code as a reference. Starting with the Java implementation is recommended. The gRPC API is defined [here](https://github.com/microsoft/durabletask-protobuf).
+
+## Embedded orchestrations
+
+It's also possible to create orchestrations in Go and run them in the local process. You can find code samples in the [samples](./samples/) directory. The full set of Durable Task features is not yet available as part of the Go SDK, but will be added over time.
+
+### Activity sequence example
+
+Activity sequences like the following are the simplest and most common pattern used in the Durable Task Framework.
+
+```go
+// ActivitySequenceOrchestrator makes three activity calls in sequence and results the results
+// as an array.
+func ActivitySequenceOrchestrator(ctx *task.OrchestrationContext) (any, error) {
+	var helloTokyo string
+	if err := ctx.CallActivity(SayHelloActivity, "Tokyo").Await(&helloTokyo); err != nil {
+		return nil, err
+	}
+	var helloLondon string
+	if err := ctx.CallActivity(SayHelloActivity, "London").Await(&helloLondon); err != nil {
+		return nil, err
+	}
+	var helloSeattle string
+	if err := ctx.CallActivity(SayHelloActivity, "Seattle").Await(&helloSeattle); err != nil {
+		return nil, err
+	}
+	return []string{helloTokyo, helloLondon, helloSeattle}, nil
+}
+
+// SayHelloActivity can be called by an orchestrator function and will return a friendly greeting.
+func SayHelloActivity(ctx task.ActivityContext) (any, error) {
+	var input string
+	if err := ctx.GetInput(&input); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Hello, %s!", input), nil
+}
+```
+
+You can find the full sample [here](./samples/sequence.go).
+
+### Fan-out / fan-in execution example
+
+The next most common pattern is "fan-out / fan-in" where multiple activities are run in parallel, as shown in the snippet below (note that the `GetDevicesToUpdate` and `UpdateDevice` activity definitions are left out of the snippet below for brevity):
+
+```go
+// UpdateDevicesOrchestrator is an orchestrator that runs activities in parallel
+func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
+	// Get a dynamic list of devices to perform updates on
+	var devices []string
+	if err := ctx.CallActivity(GetDevicesToUpdate, nil).Await(&devices); err != nil {
+		return nil, err
+	}
+
+	// Start a dynamic number of tasks in parallel, not waiting for any to complete (yet)
+	tasks := make([]task.Task, 0, len(devices))
+	for _, id := range devices {
+		tasks = append(tasks, ctx.CallActivity(UpdateDevice, id))
+	}
+
+	// Now that all are started, wait for them to complete and then return the success rate
+	successCount := 0
+	for _, task := range tasks {
+		var succeeded bool
+		if err := task.Await(&succeeded); err == nil && succeeded {
+			successCount++
+		}
+	}
+	return float32(successCount) / float32(len(devices)), nil
+}
+```
+
+The full sample can be found [here](./samples/parallel.go).
+
+### Managing local orchestrations
+
+The following code snippet provides an example of how you can configure and run orchestrations. The `TaskRegistry` type allows you to register orchestrator and activity functions, and the `TaskHubClient` allows you to start, query, terminate, and wait for orchestrations to complete.
+
+The code snippet below demonstrates how to register and start a new instance of the `ActivitySequenceOrchestrator` orchestrator and wait for it to complete. The initialization of the client and worker are left out for brevity.
+
+```go
+r := task.NewTaskRegistry()
+r.AddOrchestrator(ActivitySequenceOrchestrator)
+r.AddActivity(SayHelloActivity)
+
+ctx := context.Background()
+client, worker := Init(ctx, r)
+defer worker.Shutdown(ctx)
+
+id, err := client.ScheduleNewOrchestration(ctx, ActivitySequenceOrchestrator)
+if err != nil {
+  panic(err)
+}
+metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+if err != nil {
+  panic(err)
+}
+fmt.Printf("orchestration completed: %v\n", metadata)
+```
+
+Each sample linked above has a full implementation you can use as a reference.
 
 ## Cloning this repository
 
@@ -115,19 +213,13 @@ You can run pre-built container images to run full integration tests against the
 Use the following docker command to run tests against a running worker.
 
 ```bash
-docker run cgillum/durabletask-dotnet-tester:0.5.0-beta
-```
-
-Note that the test assumes the gRPC server can be reached over `localhost` on port `4001`. These values can be overridden with the following environment variables:
-
-* `GRPC_HOST`: Use this to change from the default `localhost` to some other value, for example `host.docker.internal` if using Docker Desktop for Mac or Windows.
-* `GRPC_PORT`: Set this environment variable to change the default port from `4001` to something else.
-
-Here's an example for doing localhost testing on a Windows machine:
-
-```bash
 docker run -e GRPC_HOST="host.docker.internal" cgillum/durabletask-dotnet-tester:0.5.0-beta
 ```
+
+Note that the test assumes the gRPC server can be reached over `localhost` on port `4001` on the host machine. These values can be overridden with the following environment variables:
+
+* `GRPC_HOST`: Use this to change from the default `127.0.0.1` to some other value, for example `host.docker.internal`.
+* `GRPC_PORT`: Set this environment variable to change the default port from `4001` to something else.
 
 If successful, you should see output that looks like the following:
 

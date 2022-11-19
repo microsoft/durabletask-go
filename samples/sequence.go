@@ -27,6 +27,8 @@ func RunSequenceSample() {
 	fmt.Printf("orchestration completed: %v\n", metadata)
 }
 
+// ActivitySequenceOrchestrator makes three activity calls in sequence and results the results
+// as an array.
 func ActivitySequenceOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	var helloTokyo string
 	if err := ctx.CallActivity(SayHelloActivity, "Tokyo").Await(&helloTokyo); err != nil {
@@ -43,6 +45,7 @@ func ActivitySequenceOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	return []string{helloTokyo, helloLondon, helloSeattle}, nil
 }
 
+// SayHelloActivity can be called by an orchestrator function and will return a friendly greeting.
 func SayHelloActivity(ctx task.ActivityContext) (any, error) {
 	var input string
 	if err := ctx.GetInput(&input); err != nil {
