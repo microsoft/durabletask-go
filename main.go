@@ -7,14 +7,17 @@ import (
 	"log"
 	"net"
 
+	"google.golang.org/grpc"
+
 	"github.com/microsoft/durabletask-go/backend"
 	"github.com/microsoft/durabletask-go/backend/sqlite"
-	"google.golang.org/grpc"
 )
 
-var port = flag.Int("port", 4001, "The server port")
-var dbFilePath = flag.String("db", "taskhub.sqlite3", "The path to the sqlite file to use (or create if not exists)")
-var ctx = context.Background()
+var (
+	port       = flag.Int("port", 4001, "The server port")
+	dbFilePath = flag.String("db", "taskhub.sqlite3", "The path to the sqlite file to use (or create if not exists)")
+	ctx        = context.Background()
+)
 
 func main() {
 	// Parse command-line arguments

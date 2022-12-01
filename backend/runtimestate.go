@@ -57,17 +57,17 @@ func (s *OrchestrationRuntimeState) AddEvent(e *HistoryEvent) error {
 }
 
 func (s *OrchestrationRuntimeState) addEvent(e *HistoryEvent, isNew bool) error {
-	if startEvent, ok := e.GetEventType().(*protos.HistoryEvent_ExecutionStarted); ok {
+	if startEvent := e.GetExecutionStarted(); startEvent != nil {
 		if s.startEvent != nil {
 			return ErrDuplicateEvent
 		}
-		s.startEvent = startEvent.ExecutionStarted
+		s.startEvent = startEvent
 		s.createdTime = e.Timestamp.AsTime()
-	} else if completedEvent, ok := e.GetEventType().(*protos.HistoryEvent_ExecutionCompleted); ok {
+	} else if completedEvent := e.GetExecutionCompleted(); completedEvent != nil {
 		if s.completedEvent != nil {
 			return ErrDuplicateEvent
 		}
-		s.completedEvent = completedEvent.ExecutionCompleted
+		s.completedEvent = completedEvent
 		s.completedTime = e.Timestamp.AsTime()
 	} else {
 		// TODO: Check for other possible duplicates using task IDs
@@ -95,16 +95,23 @@ func (s *OrchestrationRuntimeState) IsValid() bool {
 }
 
 // ApplyActions takes a set of actions and updates its internal state, including populating the outbox.
-func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorAction) (bool, error) {
+func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorAction, currentTraceContext *protos.TraceContext) (bool, error) {
 	for _, action := range actions {
 		if completedAction := action.GetCompleteOrchestration(); completedAction != nil {
 			if completedAction.OrchestrationStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW {
 				newState := NewOrchestrationRuntimeState(s.instanceID, []*protos.HistoryEvent{})
 				newState.continuedAsNew = true
+				newState.AddEvent(helpers.NewOrchestratorStartedEvent())
 
 				// Duplicate the start event info, updating just the input
 				newState.AddEvent(
-					helpers.NewExecutionStartedEvent(-1, s.startEvent.Name, string(s.instanceID), completedAction.Result, s.startEvent.ParentInstance),
+					helpers.NewExecutionStartedEvent(
+						s.startEvent.Name,
+						string(s.instanceID),
+						completedAction.Result,
+						s.startEvent.ParentInstance,
+						s.startEvent.ParentTraceContext,
+					),
 				)
 
 				// Unprocessed "carryover" events
@@ -145,14 +152,32 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 			}
 		} else if createtimer := action.GetCreateTimer(); createtimer != nil {
 			s.AddEvent(helpers.NewTimerCreatedEvent(action.Id, createtimer.FireAt))
-			s.pendingTimers = append(s.pendingTasks, helpers.NewTimerFiredEvent(action.Id, createtimer.FireAt))
+			s.pendingTimers = append(s.pendingTasks, helpers.NewTimerFiredEvent(action.Id, createtimer.FireAt, currentTraceContext))
 		} else if scheduleTask := action.GetScheduleTask(); scheduleTask != nil {
-			scheduledEvent := helpers.NewTaskScheduledEvent(action.Id, scheduleTask.Name, scheduleTask.Version, scheduleTask.Input)
+			scheduledEvent := helpers.NewTaskScheduledEvent(
+				action.Id,
+				scheduleTask.Name,
+				scheduleTask.Version,
+				scheduleTask.Input,
+				currentTraceContext,
+			)
 			s.AddEvent(scheduledEvent)
 			s.pendingTasks = append(s.pendingTasks, scheduledEvent)
 		} else if createSO := action.GetCreateSubOrchestration(); createSO != nil {
-			s.AddEvent(helpers.NewSubOrchestrationCreatedEvent(action.Id, createSO.Name, createSO.Version, createSO.Input, createSO.InstanceId))
-			startEvent := helpers.NewExecutionStartedEvent(-1, createSO.Name, createSO.InstanceId, createSO.Input, helpers.NewParentInfo(action.Id, s.startEvent.Name, string(s.instanceID)))
+			s.AddEvent(helpers.NewSubOrchestrationCreatedEvent(
+				action.Id,
+				createSO.Name,
+				createSO.Version,
+				createSO.Input,
+				createSO.InstanceId,
+				currentTraceContext))
+			startEvent := helpers.NewExecutionStartedEvent(
+				createSO.Name,
+				createSO.InstanceId,
+				createSO.Input,
+				helpers.NewParentInfo(action.Id, s.startEvent.Name, string(s.instanceID)),
+				currentTraceContext,
+			)
 			s.pendingMessages = append(s.pendingMessages, OrchestratorMessage{HistoryEvent: startEvent, TargetInstanceID: createSO.InstanceId})
 		} else if sendEvent := action.GetSendEvent(); sendEvent != nil {
 			e := helpers.NewSendEventEvent(action.Id, sendEvent.Instance.InstanceId, sendEvent.Name, sendEvent.Data)
@@ -270,4 +295,14 @@ func (s *OrchestrationRuntimeState) ContinuedAsNew() bool {
 
 func (s *OrchestrationRuntimeState) String() string {
 	return fmt.Sprintf("%v:%v", s.instanceID, helpers.ToRuntimeStatusString(s.RuntimeStatus()))
+}
+
+func (s *OrchestrationRuntimeState) getStartedTime() time.Time {
+	var startTime time.Time
+	if len(s.oldEvents) > 0 {
+		startTime = s.oldEvents[0].Timestamp.AsTime()
+	} else if len(s.newEvents) > 0 {
+		startTime = s.newEvents[0].Timestamp.AsTime()
+	}
+	return startTime
 }

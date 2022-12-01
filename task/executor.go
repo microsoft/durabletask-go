@@ -41,7 +41,7 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 			}), nil
 		}
 	}
-	activityCtx := newTaskActivityContext(e.EventId, ts)
+	activityCtx := newTaskActivityContext(ctx, e.EventId, ts)
 
 	// convert panics into activity failures
 	defer func() {

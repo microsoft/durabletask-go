@@ -36,8 +36,10 @@ var completionStatusValues = []protos.OrchestrationStatus{
 	protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,
 }
 
-const defaultName = "testing"
-const defaultInput = "Hello, 世界!"
+const (
+	defaultName  = "testing"
+	defaultInput = "Hello, 世界!"
+)
 
 // Test_NewOrchestrationWorkItem_Single enqueues a single work item into the backend
 // store and attempts to fetch it immediately afterwards.
@@ -137,7 +139,8 @@ func Test_CompleteOrchestration(t *testing.T) {
 					completeAction.FailureDetails = &protos.TaskFailureDetails{
 						ErrorType:    "MyError",
 						ErrorMessage: "Kah-BOOOM!!",
-						StackTrace:   wrapperspb.String(expectedStackTrace)}
+						StackTrace:   wrapperspb.String(expectedStackTrace),
+					}
 				} else {
 					completeAction.Result = wrapperspb.String(expectedResult)
 				}
@@ -372,8 +375,8 @@ func workItemProcessingTestLogic(
 	t *testing.T,
 	be backend.Backend,
 	getOrchestratorActions func() []*protos.OrchestratorAction,
-	validateMetadata func(metadata *api.OrchestrationMetadata)) {
-
+	validateMetadata func(metadata *api.OrchestrationMetadata),
+) {
 	expectedID := "myinstance"
 
 	startTime := time.Now().UTC()
@@ -386,7 +389,7 @@ func workItemProcessingTestLogic(
 				}
 
 				actions := getOrchestratorActions()
-				_, err := state.ApplyActions(actions)
+				_, err := state.ApplyActions(actions, nil)
 				if assert.NoError(t, err) {
 					wi.State = state
 					err := be.CompleteOrchestrationWorkItem(ctx, wi)

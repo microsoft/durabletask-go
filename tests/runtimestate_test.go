@@ -26,7 +26,8 @@ func Test_NewOrchestration(t *testing.T) {
 			ExecutionStarted: &protos.ExecutionStartedEvent{
 				OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: iid},
 				Name:                  expectedName,
-			}},
+			},
+		},
 	}
 
 	s := backend.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{e})
@@ -70,14 +71,16 @@ func Test_CompletedOrchestration(t *testing.T) {
 			ExecutionStarted: &protos.ExecutionStartedEvent{
 				OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: iid},
 				Name:                  expectedName,
-			}},
+			},
+		},
 	}, {
 		EventId:   -1,
 		Timestamp: timestamppb.New(completedAt),
 		EventType: &protos.HistoryEvent_ExecutionCompleted{
 			ExecutionCompleted: &protos.ExecutionCompletedEvent{
 				OrchestrationStatus: protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
-			}},
+			},
+		},
 	}}
 
 	s := backend.NewOrchestrationRuntimeState(iid, events)
@@ -113,14 +116,14 @@ func Test_CompletedSubOrchestration(t *testing.T) {
 
 	parentInfo := helpers.NewParentInfo(expectedTaskID, "Parent", "parent_id")
 	s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
-		helpers.NewExecutionStartedEvent(-1, "Child", "child_id", nil, parentInfo),
+		helpers.NewExecutionStartedEvent("Child", "child_id", nil, parentInfo, nil),
 	})
 
 	actions := []*protos.OrchestratorAction{
 		helpers.NewCompleteOrchestrationAction(expectedTaskID, status, expectedOutput, []*protos.HistoryEvent{}, nil),
 	}
 
-	continuedAsNew, err := s.ApplyActions(actions)
+	continuedAsNew, err := s.ApplyActions(actions, nil)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, s.NewEvents(), 1) {
 			e := s.NewEvents()[0]
@@ -152,21 +155,26 @@ func Test_ContinueAsNew(t *testing.T) {
 	eventPayload := "MyEventPayload"
 
 	state := backend.NewOrchestrationRuntimeState(api.InstanceID(iid), []*protos.HistoryEvent{
-		helpers.NewExecutionStartedEvent(-1, expectedName, iid, nil, nil),
+		helpers.NewExecutionStartedEvent(expectedName, iid, nil, nil, nil),
 	})
 
 	carryoverEvents := []*protos.HistoryEvent{helpers.NewEventRaisedEvent(eventName, wrapperspb.String(eventPayload))}
-	status := protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW
 	actions := []*protos.OrchestratorAction{
-		helpers.NewCompleteOrchestrationAction(expectedTaskID, status, continueAsNewInput, carryoverEvents, nil),
+		helpers.NewCompleteOrchestrationAction(
+			expectedTaskID,
+			protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
+			continueAsNewInput,
+			carryoverEvents,
+			nil),
 	}
 
-	continuedAsNew, err := state.ApplyActions(actions)
+	continuedAsNew, err := state.ApplyActions(actions, nil)
 	if assert.NoError(t, err) && assert.True(t, continuedAsNew) {
-		if assert.Len(t, state.NewEvents(), 2) {
+		if assert.Len(t, state.NewEvents(), 3) {
 			assert.NotNil(t, state.NewEvents()[0].Timestamp)
+			assert.NotNil(t, state.NewEvents()[0].GetOrchestratorStarted())
 			assert.NotNil(t, state.NewEvents()[1].Timestamp)
-			if ec := state.NewEvents()[0].GetExecutionStarted(); assert.NotNil(t, ec) {
+			if ec := state.NewEvents()[1].GetExecutionStarted(); assert.NotNil(t, ec) {
 				assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING, state.RuntimeStatus())
 				assert.Equal(t, string(state.InstanceID()), ec.OrchestrationInstance.InstanceId)
 				if name, err := state.Name(); assert.NoError(t, err) {
@@ -177,7 +185,8 @@ func Test_ContinueAsNew(t *testing.T) {
 					assert.Equal(t, continueAsNewInput, input)
 				}
 			}
-			if er := state.NewEvents()[1].GetEventRaised(); assert.NotNil(t, er) {
+			assert.NotNil(t, state.NewEvents()[2].Timestamp)
+			if er := state.NewEvents()[2].GetEventRaised(); assert.NotNil(t, er) {
 				assert.Equal(t, eventName, er.Name)
 				assert.Equal(t, eventPayload, er.Input.GetValue())
 			}
@@ -194,14 +203,14 @@ func Test_CreateTimer(t *testing.T) {
 	expectedFireAt := time.Now().UTC().Add(72 * time.Hour)
 
 	s := backend.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{
-		helpers.NewExecutionStartedEvent(-1, "MyOrchestration", iid, nil, nil),
+		helpers.NewExecutionStartedEvent("MyOrchestration", iid, nil, nil, nil),
 	})
 
 	actions := []*protos.OrchestratorAction{
 		helpers.NewCreateTimerAction(expectedTimerID, expectedFireAt),
 	}
 
-	continuedAsNew, err := s.ApplyActions(actions)
+	continuedAsNew, err := s.ApplyActions(actions, nil)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, s.NewEvents(), 1) {
 			e := s.NewEvents()[0]
@@ -228,14 +237,15 @@ func Test_ScheduleTask(t *testing.T) {
 	expectedInput := "{\"Foo\":5}"
 
 	state := backend.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{
-		helpers.NewExecutionStartedEvent(-1, "MyOrchestration", iid, wrapperspb.String(expectedInput), nil),
+		helpers.NewExecutionStartedEvent("MyOrchestration", iid, wrapperspb.String(expectedInput), nil, nil),
 	})
 
 	actions := []*protos.OrchestratorAction{
 		helpers.NewScheduleTaskAction(expectedTaskID, expectedName, wrapperspb.String(expectedInput)),
 	}
 
-	continuedAsNew, err := state.ApplyActions(actions)
+	tc := &protos.TraceContext{TraceID: "trace", SpanID: "span", TraceState: wrapperspb.String("state")}
+	continuedAsNew, err := state.ApplyActions(actions, tc)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, state.NewEvents(), 1) {
 			e := state.NewEvents()[0]
@@ -243,6 +253,11 @@ func Test_ScheduleTask(t *testing.T) {
 				assert.Equal(t, expectedTaskID, e.EventId)
 				assert.Equal(t, expectedName, taskScheduled.Name)
 				assert.Equal(t, expectedInput, taskScheduled.Input.GetValue())
+				if assert.NotNil(t, taskScheduled.ParentTraceContext) {
+					assert.Equal(t, "trace", taskScheduled.ParentTraceContext.TraceID)
+					assert.Equal(t, "span", taskScheduled.ParentTraceContext.SpanID)
+					assert.Equal(t, "state", taskScheduled.ParentTraceContext.TraceState.GetValue())
+				}
 			}
 		}
 		if assert.Len(t, state.PendingTasks(), 1) {
@@ -251,6 +266,11 @@ func Test_ScheduleTask(t *testing.T) {
 				assert.Equal(t, expectedTaskID, e.EventId)
 				assert.Equal(t, expectedName, taskScheduled.Name)
 				assert.Equal(t, expectedInput, taskScheduled.Input.GetValue())
+				if assert.NotNil(t, taskScheduled.ParentTraceContext) {
+					assert.Equal(t, "trace", taskScheduled.ParentTraceContext.TraceID)
+					assert.Equal(t, "span", taskScheduled.ParentTraceContext.SpanID)
+					assert.Equal(t, "state", taskScheduled.ParentTraceContext.TraceState.GetValue())
+				}
 			}
 		}
 	}
@@ -262,16 +282,24 @@ func Test_CreateSubOrchestration(t *testing.T) {
 	expectedInstanceID := "xyz"
 	expectedName := "MySubOrchestration"
 	expectedInput := wrapperspb.String("{\"Foo\":5}")
+	expectedTraceID := "trace"
+	expectedSpanID := "span"
+	expectedTraceState := "trace_state"
 
 	state := backend.NewOrchestrationRuntimeState(api.InstanceID(iid), []*protos.HistoryEvent{
-		helpers.NewExecutionStartedEvent(-1, "Parent", iid, nil, nil),
+		helpers.NewExecutionStartedEvent("Parent", iid, nil, nil, nil),
 	})
 
 	actions := []*protos.OrchestratorAction{
 		helpers.NewCreateSubOrchestrationAction(expectedTaskID, expectedName, expectedInstanceID, expectedInput),
 	}
 
-	continuedAsNew, err := state.ApplyActions(actions)
+	tc := &protos.TraceContext{
+		TraceID:    expectedTraceID,
+		SpanID:     expectedSpanID,
+		TraceState: wrapperspb.String(expectedTraceState),
+	}
+	continuedAsNew, err := state.ApplyActions(actions, tc)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, state.NewEvents(), 1) {
 			e := state.NewEvents()[0]
@@ -280,6 +308,11 @@ func Test_CreateSubOrchestration(t *testing.T) {
 				assert.Equal(t, expectedInstanceID, orchCreated.InstanceId)
 				assert.Equal(t, expectedName, orchCreated.Name)
 				assert.Equal(t, expectedInput.GetValue(), orchCreated.Input.GetValue())
+				if assert.NotNil(t, orchCreated.ParentTraceContext) {
+					assert.Equal(t, expectedTraceID, orchCreated.ParentTraceContext.TraceID)
+					assert.Equal(t, expectedSpanID, orchCreated.ParentTraceContext.SpanID)
+					assert.Equal(t, expectedTraceState, orchCreated.ParentTraceContext.TraceState.GetValue())
+				}
 			}
 		}
 		if assert.Len(t, state.PendingMessages(), 1) {
@@ -297,6 +330,11 @@ func Test_CreateSubOrchestration(t *testing.T) {
 						assert.Equal(t, iid, executionStarted.ParentInstance.OrchestrationInstance.InstanceId)
 					}
 				}
+				if assert.NotNil(t, executionStarted.ParentTraceContext) {
+					assert.Equal(t, expectedTraceID, executionStarted.ParentTraceContext.TraceID)
+					assert.Equal(t, expectedSpanID, executionStarted.ParentTraceContext.SpanID)
+					assert.Equal(t, expectedTraceState, executionStarted.ParentTraceContext.TraceState.GetValue())
+				}
 			}
 		}
 	}
@@ -308,14 +346,14 @@ func Test_SendEvent(t *testing.T) {
 	expectedInput := "foo"
 
 	s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
-		helpers.NewExecutionStartedEvent(-1, "MyOrchestration", "abc", wrapperspb.String(expectedInput), nil),
+		helpers.NewExecutionStartedEvent("MyOrchestration", "abc", wrapperspb.String(expectedInput), nil, nil),
 	})
 
 	actions := []*protos.OrchestratorAction{
 		helpers.NewSendEventAction(expectedInstanceID, expectedEventName, wrapperspb.String(expectedInput)),
 	}
 
-	continuedAsNew, err := s.ApplyActions(actions)
+	continuedAsNew, err := s.ApplyActions(actions, nil)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, s.NewEvents(), 1) {
 			e := s.NewEvents()[0]
@@ -340,7 +378,7 @@ func Test_StateIsValid(t *testing.T) {
 	s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
 	assert.True(t, s.IsValid())
 	s = backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
-		helpers.NewExecutionStartedEvent(-1, "MyOrchestration", "abc", nil, nil),
+		helpers.NewExecutionStartedEvent("MyOrchestration", "abc", nil, nil, nil),
 	})
 	assert.True(t, s.IsValid())
 	s = backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
@@ -351,8 +389,8 @@ func Test_StateIsValid(t *testing.T) {
 
 func Test_DuplicateEvents(t *testing.T) {
 	s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
-	if err := s.AddEvent(helpers.NewExecutionStartedEvent(-1, "MyOrchestration", "abc", nil, nil)); assert.NoError(t, err) {
-		err = s.AddEvent(helpers.NewExecutionStartedEvent(-1, "MyOrchestration", "abc", nil, nil))
+	if err := s.AddEvent(helpers.NewExecutionStartedEvent("MyOrchestration", "abc", nil, nil, nil)); assert.NoError(t, err) {
+		err = s.AddEvent(helpers.NewExecutionStartedEvent("MyOrchestration", "abc", nil, nil, nil))
 		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
 	} else {
 		return
