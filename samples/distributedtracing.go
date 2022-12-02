@@ -18,7 +18,7 @@ import (
 
 func RunDistributedTracingSample() {
 	// Tracing can be configured independently of the orchestration code.
-	tp := configureZipkinTracing()
+	tp := ConfigureZipkinTracing()
 	defer func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
 			log.Fatal(err)
@@ -46,7 +46,7 @@ func RunDistributedTracingSample() {
 	fmt.Printf("orchestration completed: %v\n", metadata)
 }
 
-func configureZipkinTracing() *trace.TracerProvider {
+func ConfigureZipkinTracing() *trace.TracerProvider {
 	// Inspired by this sample: https://github.com/open-telemetry/opentelemetry-go/blob/main/example/zipkin/main.go
 	exp, err := zipkin.New("http://localhost:9411/api/v2/spans")
 	if err != nil {
