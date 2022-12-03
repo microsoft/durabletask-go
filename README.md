@@ -165,6 +165,44 @@ fmt.Printf("orchestration completed: %v\n", metadata)
 
 Each sample linked above has a full implementation you can use as a reference.
 
+## Distributed tracing support
+
+The Durable Task Framework for Go supports publishing distributed traces to any configured [Open Telemetry](https://opentelemetry.io/)-compatible exporter. Simply use [`otel.SetTracerProvider(tp)`](https://pkg.go.dev/go.opentelemetry.io/otel#SetTracerProvider) to register a global `TracerProvider` as part of your application startup and the task hub worker will automatically use it to emit OLTP trace spans.
+
+The following example code shows how you can configure distributed trace collection with [Zipkin](https://zipkin.io/), a popular open source distributed tracing system. The example assumes Zipkin is running locally, as shown in the code.
+
+```go
+func ConfigureZipkinTracing() *trace.TracerProvider {
+	// Inspired by this sample: https://github.com/open-telemetry/opentelemetry-go/blob/main/example/zipkin/main.go
+	exp, err := zipkin.New("http://localhost:9411/api/v2/spans")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// NOTE: The simple span processor is not recommended for production.
+	//       Instead, the batch span processor should be used for production.
+	processor := trace.NewSimpleSpanProcessor(exp)
+	// processor := trace.NewBatchSpanProcessor(exp)
+
+	tp := trace.NewTracerProvider(
+		trace.WithSpanProcessor(processor),
+		trace.WithSampler(trace.AlwaysSample()),
+		trace.WithResource(resource.NewWithAttributes(
+			"durabletask.io",
+			attribute.KeyValue{Key: "service.name", Value: attribute.StringValue("sample-app")},
+		)),
+	)
+	otel.SetTracerProvider(tp)
+	return tp
+}
+```
+
+You can find this code in the [distributedtracing.go](./samples/distributedtracing.go) sample. The following is a screenshot showing the trace for the sample's orchestration, which calls an activity, creates a 2-second durable timer, and uses another activity to make an HTTP request to bing.com:
+
+![image](https://user-images.githubusercontent.com/2704139/205171291-8d12d6fe-5d4f-40c7-9a48-2586a4c4af49.png)
+
+Note that each orchestration is represented as a single span with activities, timers, and sub-orchestrations as child spans. The generated spans contain a variety of attributes that include information such as orchestration instance IDs, task names, task IDs, etc.
+
 ## Cloning this repository
 
 This repository contains submodules. Be sure to clone it with the option to include submodules. Otherwise you will not be able to generate the protobuf code.
