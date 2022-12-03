@@ -179,7 +179,7 @@ This project requires go v1.18.x or greater. You can build a standalone executab
 
 ### Generating protobuf
 
-Use the following command to generate the protobuf from the submodule.
+Use the following command to regenerate the protobuf from the submodule. Use this whenever updating the submodule reference.
 
 ```bash
 # NOTE: assumes the .proto file defines: option go_package = "/internal/protos"

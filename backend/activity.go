@@ -1,10 +1,14 @@
 package backend
 
 import (
-	context "context"
+	"context"
 	"fmt"
 
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
@@ -42,8 +46,35 @@ func (ap *activityProcessor) FetchWorkItem(ctx context.Context) (WorkItem, error
 // ProcessWorkItem implements TaskDispatcher
 func (p *activityProcessor) ProcessWorkItem(ctx context.Context, wi WorkItem) error {
 	awi := wi.(*ActivityWorkItem)
+
+	ts := awi.NewEvent.GetTaskScheduled()
+	if ts == nil {
+		return fmt.Errorf("invalid TaskScheduled event")
+	}
+
+	// Create span as child of spanContext found in TaskScheduledEvent
+	ctx, err := helpers.ContextFromTraceContext(ctx, ts.ParentTraceContext)
+	if err != nil {
+		return fmt.Errorf("%v: failed to parse activity trace context: %w", awi.InstanceID, err)
+	}
+	var span trace.Span
+	ctx, span = helpers.StartNewActivitySpan(ctx, ts.Name, ts.Version.GetValue(), string(awi.InstanceID), awi.NewEvent.EventId)
+	if span != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				span.SetStatus(codes.Error, fmt.Sprintf("%v", r))
+			}
+			span.End()
+		}()
+	}
+
+	// Execute the activity and get its result
 	result, err := p.executor.ExecuteActivity(ctx, awi.InstanceID, awi.NewEvent)
 	if err != nil {
+		if span != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
 		return err
 	}
 

@@ -7,19 +7,21 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
 func NewExecutionStartedEvent(
-	eventID int32,
 	name string,
 	instanceId string,
 	input *wrapperspb.StringValue,
-	parent *protos.ParentInstanceInfo) *protos.HistoryEvent {
+	parent *protos.ParentInstanceInfo,
+	parentTraceContext *protos.TraceContext,
+) *protos.HistoryEvent {
 	return &protos.HistoryEvent{
-		EventId:   eventID,
+		EventId:   -1,
 		Timestamp: timestamppb.New(time.Now()),
 		EventType: &protos.HistoryEvent_ExecutionStarted{
 			ExecutionStarted: &protos.ExecutionStartedEvent{
@@ -30,6 +32,7 @@ func NewExecutionStartedEvent(
 					InstanceId:  instanceId,
 					ExecutionId: wrapperspb.String(uuid.New().String()),
 				},
+				ParentTraceContext: parentTraceContext,
 			},
 		},
 	}
@@ -79,15 +82,22 @@ func NewEventRaisedEvent(name string, rawInput *wrapperspb.StringValue) *protos.
 	}
 }
 
-func NewTaskScheduledEvent(taskID int32, name string, version *wrapperspb.StringValue, rawInput *wrapperspb.StringValue) *protos.HistoryEvent {
+func NewTaskScheduledEvent(
+	taskID int32,
+	name string,
+	version *wrapperspb.StringValue,
+	rawInput *wrapperspb.StringValue,
+	tc *protos.TraceContext,
+) *protos.HistoryEvent {
 	return &protos.HistoryEvent{
 		EventId:   taskID,
 		Timestamp: timestamppb.New(time.Now()),
 		EventType: &protos.HistoryEvent_TaskScheduled{
 			TaskScheduled: &protos.TaskScheduledEvent{
-				Name:    name,
-				Version: version,
-				Input:   rawInput,
+				Name:               name,
+				Version:            version,
+				Input:              rawInput,
+				ParentTraceContext: tc,
 			},
 		},
 	}
@@ -129,26 +139,42 @@ func NewTimerCreatedEvent(eventID int32, fireAt *timestamppb.Timestamp) *protos.
 	}
 }
 
-func NewTimerFiredEvent(timerID int32, fireAt *timestamppb.Timestamp) *protos.HistoryEvent {
+func NewTimerFiredEvent(
+	timerID int32,
+	fireAt *timestamppb.Timestamp,
+	parentTraceContext *protos.TraceContext,
+) *protos.HistoryEvent {
 	return &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.New(time.Now()),
 		EventType: &protos.HistoryEvent_TimerFired{
-			TimerFired: &protos.TimerFiredEvent{TimerId: timerID, FireAt: fireAt},
+			TimerFired: &protos.TimerFiredEvent{
+				TimerId:            timerID,
+				FireAt:             fireAt,
+				ParentTraceContext: parentTraceContext,
+			},
 		},
 	}
 }
 
-func NewSubOrchestrationCreatedEvent(eventID int32, name string, version *wrapperspb.StringValue, rawInput *wrapperspb.StringValue, instanceID string) *protos.HistoryEvent {
+func NewSubOrchestrationCreatedEvent(
+	eventID int32,
+	name string,
+	version *wrapperspb.StringValue,
+	rawInput *wrapperspb.StringValue,
+	instanceID string,
+	parentTraceContext *protos.TraceContext,
+) *protos.HistoryEvent {
 	return &protos.HistoryEvent{
 		EventId:   eventID,
 		Timestamp: timestamppb.New(time.Now()),
 		EventType: &protos.HistoryEvent_SubOrchestrationInstanceCreated{
 			SubOrchestrationInstanceCreated: &protos.SubOrchestrationInstanceCreatedEvent{
-				Name:       name,
-				Version:    version,
-				Input:      rawInput,
-				InstanceId: instanceID,
+				Name:               name,
+				Version:            version,
+				Input:              rawInput,
+				InstanceId:         instanceID,
+				ParentTraceContext: parentTraceContext,
 			},
 		},
 	}
@@ -211,7 +237,8 @@ func NewCreateSubOrchestrationAction(
 	taskID int32,
 	name string,
 	iid string,
-	input *wrapperspb.StringValue) *protos.OrchestratorAction {
+	input *wrapperspb.StringValue,
+) *protos.OrchestratorAction {
 	return &protos.OrchestratorAction{
 		Id: taskID,
 		OrchestratorActionType: &protos.OrchestratorAction_CreateSubOrchestration{
@@ -229,7 +256,8 @@ func NewCompleteOrchestrationAction(
 	status protos.OrchestrationStatus,
 	result string,
 	carryoverEvents []*protos.HistoryEvent,
-	failureDetails *protos.TaskFailureDetails) *protos.OrchestratorAction {
+	failureDetails *protos.TaskFailureDetails,
+) *protos.OrchestratorAction {
 	return &protos.OrchestratorAction{
 		Id: taskID,
 		OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{

@@ -115,7 +115,7 @@ func MapActivity(a task.Activity) func(http.ResponseWriter, *http.Request) {
 			rawInput = wrapperspb.String(rawInputStr)
 		}
 
-		ts := helpers.NewTaskScheduledEvent(-1, name, nil, rawInput)
+		ts := helpers.NewTaskScheduledEvent(-1, name, nil, rawInput, nil)
 		e, err := executor.ExecuteActivity(context.TODO(), api.InstanceID(instanceID), ts)
 		if err != nil {
 			panic(fmt.Errorf("ERROR: Activity execution failed with an error: %w", err))

@@ -5,6 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
@@ -61,7 +66,17 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 	}
 	w.logger.Debugf("%v: got orchestration runtime state: %s", wi.InstanceID, getOrchestrationStateDescription(wi))
 
-	if w.applyWorkItem(wi) {
+	// Each orchestration instance gets its own distributed tracing span. However, the implementation of
+	// endOrchestratorSpan will "cancel" the span mark the span as "unsampled" if the orchestration isn't
+	// complete. This is part of the strategy for producing one span for the entire orchestration execution,
+	// which isn't something that's natively supported by OTel today.
+	ctx, span := w.startOrResumeOrchestratorSpan(ctx, wi)
+	defer func() {
+		// Note that the span and ctx references may be updated inside the continue-as-new loop.
+		w.endOrchestratorSpan(ctx, wi, span, false)
+	}()
+
+	if w.applyWorkItem(ctx, wi) {
 		for continueAsNewCount := 0; ; continueAsNewCount++ {
 			if continueAsNewCount > 0 {
 				w.logger.Debugf("%v: continuing-as-new with %d event(s): %s", wi.InstanceID, len(wi.State.NewEvents()), helpers.HistoryListSummary(wi.State.NewEvents()))
@@ -77,7 +92,7 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 			w.logger.Debugf("%v: orchestrator returned %d action(s): %s", wi.InstanceID, len(results.Response.Actions), helpers.ActionListSummary(results.Response.Actions))
 
 			// Apply the orchestrator outputs to the orchestration state.
-			continuedAsNew, err := wi.State.ApplyActions(results.Response.Actions)
+			continuedAsNew, err := wi.State.ApplyActions(results.Response.Actions, helpers.TraceContextFromSpan(span))
 			if err != nil {
 				return fmt.Errorf("failed to apply the execution result actions: %w", err)
 			}
@@ -92,6 +107,10 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 				if continueAsNewCount >= MaxContinueAsNewCount {
 					return fmt.Errorf("exceeded tight-loop continue-as-new limit of %d iterations", MaxContinueAsNewCount)
 				}
+
+				// We create a new trace span for every continue-as-new
+				w.endOrchestratorSpan(ctx, wi, span, true)
+				ctx, span = w.startOrResumeOrchestratorSpan(ctx, wi)
 				continue
 			}
 
@@ -117,7 +136,7 @@ func (p *orchestratorProcessor) AbandonWorkItem(ctx context.Context, wi WorkItem
 	return p.be.AbandonOrchestrationWorkItem(ctx, owi)
 }
 
-func (w *orchestratorProcessor) applyWorkItem(wi *OrchestrationWorkItem) bool {
+func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *OrchestrationWorkItem) bool {
 	// Ignore work items for orchestrations that are completed or are in a corrupted state.
 	if !wi.State.IsValid() {
 		w.logger.Warnf("%v: orchestration state is invalid; dropping work item", wi.InstanceID)
@@ -148,8 +167,15 @@ func (w *orchestratorProcessor) applyWorkItem(wi *OrchestrationWorkItem) bool {
 			added++
 		}
 
+		// Special case logic for specific event types
 		if es := e.GetExecutionStarted(); es != nil {
 			w.logger.Infof("%v: starting new '%s' instance.", wi.InstanceID, es.Name)
+		} else if timerFired := e.GetTimerFired(); timerFired != nil {
+			// Timer spans are created and completed once the TimerFired event is received.
+			// TODO: Ideally we don't emit spans for cancelled timers. Is there a way to support this?
+			if err := helpers.StartAndEndNewTimerSpan(ctx, timerFired, e.Timestamp.AsTime(), string(wi.InstanceID)); err != nil {
+				w.logger.Warnf("%v: failed to generate distributed trace span for durable timer: %v", wi.InstanceID, err)
+			}
 		}
 	}
 
@@ -191,4 +217,76 @@ func getOrchestrationStateDescription(wi *OrchestrationWorkItem) string {
 	}
 	status := helpers.ToRuntimeStatusString(wi.State.RuntimeStatus())
 	return fmt.Sprintf("name=%s, status=%s, events=%d, age=%s", name, status, len(wi.State.OldEvents()), ageStr)
+}
+
+func (w *orchestratorProcessor) startOrResumeOrchestratorSpan(ctx context.Context, wi *OrchestrationWorkItem) (context.Context, trace.Span) {
+	// Get the trace context from the ExecutionStarted history event
+	var ptc *protos.TraceContext
+	var es *protos.ExecutionStartedEvent
+	if es = wi.State.startEvent; es != nil {
+		ptc = wi.State.startEvent.ParentTraceContext
+	} else {
+		for _, e := range wi.NewEvents {
+			if es = e.GetExecutionStarted(); es != nil {
+				ptc = es.ParentTraceContext
+				break
+			}
+		}
+	}
+
+	if ptc == nil {
+		return ctx, helpers.NoopSpan()
+	}
+
+	ctx, err := helpers.ContextFromTraceContext(ctx, ptc)
+	if err != nil {
+		w.logger.Warnf("%v: failed to parse trace context: %v", wi.InstanceID, err)
+		return ctx, helpers.NoopSpan()
+	}
+
+	// start a new span from the updated go context
+	var span trace.Span
+	ctx, span = helpers.StartNewRunOrchestrationSpan(ctx, es, wi.State.getStartedTime())
+
+	// Assign or rehydrate the long-running orchestration span ID
+	if es.OrchestrationSpanID == nil {
+		// On the initial execution, assign the orchestration span ID to be the
+		// randomly generated span ID value. This will be persisted in the orchestration history
+		// and referenced on the next replay.
+		es.OrchestrationSpanID = wrapperspb.String(span.SpanContext().SpanID().String())
+	} else {
+		// On subsequent executions, replace the auto-generated span ID with the orchestration
+		// span ID. This allows us to have one long-running span that survives multiple replays
+		// and process failures.
+		if orchestratorSpanID, err := trace.SpanIDFromHex(es.OrchestrationSpanID.Value); err == nil {
+			helpers.ChangeSpanID(span, orchestratorSpanID)
+		}
+	}
+
+	return ctx, span
+}
+
+func (w *orchestratorProcessor) endOrchestratorSpan(ctx context.Context, wi *OrchestrationWorkItem, span trace.Span, continuedAsNew bool) {
+	if wi.State.IsCompleted() {
+		if fd, err := wi.State.FailureDetails(); err == nil {
+			span.SetStatus(codes.Error, fd.ErrorMessage)
+		}
+		span.SetAttributes(attribute.KeyValue{
+			Key:   "durabletask.runtime_status",
+			Value: attribute.StringValue(helpers.ToRuntimeStatusString(wi.State.RuntimeStatus())),
+		})
+	} else if continuedAsNew {
+		span.SetAttributes(attribute.KeyValue{
+			Key:   "durabletask.runtime_status",
+			Value: attribute.StringValue(helpers.ToRuntimeStatusString(protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW)),
+		})
+	} else {
+		// Cancel the span - we want to publish it only when an orchestration
+		// completes or when it continue-as-new's.
+		helpers.CancelSpan(span)
+	}
+
+	// We must always call End() on a span to ensure we don't leak resources.
+	// See https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/api.md#span-creation
+	span.End()
 }

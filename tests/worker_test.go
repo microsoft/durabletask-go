@@ -22,7 +22,8 @@ func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 	ctx := context.Background()
 	wi := &backend.OrchestrationWorkItem{
 		InstanceID: "test123",
-		NewEvents:  []*protos.HistoryEvent{helpers.NewExecutionStartedEvent(-1, "MyOrch", "test123", nil, nil)}}
+		NewEvents:  []*protos.HistoryEvent{helpers.NewExecutionStartedEvent("MyOrch", "test123", nil, nil, nil)},
+	}
 	state := &backend.OrchestrationRuntimeState{}
 	result := &backend.ExecutionResults{Response: &protos.OrchestratorResponse{}}
 
@@ -59,7 +60,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	iid := api.InstanceID("test123")
 
 	// Simulate getting an ExecutionStarted message from the orchestration queue
-	startEvent := helpers.NewExecutionStartedEvent(-1, "MyOrchestration", string(iid), nil, nil)
+	startEvent := helpers.NewExecutionStartedEvent("MyOrchestration", string(iid), nil, nil, nil)
 	wi := &backend.OrchestrationWorkItem{
 		InstanceID: iid,
 		NewEvents:  []*protos.HistoryEvent{startEvent},

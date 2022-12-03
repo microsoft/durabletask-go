@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -115,7 +116,7 @@ func (w *worker) Start(ctx context.Context) {
 				if ok, err := w.ProcessNext(ctx); ok {
 					// found a work item - reset the timer to get the next one
 					b.Reset()
-				} else if err != nil && err == ctx.Err() {
+				} else if err != nil && errors.Is(err, ctx.Err()) {
 					w.logger.Infof("%v: received cancellation signal", w.Name())
 					break loop
 				} else if err != nil {
@@ -157,7 +158,7 @@ func (w *worker) ProcessNext(ctx context.Context) (bool, error) {
 		}
 		return false, nil
 	} else if err != nil {
-		if err != ctx.Err() {
+		if !errors.Is(err, ctx.Err()) {
 			w.logger.Errorf("%v: failed to fetch work item: %v", w.Name(), err)
 		}
 		return false, err

@@ -1,0 +1,5 @@
+{
+    "go.testFlags": [
+        "-coverpkg=../api,../task,../backend/...,../internal/helpers"
+    ]
+}

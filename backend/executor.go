@@ -228,7 +228,10 @@ func (g *grpcExecutor) RaiseEvent(ctx context.Context, req *protos.RaiseEventReq
 // StartInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInstanceRequest) (*protos.CreateInstanceResponse, error) {
 	instanceID := req.InstanceId
-	e := helpers.NewExecutionStartedEvent(-1, req.Name, instanceID, req.Input, nil)
+	ctx, span := helpers.StartNewCreateOrchestrationSpan(ctx, req.Name, req.Version.Value, instanceID)
+	defer span.End()
+
+	e := helpers.NewExecutionStartedEvent(req.Name, instanceID, req.Input, nil, helpers.TraceContextFromSpan(span))
 	if err := g.backend.CreateOrchestrationInstance(ctx, e); err != nil {
 		return nil, err
 	}

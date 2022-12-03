@@ -7,24 +7,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
 	"github.com/microsoft/durabletask-go/backend/sqlite"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
-	"github.com/stretchr/testify/assert"
 )
 
 func Test_EmptyOrchestration(t *testing.T) {
+	// Registration
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("EmptyOrchestrator", func(ctx *task.OrchestrationContext) (any, error) {
 		return nil, nil
 	})
 
+	// Initialization
 	ctx := context.Background()
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
+	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "EmptyOrchestrator")
 	if assert.NoError(t, err) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
@@ -32,19 +37,30 @@ func Test_EmptyOrchestration(t *testing.T) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
 		}
 	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("EmptyOrchestrator", id),
+		assertOrchestratorExecuted("EmptyOrchestrator", id, "COMPLETED"),
+	)
 }
 
 func Test_SingleTimer(t *testing.T) {
+	// Registration
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("SingleTimer", func(ctx *task.OrchestrationContext) (any, error) {
 		err := ctx.CreateTimer(time.Duration(0)).Await(nil)
 		return nil, err
 	})
 
+	// Initialization
 	ctx := context.Background()
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
+	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "SingleTimer")
 	if assert.NoError(t, err) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
@@ -53,9 +69,18 @@ func Test_SingleTimer(t *testing.T) {
 			assert.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt)
 		}
 	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("SingleTimer", id),
+		assertTimer(id),
+		assertOrchestratorExecuted("SingleTimer", id, "COMPLETED"),
+	)
 }
 
 func Test_IsReplaying(t *testing.T) {
+	// Registration
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("IsReplayingOrch", func(ctx *task.OrchestrationContext) (any, error) {
 		values := []bool{ctx.IsReplaying}
@@ -66,10 +91,13 @@ func Test_IsReplaying(t *testing.T) {
 		return values, nil
 	})
 
+	// Initialization
 	ctx := context.Background()
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
+	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "IsReplayingOrch")
 	if assert.NoError(t, err) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
@@ -78,9 +106,19 @@ func Test_IsReplaying(t *testing.T) {
 			assert.Equal(t, `[true,true,false]`, metadata.SerializedOutput)
 		}
 	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("IsReplayingOrch", id),
+		assertTimer(id),
+		assertTimer(id),
+		assertOrchestratorExecuted("IsReplayingOrch", id, "COMPLETED"),
+	)
 }
 
 func Test_SingleActivity(t *testing.T) {
+	// Registration
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
@@ -99,10 +137,13 @@ func Test_SingleActivity(t *testing.T) {
 		return fmt.Sprintf("Hello, %s!", name), nil
 	})
 
+	// Initialization
 	ctx := context.Background()
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
+	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"))
 	if assert.NoError(t, err) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
@@ -111,9 +152,18 @@ func Test_SingleActivity(t *testing.T) {
 			assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
 		}
 	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("SingleActivity", id),
+		assertActivity("SayHello", id, 0),
+		assertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+	)
 }
 
 func Test_ActivityChain(t *testing.T) {
+	// Registration
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("ActivityChain", func(ctx *task.OrchestrationContext) (any, error) {
 		val := 0
@@ -132,10 +182,13 @@ func Test_ActivityChain(t *testing.T) {
 		return input + 1, nil
 	})
 
+	// Initialization
 	ctx := context.Background()
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
+	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ActivityChain")
 	if assert.NoError(t, err) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
@@ -144,9 +197,20 @@ func Test_ActivityChain(t *testing.T) {
 			assert.Equal(t, `10`, metadata.SerializedOutput)
 		}
 	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("ActivityChain", id),
+		assertActivity("PlusOne", id, 0), assertActivity("PlusOne", id, 1), assertActivity("PlusOne", id, 2),
+		assertActivity("PlusOne", id, 3), assertActivity("PlusOne", id, 4), assertActivity("PlusOne", id, 5),
+		assertActivity("PlusOne", id, 6), assertActivity("PlusOne", id, 7), assertActivity("PlusOne", id, 8),
+		assertActivity("PlusOne", id, 9), assertOrchestratorExecuted("ActivityChain", id, "COMPLETED"),
+	)
 }
 
 func Test_ActivityFanOut(t *testing.T) {
+	// Registration
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("ActivityFanOut", func(ctx *task.OrchestrationContext) (any, error) {
 		tasks := []task.Task{}
@@ -173,11 +237,13 @@ func Test_ActivityFanOut(t *testing.T) {
 		return fmt.Sprintf("%d", input), nil
 	})
 
+	// Initialization
 	ctx := context.Background()
-	// Enable parallelism
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r, backend.WithMaxParallelism(10))
 	defer worker.Shutdown(ctx)
 
+	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ActivityFanOut")
 	if assert.NoError(t, err) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
@@ -189,9 +255,17 @@ func Test_ActivityFanOut(t *testing.T) {
 			assert.Less(t, metadata.LastUpdatedAt.Sub(metadata.CreatedAt), 3*time.Second)
 		}
 	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("ActivityFanOut", id),
+		// TODO: Find a way to assert an unordered sequence of traces since the order of activity traces is non-deterministic.
+	)
 }
 
 func Test_ContinueAsNewOrchestration(t *testing.T) {
+	// Registration
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
 		var input int32
@@ -208,10 +282,13 @@ func Test_ContinueAsNewOrchestration(t *testing.T) {
 		return input, nil
 	})
 
+	// Initialization
 	ctx := context.Background()
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
+	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest", api.WithInput(0))
 	if assert.NoError(t, err) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
@@ -220,6 +297,23 @@ func Test_ContinueAsNewOrchestration(t *testing.T) {
 			assert.Equal(t, `10`, metadata.SerializedOutput)
 		}
 	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("ContinueAsNewTest", id),
+		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		assertOrchestratorExecuted("ContinueAsNewTest", id, "COMPLETED"),
+	)
 }
 
 func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {

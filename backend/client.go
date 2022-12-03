@@ -7,6 +7,8 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -41,8 +43,16 @@ func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrat
 	if req.InstanceId == "" {
 		req.InstanceId = uuid.NewString()
 	}
-	e := helpers.NewExecutionStartedEvent(-1, req.Name, req.InstanceId, req.Input, nil)
+
+	var span trace.Span
+	ctx, span = helpers.StartNewCreateOrchestrationSpan(ctx, req.Name, req.Version.GetValue(), req.InstanceId)
+	defer span.End()
+
+	tc := helpers.TraceContextFromSpan(span)
+	e := helpers.NewExecutionStartedEvent(req.Name, req.InstanceId, req.Input, nil, tc)
 	if err := c.be.CreateOrchestrationInstance(ctx, e); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return api.EmptyInstanceID, fmt.Errorf("failed to start orchestration: %w", err)
 	}
 	return api.InstanceID(req.InstanceId), nil
