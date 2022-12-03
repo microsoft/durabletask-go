@@ -2,6 +2,7 @@ package tests
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -16,6 +17,11 @@ import (
 type (
 	spanValidator          func(t assert.TestingT, spans []trace.ReadOnlySpan, index int)
 	spanAttributeValidator func(t assert.TestingT, span trace.ReadOnlySpan) bool
+)
+
+var (
+	initTracingOnce     sync.Once
+	sharedTraceExporter = tracetest.NewInMemoryExporter()
 )
 
 func assertSpanSequence(t assert.TestingT, spans []trace.ReadOnlySpan, spanAsserts ...spanValidator) {
@@ -163,14 +169,20 @@ func assertTimerFired() spanAttributeValidator {
 	}
 }
 
-// initTracing configures in-memory OTel tracing and returns an exporter which can be  used
+// initTracing configures in-memory OTel tracing and returns an exporter which can be used
 // to examine the exported traces. We only want to look at exported traces because we do
 // tricks to mark certain spans as non-exported (i.e. orchestration replays), and want
 // to ensure that those spans are never actually exported.
-func initTracing() (*tracetest.InMemoryExporter, *trace.TracerProvider) {
-	exporter := tracetest.NewInMemoryExporter()
-	processor := trace.NewSimpleSpanProcessor(exporter)
-	provider := trace.NewTracerProvider(trace.WithSpanProcessor(processor))
-	otel.SetTracerProvider(provider)
-	return exporter, provider
+func initTracing() *tracetest.InMemoryExporter {
+	// The global tracer provider can only be initialized once.
+	// Subsequent initializations will silently fail.
+	initTracingOnce.Do(func() {
+		processor := trace.NewSimpleSpanProcessor(sharedTraceExporter)
+		provider := trace.NewTracerProvider(trace.WithSpanProcessor(processor))
+		otel.SetTracerProvider(provider)
+	})
+
+	// Reset the shared exporter so that new tests don't see traces from previous tests.
+	sharedTraceExporter.Reset()
+	return sharedTraceExporter
 }

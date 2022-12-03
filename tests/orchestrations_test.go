@@ -25,8 +25,7 @@ func Test_EmptyOrchestration(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter, provider := initTracing()
-	defer provider.Shutdown(ctx)
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -57,8 +56,7 @@ func Test_SingleTimer(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter, provider := initTracing()
-	defer provider.Shutdown(ctx)
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -95,8 +93,7 @@ func Test_IsReplaying(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter, provider := initTracing()
-	defer provider.Shutdown(ctx)
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -142,8 +139,7 @@ func Test_SingleActivity(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter, provider := initTracing()
-	defer provider.Shutdown(ctx)
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -188,8 +184,7 @@ func Test_ActivityChain(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter, provider := initTracing()
-	defer provider.Shutdown(ctx)
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -244,8 +239,7 @@ func Test_ActivityFanOut(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter, provider := initTracing()
-	defer provider.Shutdown(ctx)
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r, backend.WithMaxParallelism(10))
 	defer worker.Shutdown(ctx)
 
@@ -290,8 +284,7 @@ func Test_ContinueAsNewOrchestration(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter, provider := initTracing()
-	defer provider.Shutdown(ctx)
+	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
