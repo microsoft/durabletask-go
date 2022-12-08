@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -40,7 +41,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 	worker.StopAndDrain()
 
 	// Successfully processing a work-item should result in a nil error
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.True(t, ok)
 }
 
@@ -51,7 +52,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_NoWorkItems(t *testing.T) {
 
 	w := backend.NewOrchestrationWorker(be, nil, logger)
 	ok, err := w.ProcessNext(ctx)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.False(t, ok)
 }
 
@@ -98,6 +99,108 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	worker.StopAndDrain()
 
 	// Successfully processing a work-item should result in a nil error
-	assert.Nil(t, err)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func Test_AbandonOnLoadStateError(t *testing.T) {
+	ctx := context.Background()
+	iid := api.InstanceID("test123")
+
+	// Simulate getting an ExecutionStarted message from the orchestration queue
+	startEvent := helpers.NewExecutionStartedEvent("MyOrchestration", string(iid), nil, nil, nil)
+	wi := &backend.OrchestrationWorkItem{
+		InstanceID: iid,
+		NewEvents:  []*protos.HistoryEvent{startEvent},
+	}
+
+	be := mocks.NewBackend(t)
+	be.EXPECT().GetOrchestrationWorkItem(anyContext).Return(wi, nil).Once()
+
+	targetError := errors.New("Kah-BOOOOOM!!!")
+	be.EXPECT().GetOrchestrationRuntimeState(anyContext, wi).Return(nil, targetError).Once()
+	be.EXPECT().AbandonOrchestrationWorkItem(anyContext, wi).Return(nil).Once()
+
+	// Set up and run the test
+	worker := backend.NewOrchestrationWorker(be, nil, logger)
+	ok, err := worker.ProcessNext(ctx)
+	worker.StopAndDrain()
+
+	// The work-item processing completed successfully (with a result of abandonment, which is normal)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func Test_AbandonOnExecutionError(t *testing.T) {
+	ctx := context.Background()
+	iid := api.InstanceID("test123")
+
+	// Simulate getting an ExecutionStarted message from the orchestration queue
+	startEvent := helpers.NewExecutionStartedEvent("MyOrchestration", string(iid), nil, nil, nil)
+	wi := &backend.OrchestrationWorkItem{
+		InstanceID: iid,
+		NewEvents:  []*protos.HistoryEvent{startEvent},
+	}
+
+	// Empty orchestration runtime state since we're starting a new execution from scratch
+	state := backend.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{})
+
+	ex := mocks.NewExecutor(t)
+	be := mocks.NewBackend(t)
+	be.EXPECT().GetOrchestrationWorkItem(anyContext).Return(wi, nil).Once()
+	be.EXPECT().GetOrchestrationRuntimeState(anyContext, wi).Return(state, nil).Once()
+
+	targetError := errors.New("Kah-BOOOOOM!!!")
+	ex.EXPECT().ExecuteOrchestrator(anyContext, iid, []*protos.HistoryEvent{}, mock.Anything).Return(nil, targetError).Once()
+	be.EXPECT().AbandonOrchestrationWorkItem(anyContext, wi).Return(nil).Once()
+
+	// Set up and run the test
+	worker := backend.NewOrchestrationWorker(be, ex, logger)
+	ok, err := worker.ProcessNext(ctx)
+	worker.StopAndDrain()
+
+	// The work-item processing completed successfully (with a result of abandonment, which is normal)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func Test_AbandonOnCompletionError(t *testing.T) {
+	ctx := context.Background()
+	iid := api.InstanceID("test123")
+
+	// Simulate getting an ExecutionStarted message from the orchestration queue
+	startEvent := helpers.NewExecutionStartedEvent("MyOrchestration", string(iid), nil, nil, nil)
+	wi := &backend.OrchestrationWorkItem{
+		InstanceID: iid,
+		NewEvents:  []*protos.HistoryEvent{startEvent},
+	}
+
+	// Empty orchestration runtime state since we're starting a new execution from scratch
+	state := backend.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{})
+	executionResult := &backend.ExecutionResults{
+		Response: &protos.OrchestratorResponse{
+			Actions: []*protos.OrchestratorAction{
+				helpers.NewCompleteOrchestrationAction(-1, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, "", nil, nil),
+			},
+		},
+	}
+
+	ex := mocks.NewExecutor(t)
+	be := mocks.NewBackend(t)
+	be.EXPECT().GetOrchestrationWorkItem(anyContext).Return(wi, nil).Once()
+	be.EXPECT().GetOrchestrationRuntimeState(anyContext, wi).Return(state, nil).Once()
+	ex.EXPECT().ExecuteOrchestrator(anyContext, iid, []*protos.HistoryEvent{}, mock.Anything).Return(executionResult, nil).Once()
+
+	targetError := errors.New("Kah-BOOOOOM!!!")
+	be.EXPECT().CompleteOrchestrationWorkItem(anyContext, wi).Return(targetError).Once()
+	be.EXPECT().AbandonOrchestrationWorkItem(anyContext, wi).Return(nil).Once()
+
+	// Set up and run the test
+	worker := backend.NewOrchestrationWorker(be, ex, logger)
+	ok, err := worker.ProcessNext(ctx)
+	worker.StopAndDrain()
+
+	// The work-item processing completed successfully (with a result of abandonment, which is normal)
+	assert.NoError(t, err)
 	assert.True(t, ok)
 }

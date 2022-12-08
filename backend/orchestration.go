@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -87,7 +88,11 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 			// Run the user orchestrator code, providing the old history and new events together.
 			results, err := w.executor.ExecuteOrchestrator(ctx, wi.InstanceID, wi.State.OldEvents(), wi.State.NewEvents())
 			if err != nil {
-				return fmt.Errorf("error executing orchestrator: %w", err)
+				if errors.Is(err, ctx.Err()) {
+					return err
+				} else {
+					return fmt.Errorf("error executing orchestrator: %w", err)
+				}
 			}
 			w.logger.Debugf("%v: orchestrator returned %d action(s): %s", wi.InstanceID, len(results.Response.Actions), helpers.ActionListSummary(results.Response.Actions))
 

@@ -239,7 +239,7 @@ All automated tests are under `./tests`. A separate test package hierarchy was c
 Run tests with the following command.
 
 ```bash
-go test ./tests -coverpkg ./api,./task,./backend/...,./internal/helpers
+go test -timeout 60s ./tests -coverpkg ./api,./task,./backend/...,./internal/helpers
 ```
 
 ## Running integration tests

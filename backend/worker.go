@@ -188,10 +188,15 @@ func (w *worker) processWorkItem(ctx context.Context, wi WorkItem) {
 	w.logger.Debugf("%v: processing work item: %s", w.Name(), wi.Description())
 
 	if err := w.processor.ProcessWorkItem(ctx, wi); err != nil {
-		w.logger.Errorf("%v: failed to process work item: %v", w.Name(), err)
+		if errors.Is(err, ctx.Err()) {
+			w.logger.Errorf("%v: abandoning work item due to cancellation", w.Name())
+		} else {
+			w.logger.Errorf("%v: failed to process work item: %v", w.Name(), err)
+		}
 		if err := w.processor.AbandonWorkItem(ctx, wi); err != nil {
 			w.logger.Errorf("%v: failed to abandon work item: %v", w.Name(), err)
 		}
+		return
 	}
 
 	if err := w.processor.CompleteWorkItem(ctx, wi); err != nil {
