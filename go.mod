@@ -8,6 +8,7 @@ require (
 	github.com/marusama/semaphore/v2 v2.5.0
 	github.com/mattn/go-sqlite3 v1.14.14
 	github.com/stretchr/testify v1.8.0
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.36.4
 	go.opentelemetry.io/otel v1.11.1
 	go.opentelemetry.io/otel/exporters/zipkin v1.11.1
 	go.opentelemetry.io/otel/sdk v1.11.1
@@ -26,7 +27,6 @@ require (
 	github.com/openzipkin/zipkin-go v0.4.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/objx v0.4.0 // indirect
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.36.4 // indirect
 	go.opentelemetry.io/otel/metric v0.33.0 // indirect
 	golang.org/x/net v0.0.0-20221004154528-8021a29435af // indirect
 	golang.org/x/sys v0.0.0-20221010170243-090e33056c14 // indirect
