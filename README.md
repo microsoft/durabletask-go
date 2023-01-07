@@ -137,6 +137,41 @@ func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 
 The full sample can be found [here](./samples/parallel.go).
 
+### External orchestration inputs (events) example
+
+Sometimes orchestrations need asynchronous input from external systems. For example, an approval workflow may require a manual approval signal from an authorized user. Or perhaps an orchestration pauses and waits for a command from an operator. The `WaitForSingleEvent` method can be used in an orchestrator function to pause execution and wait for such inputs. You an even specify a timeout value indicating how long to wait for the input before resuming execution (use `-1` to indicate infinite timeout).
+
+```go
+// ExternalEventOrchestrator is an orchestrator function that blocks for 30 seconds or
+// until a "Name" event is sent to it.
+func ExternalEventOrchestrator(ctx *task.OrchestrationContext) (any, error) {
+	var nameInput string
+	if err := ctx.WaitForSingleEvent("Name", 30*time.Second).Await(&nameInput); err != nil {
+		// Timeout expired
+		return nil, err
+	}
+
+	return fmt.Sprintf("Hello, %s!", nameInput), nil
+}
+```
+
+Sending an event to a waiting orchestration can be done using the `RaiseEvent` method of the task hub client. These events are durably buffered in the orchestration state and are consumed as soon as the target orchestration calls `WaitForSingleEvent` with a matching event name. The following code shows how to use the `RaiseEvent` method to send an event with a payload to a running orchestration. See [Managing local orchestrations](#managing-local-orchestrations) for more information on how to interact with local orchestrations in Go.
+
+```go
+id, _ := client.ScheduleNewOrchestration(ctx, ExternalEventOrchestrator)
+
+// Prompt the user for their name and send that to the orchestrator
+go func() {
+	fmt.Println("Enter your first name: ")
+	var nameInput string
+	fmt.Scanln(&nameInput)
+	
+	client.RaiseEvent(ctx, id, "Name", nameInput)
+}()
+```
+
+The full sample can be found [here](./samples/externalevents.go).
+
 ### Managing local orchestrations
 
 The following code snippet provides an example of how you can configure and run orchestrations. The `TaskRegistry` type allows you to register orchestrator and activity functions, and the `TaskHubClient` allows you to start, query, terminate, and wait for orchestrations to complete.
