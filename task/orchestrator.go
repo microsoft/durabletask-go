@@ -1,16 +1,19 @@
 package task
 
 import (
+	"container/list"
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
+
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // Orchestrator is the functional interface for orchestrator functions.
@@ -33,15 +36,20 @@ type OrchestrationContext struct {
 	pendingTasks        map[int32]*completableTask
 	continuedAsNew      bool
 	continuedAsNewInput any
+
+	bufferedExternalEvents    map[string]*list.List
+	pendingExternalEventTasks map[string]*list.List
 }
 
 // NewOrchestrationContext returns a new [OrchestrationContext] struct with the specified parameters.
 func NewOrchestrationContext(registry *TaskRegistry, id api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) *OrchestrationContext {
 	return &OrchestrationContext{
-		ID:        id,
-		registry:  registry,
-		oldEvents: oldEvents,
-		newEvents: newEvents,
+		ID:                        id,
+		registry:                  registry,
+		oldEvents:                 oldEvents,
+		newEvents:                 newEvents,
+		bufferedExternalEvents:    make(map[string]*list.List),
+		pendingExternalEventTasks: make(map[string]*list.List),
 	}
 }
 
@@ -124,6 +132,8 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 		err = ctx.onTimerCreated(e)
 	} else if tf := e.GetTimerFired(); tf != nil {
 		err = ctx.onTimerFired(tf)
+	} else if er := e.GetEventRaised(); er != nil {
+		err = ctx.onExternalEventRaised(er)
 	} else if oc := e.GetOrchestratorCompleted(); oc != nil {
 		// Nothing to do
 	} else {
@@ -163,12 +173,64 @@ func (ctx *OrchestrationContext) CallActivity(activity interface{}, input any) T
 
 // CreateTimer schedules a durable timer that expires after the specified delay.
 func (ctx *OrchestrationContext) CreateTimer(delay time.Duration) Task {
+	return ctx.createTimerInternal(delay)
+}
+
+func (ctx *OrchestrationContext) createTimerInternal(delay time.Duration) *completableTask {
 	fireAt := ctx.CurrentTimeUtc.Add(delay)
 	timerAction := helpers.NewCreateTimerAction(ctx.getNextSequenceNumber(), fireAt)
 	ctx.pendingActions[timerAction.Id] = timerAction
 
 	task := newTask(ctx)
 	ctx.pendingTasks[timerAction.Id] = task
+	return task
+}
+
+// WaitForSingleEvent creates a task that is completed only after an event named [eventName] is received by this orchestration
+// or when the specified timeout expires.
+//
+// The [timeout] parameter can be used to define a timeout for receiving the event. If the timeout expires before the
+// named event is received, the task will be completed and will return a timeout error value [ErrTaskCanceled] when
+// awaited. Otherwise, the awaited task will return the deserialized payload of the received event. A Duration value
+// of zero or less results in no timeout.
+//
+// Orchestrators can wait for the same event name multiple times, so waiting for multiple events with the same name
+// is allowed. Each event received by an orchestrator will complete just one task returned by this method.
+//
+// Note that event names are case-insensitive.
+func (ctx *OrchestrationContext) WaitForSingleEvent(eventName string, timeout time.Duration) Task {
+	task := newTask(ctx)
+	key := strings.ToUpper(eventName)
+	if eventList, ok := ctx.bufferedExternalEvents[key]; ok {
+		// An event with this name arrived already and can be consumed immediately.
+		next := eventList.Front()
+		if eventList.Len() > 1 {
+			eventList.Remove(next)
+		} else {
+			delete(ctx.bufferedExternalEvents, key)
+		}
+		rawValue := []byte(next.Value.(*protos.EventRaisedEvent).GetInput().GetValue())
+		task.complete(rawValue)
+	} else if timeout == 0 {
+		// Zero-timeout means fail immediately if the event isn't already buffered.
+		task.cancel()
+	} else {
+		// Keep a reference to this task so we can complete it when the event of this name arrives
+		var taskList *list.List
+		var ok bool
+		if taskList, ok = ctx.pendingExternalEventTasks[key]; !ok {
+			taskList = list.New()
+			ctx.pendingExternalEventTasks[key] = taskList
+		}
+		taskElement := taskList.PushBack(task)
+
+		if timeout > 0 {
+			ctx.createTimerInternal(timeout).onCompleted(func() {
+				task.cancel()
+				taskList.Remove(taskElement)
+			})
+		}
+	}
 	return task
 }
 
@@ -282,6 +344,32 @@ func (ctx *OrchestrationContext) onTimerFired(tf *protos.TimerFiredEvent) error 
 
 	// completing a task will resume the corresponding Await() call
 	task.complete(nil)
+	return nil
+}
+
+func (ctx *OrchestrationContext) onExternalEventRaised(er *protos.EventRaisedEvent) error {
+	key := strings.ToUpper(er.GetName())
+	if pendingTasks, ok := ctx.pendingExternalEventTasks[key]; ok {
+		// Complete the previously allocated task associated with this event name.
+		elem := pendingTasks.Front()
+		task := elem.Value.(*completableTask)
+		if pendingTasks.Len() > 1 {
+			pendingTasks.Remove(elem)
+		} else {
+			delete(ctx.pendingExternalEventTasks, key)
+		}
+		rawValue := []byte(er.Input.GetValue())
+		task.complete(rawValue)
+	} else {
+		// Add this event to the buffered list of events with this name.
+		var eventList *list.List
+		var ok bool
+		if eventList, ok = ctx.bufferedExternalEvents[key]; !ok {
+			eventList = list.New()
+			ctx.bufferedExternalEvents[key] = eventList
+		}
+		eventList.PushBack(er)
+	}
 	return nil
 }
 
