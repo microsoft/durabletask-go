@@ -12,16 +12,22 @@ import (
 // and commit its current execution progress to durable storage.
 var ErrTaskBlocked = errors.New("the current task is blocked")
 
+// ErrTaskCanceled is used to indicate that a task was canceled. Tasks can be canceled, for example,
+// when configured timeouts expire.
+var ErrTaskCanceled = errors.New("the task was canceled") // CONSIDER: More specific info about the task
+
 // Task is an interface for asynchronous durable tasks. A task is conceptually similar to a future.
 type Task interface {
 	Await(v any) error
 }
 
 type completableTask struct {
-	orchestrationCtx *OrchestrationContext
-	isCompleted      bool
-	rawResult        []byte
-	failureDetails   *protos.TaskFailureDetails
+	orchestrationCtx  *OrchestrationContext
+	isCompleted       bool
+	isCanceled        bool
+	rawResult         []byte
+	failureDetails    *protos.TaskFailureDetails
+	completedCallback func()
 }
 
 func newTask(ctx *OrchestrationContext) *completableTask {
@@ -33,6 +39,8 @@ func newTask(ctx *OrchestrationContext) *completableTask {
 // Await blocks the current orchestrator until the task is complete and then saves the unmarshalled
 // result of the task (if any) into [v].
 //
+// Await will return ErrTaskCanceled if the task was canceled - e.g. due to a timeout.
+//
 // Await may panic with ErrTaskBlocked as the panic value if called on a task that has not yet completed.
 // This is normal control flow behavior for orchestrator functions and doesn't actually indicate a failure
 // of any kind. However, orchestrator functions must never attempt to recover from such panics to ensure that
@@ -42,6 +50,8 @@ func (t *completableTask) Await(v any) error {
 		if t.isCompleted {
 			if t.failureDetails != nil {
 				return fmt.Errorf("task failed with an error: %v", t.failureDetails.ErrorMessage)
+			} else if t.isCanceled {
+				return ErrTaskCanceled
 			}
 			if v != nil && len(t.rawResult) > 0 {
 				if err := unmarshalData(t.rawResult, v); err != nil {
@@ -64,12 +74,28 @@ func (t *completableTask) Await(v any) error {
 	panic(ErrTaskBlocked)
 }
 
+func (t *completableTask) onCompleted(callback func()) {
+	t.completedCallback = callback
+}
+
 func (t *completableTask) complete(rawResult []byte) {
-	t.isCompleted = true
 	t.rawResult = rawResult
+	t.completeInternal()
 }
 
 func (t *completableTask) fail(fd *protos.TaskFailureDetails) {
-	t.isCompleted = true
 	t.failureDetails = fd
+	t.completeInternal()
+}
+
+func (t *completableTask) cancel() {
+	t.isCanceled = true
+	t.completeInternal()
+}
+
+func (t *completableTask) completeInternal() {
+	t.isCompleted = true
+	if t.completedCallback != nil {
+		t.completedCallback()
+	}
 }

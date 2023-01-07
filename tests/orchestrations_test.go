@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"testing"
@@ -314,6 +315,129 @@ func Test_ContinueAsNewOrchestration(t *testing.T) {
 		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
 		assertOrchestratorExecuted("ContinueAsNewTest", id, "COMPLETED"),
 	)
+}
+
+func Test_ExternalEventOrchestration(t *testing.T) {
+	const eventCount = 10
+
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ExternalEventOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+		for i := 0; i < eventCount; i++ {
+			var value int
+			ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(&value)
+			if value != i {
+				return false, errors.New("Unexpected value")
+			}
+		}
+		return true, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestration", api.WithInput(0))
+	if assert.NoError(t, err) {
+		for i := 0; i < eventCount; i++ {
+			if err := client.RaiseEvent(ctx, id, "MyEvent", i); !assert.NoError(t, err) {
+				return
+			}
+		}
+
+		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
+		if assert.NoError(t, err) {
+			assert.True(t, metadata.IsComplete())
+			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+		} else {
+			return
+		}
+	}
+
+	// Validate the exported OTel traces
+	// TODO: Validate the external event trace events, once those are implemented
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("ExternalEventOrchestration", id),
+		assertOrchestratorExecuted("ExternalEventOrchestration", id, "COMPLETED"),
+	)
+}
+
+func Test_ExternalEventTimeout(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ExternalEventOrchestrationWithTimeout", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.WaitForSingleEvent("MyEvent", 2*time.Second).Await(nil); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run two variations, one where we raise the external event and one where we don't (timeout)
+	for _, raiseEvent := range []bool{true, false} {
+		t.Run(fmt.Sprintf("RaiseEvent:%v", raiseEvent), func(t *testing.T) {
+			// Run the orchestration
+			id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestrationWithTimeout")
+			if !assert.NoError(t, err) {
+				return
+			}
+			if raiseEvent {
+				if err := client.RaiseEvent(ctx, id, "MyEvent", nil); !assert.NoError(t, err) {
+					return
+				}
+			}
+
+			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
+			if !assert.NoError(t, err) {
+				return
+			}
+
+			// Validate the exported OTel traces
+			// TODO: Validate the external event trace events, once those are implemented
+			spans := exporter.GetSpans().Snapshots()
+			if raiseEvent {
+				assert.True(t, metadata.IsComplete())
+				assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+
+				assertSpanSequence(t, spans,
+					assertOrchestratorCreated("ExternalEventOrchestrationWithTimeout", id),
+					assertOrchestratorExecuted("ExternalEventOrchestrationWithTimeout", id, "COMPLETED"),
+				)
+			} else {
+				assert.True(t, metadata.IsComplete())
+				assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+				if assert.NotNil(t, metadata.FailureDetails) {
+					// The exact message is not important - just make sure it's something clear
+					// NOTE: In a future version, we might have a specifc ErrorType contract. For now, the
+					//       caller shouldn't make any assumptions about this.
+					assert.Equal(t, "the task was canceled", metadata.FailureDetails.ErrorMessage)
+				}
+
+				assertSpanSequence(t, spans,
+					assertOrchestratorCreated("ExternalEventOrchestrationWithTimeout", id),
+					// A timer is used to implement the event timeout
+					assertTimer(id),
+					assertOrchestratorExecuted("ExternalEventOrchestrationWithTimeout", id, "FAILED"),
+				)
+			}
+		})
+		exporter.Reset()
+	}
 }
 
 func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {

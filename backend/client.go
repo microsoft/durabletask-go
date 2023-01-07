@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -22,6 +23,7 @@ type TaskHubClient interface {
 	WaitForOrchestrationStart(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
 	WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
 	TerminateOrchestration(ctx context.Context, id api.InstanceID, reason string) error
+	RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, data any) error
 }
 
 type backendClient struct {
@@ -123,6 +125,32 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 	e := helpers.NewExecutionTerminatedEvent(wrapperspb.String(reason))
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
 		return fmt.Errorf("failed to add terminate event: %w", err)
+	}
+	return nil
+}
+
+// RaiseEvent implements TaskHubClient and sends an asynchronous event notification to a waiting orchestration.
+//
+// In order to handle the event, the target orchestration instance must be waiting for an event named [eventName]
+// using the [WaitForSingleEvent] method of the orchestration context parameter. If the target orchestration instance
+// is not yet waiting for an event named [eventName], then the event will be bufferred in memory until a task
+// subscribing to that event name is created.
+//
+// Raised events for a completed or non-existent orchestration instance will be silently discarded.
+func (c *backendClient) RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, data any) error {
+	var rawValue *wrapperspb.StringValue
+	if data != nil {
+		// CONSIDER: Support alternate serialization formats
+		bytes, err := json.Marshal(data)
+		if err != nil {
+			return fmt.Errorf("failed to marshal event data: %w", err)
+		}
+		rawValue = wrapperspb.String(string(bytes))
+	}
+
+	e := helpers.NewEventRaisedEvent(eventName, rawValue)
+	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
+		return fmt.Errorf("failed to raise event: %w", err)
 	}
 	return nil
 }

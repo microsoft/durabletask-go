@@ -66,17 +66,12 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 	}
 	w.logger.Debugf("%v: got orchestration runtime state: %s", wi.InstanceID, getOrchestrationStateDescription(wi))
 
-	// Each orchestration instance gets its own distributed tracing span. However, the implementation of
-	// endOrchestratorSpan will "cancel" the span mark the span as "unsampled" if the orchestration isn't
-	// complete. This is part of the strategy for producing one span for the entire orchestration execution,
-	// which isn't something that's natively supported by OTel today.
-	ctx, span := w.startOrResumeOrchestratorSpan(ctx, wi)
-	defer func() {
-		// Note that the span and ctx references may be updated inside the continue-as-new loop.
-		w.endOrchestratorSpan(ctx, wi, span, false)
-	}()
+	if ctx, span, ok := w.applyWorkItem(ctx, wi); ok {
+		defer func() {
+			// Note that the span and ctx references may be updated inside the continue-as-new loop.
+			w.endOrchestratorSpan(ctx, wi, span, false)
+		}()
 
-	if w.applyWorkItem(ctx, wi) {
 		for continueAsNewCount := 0; ; continueAsNewCount++ {
 			if continueAsNewCount > 0 {
 				w.logger.Debugf("%v: continuing-as-new with %d event(s): %s", wi.InstanceID, len(wi.State.NewEvents()), helpers.HistoryListSummary(wi.State.NewEvents()))
@@ -136,14 +131,14 @@ func (p *orchestratorProcessor) AbandonWorkItem(ctx context.Context, wi WorkItem
 	return p.be.AbandonOrchestrationWorkItem(ctx, owi)
 }
 
-func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *OrchestrationWorkItem) bool {
+func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *OrchestrationWorkItem) (context.Context, trace.Span, bool) {
 	// Ignore work items for orchestrations that are completed or are in a corrupted state.
 	if !wi.State.IsValid() {
 		w.logger.Warnf("%v: orchestration state is invalid; dropping work item", wi.InstanceID)
-		return false
+		return nil, nil, false
 	} else if wi.State.IsCompleted() {
 		w.logger.Warnf("%v: orchestration already completed; dropping work item", wi.InstanceID)
-		return false
+		return nil, nil, false
 	} else if len(wi.NewEvents) == 0 {
 		w.logger.Warnf("%v: the work item had no events!", wi.InstanceID)
 	}
@@ -151,6 +146,12 @@ func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *Orchestra
 	// The orchestrator started event is used primarily for updating the current time as reported
 	// by the orchestration context APIs.
 	wi.State.AddEvent(helpers.NewOrchestratorStartedEvent())
+
+	// Each orchestration instance gets its own distributed tracing span. However, the implementation of
+	// endOrchestratorSpan will "cancel" the span mark the span as "unsampled" if the orchestration isn't
+	// complete. This is part of the strategy for producing one span for the entire orchestration execution,
+	// which isn't something that's natively supported by OTel today.
+	ctx, span := w.startOrResumeOrchestratorSpan(ctx, wi)
 
 	// New events from the work item are appended to the orchestration state, with duplicates automatically
 	// filtered out. If all events are filtered out, return false so that the caller knows not to execute
@@ -181,10 +182,10 @@ func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *Orchestra
 
 	if added == 0 {
 		w.logger.Warnf("%v: all new events were dropped", wi.InstanceID)
-		return false
+		return ctx, span, false
 	}
 
-	return true
+	return ctx, span, true
 }
 
 func (w *orchestratorProcessor) abortWorkItem(ctx context.Context, wi *OrchestrationWorkItem, err error, message string) {
