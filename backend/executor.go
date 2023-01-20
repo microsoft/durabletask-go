@@ -2,21 +2,23 @@ package backend
 
 import (
 	context "context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/internal/helpers"
-	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/helpers"
+	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
 var emptyCompleteTaskResponse = &protos.CompleteTaskResponse{}
@@ -44,7 +46,10 @@ type grpcExecutor struct {
 	pendingActivities    map[string]*activityExecutionResult
 	backend              Backend
 	logger               Logger
+	onWorkItemConnection func(context.Context)
 }
+
+type grpcExecutorOptions func(g *grpcExecutor)
 
 // IsDurableTaskGrpcRequest returns true if the specified gRPC method name represents an operation
 // that is compatible with the gRPC executor.
@@ -52,7 +57,16 @@ func IsDurableTaskGrpcRequest(fullMethodName string) bool {
 	return strings.Index(fullMethodName, "/TaskHubSidecarService") == 0
 }
 
-func NewGrpcExecutor(grpcServer *grpc.Server, be Backend, logger Logger) Executor {
+// WithOnGetWorkItemsConnectionCallback allows the caller to get a notification when an external process
+// connects over gRPC and invokes the GetWorkItems operation. This can be useful for doing things like
+// lazily auto-starting the task hub worker only when necessary.
+func WithOnGetWorkItemsConnectionCallback(callback func(context.Context)) grpcExecutorOptions {
+	return func(g *grpcExecutor) {
+		g.onWorkItemConnection = callback
+	}
+}
+
+func NewGrpcExecutor(grpcServer *grpc.Server, be Backend, logger Logger, opts ...grpcExecutorOptions) Executor {
 	executor := &grpcExecutor{
 		workItemQueue:        make(chan *protos.WorkItem),
 		pendingOrchestrators: make(map[api.InstanceID]*ExecutionResults),
@@ -60,6 +74,11 @@ func NewGrpcExecutor(grpcServer *grpc.Server, be Backend, logger Logger) Executo
 		backend:              be,
 		logger:               logger,
 	}
+
+	for _, opt := range opts {
+		opt(executor)
+	}
+
 	protos.RegisterTaskHubSidecarServiceServer(grpcServer, executor)
 	return executor
 }
@@ -136,17 +155,25 @@ func (grpcExecutor) Hello(ctx context.Context, empty *emptypb.Empty) (*emptypb.E
 }
 
 // GetWorkItems implements protos.TaskHubSidecarServiceServer
-func (e grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream protos.TaskHubSidecarService_GetWorkItemsServer) error {
+func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream protos.TaskHubSidecarService_GetWorkItemsServer) error {
 	if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
-		e.logger.Infof("work item stream established by user-agent: %v", md.Get("user-agent"))
+		g.logger.Infof("work item stream established by user-agent: %v", md.Get("user-agent"))
 	}
+
+	// There are some cases where the app may need to be notified when a client connects to fetch work items, like
+	// for auto-starting the worker.
+	callback := g.onWorkItemConnection
+	if callback != nil {
+		callback(stream.Context())
+	}
+
 	// The worker client invokes this method, which streams back work-items as they arrive.
 	for {
 		select {
 		case <-stream.Context().Done():
-			e.logger.Infof("work item stream closed")
+			g.logger.Infof("work item stream closed")
 			return nil
-		case wi := <-e.workItemQueue:
+		case wi := <-g.workItemQueue:
 			if err := stream.Send(wi); err != nil {
 				return err
 			}
@@ -184,12 +211,12 @@ func getActivityExecutionKey(iid string, taskID int32) string {
 
 // CreateTaskHub implements protos.TaskHubSidecarServiceServer
 func (grpcExecutor) CreateTaskHub(context.Context, *protos.CreateTaskHubRequest) (*protos.CreateTaskHubResponse, error) {
-	panic("unimplemented")
+	return nil, errors.New("unimplemented")
 }
 
 // DeleteTaskHub implements protos.TaskHubSidecarServiceServer
 func (grpcExecutor) DeleteTaskHub(context.Context, *protos.DeleteTaskHubRequest) (*protos.DeleteTaskHubResponse, error) {
-	panic("unimplemented")
+	return nil, errors.New("unimplemented")
 }
 
 // GetInstance implements protos.TaskHubSidecarServiceServer
@@ -207,12 +234,12 @@ func (g *grpcExecutor) GetInstance(ctx context.Context, req *protos.GetInstanceR
 
 // PurgeInstances implements protos.TaskHubSidecarServiceServer
 func (grpcExecutor) PurgeInstances(context.Context, *protos.PurgeInstancesRequest) (*protos.PurgeInstancesResponse, error) {
-	panic("unimplemented")
+	return nil, errors.New("unimplemented")
 }
 
 // QueryInstances implements protos.TaskHubSidecarServiceServer
 func (grpcExecutor) QueryInstances(context.Context, *protos.QueryInstancesRequest) (*protos.QueryInstancesResponse, error) {
-	panic("unimplemented")
+	return nil, errors.New("unimplemented")
 }
 
 // RaiseEvent implements protos.TaskHubSidecarServiceServer
@@ -303,7 +330,6 @@ loop:
 
 // mustEmbedUnimplementedTaskHubSidecarServiceServer implements protos.TaskHubSidecarServiceServer
 func (grpcExecutor) mustEmbedUnimplementedTaskHubSidecarServiceServer() {
-	panic("unimplemented")
 }
 
 func createGetInstanceResponse(req *protos.GetInstanceRequest, metadata *api.OrchestrationMetadata) *protos.GetInstanceResponse {
