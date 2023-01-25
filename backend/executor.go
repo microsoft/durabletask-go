@@ -23,6 +23,8 @@ import (
 
 var emptyCompleteTaskResponse = &protos.CompleteTaskResponse{}
 
+var errShuttingDown error = status.Error(codes.Canceled, "shutting down")
+
 type ExecutionResults struct {
 	Response *protos.OrchestratorResponse
 	complete chan interface{}
@@ -47,6 +49,7 @@ type grpcExecutor struct {
 	backend              Backend
 	logger               Logger
 	onWorkItemConnection func(context.Context)
+	streamShutdownChan   <-chan any
 }
 
 type grpcExecutorOptions func(g *grpcExecutor)
@@ -63,6 +66,12 @@ func IsDurableTaskGrpcRequest(fullMethodName string) bool {
 func WithOnGetWorkItemsConnectionCallback(callback func(context.Context)) grpcExecutorOptions {
 	return func(g *grpcExecutor) {
 		g.onWorkItemConnection = callback
+	}
+}
+
+func WithStreamShutdownChannel(c <-chan any) grpcExecutorOptions {
+	return func(g *grpcExecutor) {
+		g.streamShutdownChan = c
 	}
 }
 
@@ -149,6 +158,12 @@ func (executor grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Instan
 	return responseEvent, nil
 }
 
+// Shutdown implements Executor
+func (g *grpcExecutor) Shutdown(ctx context.Context) {
+	// closing the work item queue is a signal for shutdown
+	close(g.workItemQueue)
+}
+
 // Hello implements protos.TaskHubSidecarServiceServer
 func (grpcExecutor) Hello(ctx context.Context, empty *emptypb.Empty) (*emptypb.Empty, error) {
 	return empty, nil
@@ -177,6 +192,8 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 			if err := stream.Send(wi); err != nil {
 				return err
 			}
+		case <-g.streamShutdownChan:
+			return errShuttingDown
 		}
 	}
 }
