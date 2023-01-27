@@ -48,7 +48,7 @@ type grpcExecutor struct {
 	pendingActivities    map[string]*activityExecutionResult
 	backend              Backend
 	logger               Logger
-	onWorkItemConnection func(context.Context)
+	onWorkItemConnection func(context.Context) error
 	streamShutdownChan   <-chan any
 }
 
@@ -63,7 +63,7 @@ func IsDurableTaskGrpcRequest(fullMethodName string) bool {
 // WithOnGetWorkItemsConnectionCallback allows the caller to get a notification when an external process
 // connects over gRPC and invokes the GetWorkItems operation. This can be useful for doing things like
 // lazily auto-starting the task hub worker only when necessary.
-func WithOnGetWorkItemsConnectionCallback(callback func(context.Context)) grpcExecutorOptions {
+func WithOnGetWorkItemsConnectionCallback(callback func(context.Context) error) grpcExecutorOptions {
 	return func(g *grpcExecutor) {
 		g.onWorkItemConnection = callback
 	}
@@ -176,10 +176,14 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 	}
 
 	// There are some cases where the app may need to be notified when a client connects to fetch work items, like
-	// for auto-starting the worker.
+	// for auto-starting the worker. The app also has an opportunity to set itself as unavailable by returning an error.
 	callback := g.onWorkItemConnection
 	if callback != nil {
-		callback(stream.Context())
+		if err := callback(stream.Context()); err != nil {
+			message := fmt.Sprint("unable to establish work item stream at this time: ", err)
+			g.logger.Warn(message)
+			return status.Errorf(codes.Unavailable, message)
+		}
 	}
 
 	// The worker client invokes this method, which streams back work-items as they arrive.
