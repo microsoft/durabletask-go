@@ -194,6 +194,38 @@ func NewSendEventEvent(eventID int32, instanceID string, name string, rawInput *
 	}
 }
 
+func NewSuspendOrchestrationEvent(reason string) *protos.HistoryEvent {
+	var input *wrapperspb.StringValue
+	if reason != "" {
+		input = wrapperspb.String(reason)
+	}
+	return &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_ExecutionSuspended{
+			ExecutionSuspended: &protos.ExecutionSuspendedEvent{
+				Input: input,
+			},
+		},
+	}
+}
+
+func NewResumeOrchestrationEvent(reason string) *protos.HistoryEvent {
+	var input *wrapperspb.StringValue
+	if reason != "" {
+		input = wrapperspb.String(reason)
+	}
+	return &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_ExecutionResumed{
+			ExecutionResumed: &protos.ExecutionResumedEvent{
+				Input: input,
+			},
+		},
+	}
+}
+
 func NewParentInfo(taskID int32, name string, iid string) *protos.ParentInstanceInfo {
 	return &protos.ParentInstanceInfo{
 		TaskScheduledId:       taskID,

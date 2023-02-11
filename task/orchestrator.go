@@ -30,6 +30,8 @@ type OrchestrationContext struct {
 	rawInput            []byte
 	oldEvents           []*protos.HistoryEvent
 	newEvents           []*protos.HistoryEvent
+	suspendedEvents     []*protos.HistoryEvent
+	isSuspended         bool
 	historyIndex        int
 	sequenceNumber      int32
 	pendingActions      map[int32]*protos.OrchestratorAction
@@ -116,6 +118,12 @@ func (ctx *OrchestrationContext) getNextHistoryEvent() (*protos.HistoryEvent, bo
 }
 
 func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
+	// Buffer certain events if we're in a suspended state
+	if ctx.isSuspended && (e.GetExecutionResumed() == nil && e.GetExecutionTerminated() == nil) {
+		ctx.suspendedEvents = append(ctx.suspendedEvents, e)
+		return nil
+	}
+
 	var err error = nil
 	if os := e.GetOrchestratorStarted(); os != nil {
 		// OrchestratorStarted is only used to update the current orchestration time
@@ -134,6 +142,10 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 		err = ctx.onTimerFired(tf)
 	} else if er := e.GetEventRaised(); er != nil {
 		err = ctx.onExternalEventRaised(er)
+	} else if es := e.GetExecutionSuspended(); es != nil {
+		err = ctx.onExecutionSuspended(es)
+	} else if er := e.GetExecutionResumed(); er != nil {
+		err = ctx.onExecutionResumed(er)
 	} else if oc := e.GetOrchestratorCompleted(); oc != nil {
 		// Nothing to do
 	} else {
@@ -370,6 +382,22 @@ func (ctx *OrchestrationContext) onExternalEventRaised(er *protos.EventRaisedEve
 		}
 		eventList.PushBack(er)
 	}
+	return nil
+}
+
+func (ctx *OrchestrationContext) onExecutionSuspended(er *protos.ExecutionSuspendedEvent) error {
+	ctx.isSuspended = true
+	return nil
+}
+
+func (ctx *OrchestrationContext) onExecutionResumed(er *protos.ExecutionResumedEvent) error {
+	ctx.isSuspended = false
+	for _, e := range ctx.suspendedEvents {
+		if err := ctx.processEvent(e); err != nil {
+			return err
+		}
+	}
+	ctx.suspendedEvents = nil
 	return nil
 }
 

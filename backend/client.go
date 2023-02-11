@@ -24,6 +24,8 @@ type TaskHubClient interface {
 	WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
 	TerminateOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, data any) error
+	SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error
+	ResumeOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 }
 
 type backendClient struct {
@@ -151,6 +153,26 @@ func (c *backendClient) RaiseEvent(ctx context.Context, id api.InstanceID, event
 	e := helpers.NewEventRaisedEvent(eventName, rawValue)
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
 		return fmt.Errorf("failed to raise event: %w", err)
+	}
+	return nil
+}
+
+// SuspendOrchestration suspends an orchestration instance, halting processing of its events until a "resume" operation resumes it.
+//
+// Note that suspended orchestrations are still considered to be "running" even though they will not process events.
+func (c *backendClient) SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error {
+	e := helpers.NewSuspendOrchestrationEvent(reason)
+	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
+		return fmt.Errorf("failed to suspend orchestration: %w", err)
+	}
+	return nil
+}
+
+// ResumeOrchestration resumes an orchestration instance that was previously suspended.
+func (c *backendClient) ResumeOrchestration(ctx context.Context, id api.InstanceID, reason string) error {
+	e := helpers.NewResumeOrchestrationEvent(reason)
+	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
+		return fmt.Errorf("failed to resume orchestration: %w", err)
 	}
 	return nil
 }

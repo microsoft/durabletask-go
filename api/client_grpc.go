@@ -148,6 +148,32 @@ func (c *grpcClient) TerminateOrchestration(ctx context.Context, id InstanceID, 
 	return nil
 }
 
+// SuspendOrchestration suspends an orchestration instance, halting processing of its events until a "resume" operation resumes it.
+//
+// Note that suspended orchestrations are still considered to be "running" even though they will not process events.
+func (c *grpcClient) SuspendOrchestration(ctx context.Context, id InstanceID, reason string) error {
+	req := &protos.SuspendRequest{
+		InstanceId: string(id),
+		Reason:     wrapperspb.String(reason),
+	}
+	if _, err := c.client.SuspendInstance(ctx, req); err != nil {
+		return fmt.Errorf("failed to suspend orchestration: %w", err)
+	}
+	return nil
+}
+
+// ResumeOrchestration resumes an orchestration instance that was previously suspended.
+func (c *grpcClient) ResumeOrchestration(ctx context.Context, id InstanceID, reason string) error {
+	req := &protos.ResumeRequest{
+		InstanceId: string(id),
+		Reason:     wrapperspb.String(reason),
+	}
+	if _, err := c.client.ResumeInstance(ctx, req); err != nil {
+		return fmt.Errorf("failed to resume orchestration: %w", err)
+	}
+	return nil
+}
+
 func makeGetInstanceRequest(id InstanceID, opts []FetchOrchestrationMetadataOptions) *protos.GetInstanceRequest {
 	req := &protos.GetInstanceRequest{InstanceId: string(id)}
 	for _, configure := range opts {
