@@ -174,7 +174,7 @@ The full sample can be found [here](./samples/externalevents.go).
 
 ### Managing local orchestrations
 
-The following code snippet provides an example of how you can configure and run orchestrations. The `TaskRegistry` type allows you to register orchestrator and activity functions, and the `TaskHubClient` allows you to start, query, terminate, and wait for orchestrations to complete.
+The following code snippet provides an example of how you can configure and run orchestrations. The `TaskRegistry` type allows you to register orchestrator and activity functions, and the `TaskHubClient` allows you to start, query, terminate, suspend, resume, and wait for orchestrations to complete.
 
 The code snippet below demonstrates how to register and start a new instance of the `ActivitySequenceOrchestrator` orchestrator and wait for it to complete. The initialization of the client and worker are left out for brevity.
 

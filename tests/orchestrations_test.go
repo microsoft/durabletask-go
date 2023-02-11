@@ -440,6 +440,80 @@ func Test_ExternalEventTimeout(t *testing.T) {
 	}
 }
 
+func Test_SuspendResumeOrchestration(t *testing.T) {
+	const eventCount = 10
+
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("SuspendResumeOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+		for i := 0; i < eventCount; i++ {
+			var value int
+			ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(&value)
+			if value != i {
+				return false, errors.New("Unexpected value")
+			}
+		}
+		return true, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration, which will block waiting for external events
+	id, err := client.ScheduleNewOrchestration(ctx, "SuspendResumeOrchestration", api.WithInput(0))
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	// Suspend the orchestration
+	if err := client.SuspendOrchestration(ctx, id, ""); !assert.NoError(t, err) {
+		return
+	}
+
+	// Raise a bunch of events to the orchestration (they should get buffered but not consumed)
+	for i := 0; i < eventCount; i++ {
+		if err := client.RaiseEvent(ctx, id, "MyEvent", i); !assert.NoError(t, err) {
+			return
+		}
+	}
+
+	// Make sure the orchestration *doesn't* complete
+	timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if _, err := client.WaitForOrchestrationCompletion(timeoutCtx, id); !assert.ErrorIs(t, err, timeoutCtx.Err()) {
+		return
+	}
+
+	var metadata *api.OrchestrationMetadata
+	metadata, err = client.FetchOrchestrationMetadata(ctx, id)
+	if assert.NoError(t, err) {
+		assert.True(t, metadata.IsRunning())
+		assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED, metadata.RuntimeStatus)
+	}
+
+	// Resume the orchestration and wait for it to complete
+	if err := client.ResumeOrchestration(ctx, id, ""); !assert.NoError(t, err) {
+		return
+	}
+	timeoutCtx, cancel = context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	metadata, err = client.WaitForOrchestrationCompletion(timeoutCtx, id)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	// Validate the exported OTel traces
+	// TODO: Validate the external event and suspend/resume trace events, once those are implemented
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("SuspendResumeOrchestration", id),
+		assertOrchestratorExecuted("SuspendResumeOrchestration", id, "COMPLETED"),
+	)
+}
+
 func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {
 	// TODO: Switch to options pattern
 	logger := backend.DefaultLogger()

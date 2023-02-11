@@ -29,6 +29,7 @@ type OrchestrationRuntimeState struct {
 	lastUpdatedTime time.Time
 	completedTime   time.Time
 	continuedAsNew  bool
+	isSuspended     bool
 
 	CustomStatus *wrapperspb.StringValue
 }
@@ -70,6 +71,10 @@ func (s *OrchestrationRuntimeState) addEvent(e *HistoryEvent, isNew bool) error 
 		}
 		s.completedEvent = completedEvent
 		s.completedTime = e.Timestamp.AsTime()
+	} else if e.GetExecutionSuspended() != nil {
+		s.isSuspended = true
+	} else if e.GetExecutionResumed() != nil {
+		s.isSuspended = false
 	} else {
 		// TODO: Check for other possible duplicates using task IDs
 	}
@@ -225,6 +230,8 @@ func (s *OrchestrationRuntimeState) Output() (string, error) {
 func (s *OrchestrationRuntimeState) RuntimeStatus() protos.OrchestrationStatus {
 	if s.startEvent == nil {
 		return protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
+	} else if s.isSuspended {
+		return protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED
 	} else if s.completedEvent != nil {
 		return s.completedEvent.GetOrchestrationStatus()
 	}

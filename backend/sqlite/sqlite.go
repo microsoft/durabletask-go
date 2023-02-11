@@ -144,7 +144,6 @@ func (be *sqliteBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi *b
 		string(wi.InstanceID),
 		wi.LockedBy,
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to update NewEvents table: %w", err)
 	}
@@ -210,9 +209,8 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 				continue
 			}
 			isCreated = true
-			sqlSB.WriteString("[CreatedTime] = ?, [RuntimeStatus] = ?, [Input] = ?, ")
+			sqlSB.WriteString("[CreatedTime] = ?, [Input] = ?, ")
 			sqlUpdateArgs = append(sqlUpdateArgs, e.Timestamp.AsTime())
-			sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING))
 			sqlUpdateArgs = append(sqlUpdateArgs, es.Input.GetValue())
 		} else if ec := e.GetExecutionCompleted(); ec != nil {
 			if isCompleted {
@@ -220,9 +218,8 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 				continue
 			}
 			isCompleted = true
-			sqlSB.WriteString("[CompletedTime] = ?, [RuntimeStatus] = ?, [Output] = ?, [FailureDetails] = ?, ")
+			sqlSB.WriteString("[CompletedTime] = ?, [Output] = ?, [FailureDetails] = ?, ")
 			sqlUpdateArgs = append(sqlUpdateArgs, now)
-			sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(ec.OrchestrationStatus))
 			sqlUpdateArgs = append(sqlUpdateArgs, ec.Result.GetValue())
 			if ec.FailureDetails != nil {
 				bytes, err := proto.Marshal(ec.FailureDetails)
@@ -243,8 +240,8 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	}
 
 	// TODO: Support for stickiness, which would extend the LockExpiration
-	sqlSB.WriteString("[LastUpdatedTime] = ?, [LockExpiration] = NULL WHERE [InstanceID] = ? AND [LockedBy] = ?")
-	sqlUpdateArgs = append(sqlUpdateArgs, now, string(wi.InstanceID), wi.LockedBy)
+	sqlSB.WriteString("[RuntimeStatus] = ?, [LastUpdatedTime] = ?, [LockExpiration] = NULL WHERE [InstanceID] = ? AND [LockedBy] = ?")
+	sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()), now, string(wi.InstanceID), wi.LockedBy)
 
 	result, err := tx.ExecContext(ctx, sqlSB.String(), sqlUpdateArgs...)
 	if err != nil {
@@ -365,7 +362,6 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 		string(wi.InstanceID),
 		wi.LockedBy,
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to delete from NewEvents table: %w", err)
 	}
@@ -585,7 +581,6 @@ func (be *sqliteBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *b
 		"SELECT [EventPayload] FROM History WHERE [InstanceID] = ? ORDER BY [SequenceNumber] ASC",
 		string(wi.InstanceID),
 	)
-
 	if err != nil {
 		return nil, err
 	}
@@ -753,7 +748,8 @@ func (be *sqliteBackend) GetActivityWorkItem(ctx context.Context) (*backend.Acti
 		SequenceNumber: sequenceNumber,
 		InstanceID:     api.InstanceID(instanceID),
 		NewEvent:       e,
-		LockedBy:       be.workerName}
+		LockedBy:       be.workerName,
+	}
 	return wi, nil
 }
 
@@ -808,7 +804,6 @@ func (be *sqliteBackend) AbandonActivityWorkItem(ctx context.Context, wi *backen
 		wi.SequenceNumber,
 		wi.LockedBy,
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to update the NewTasks table for abandon: %w", err)
 	}
