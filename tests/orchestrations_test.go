@@ -80,6 +80,50 @@ func Test_SingleTimer(t *testing.T) {
 	)
 }
 
+func Test_ConcurrentTimers(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("TimerFanOut", func(ctx *task.OrchestrationContext) (any, error) {
+		tasks := []task.Task{}
+		for i := 0; i < 3; i++ {
+			tasks = append(tasks, ctx.CreateTimer(1*time.Second))
+		}
+		for _, t := range tasks {
+			if err := t.Await(nil); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	})
+
+	// Initialization
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "TimerFanOut")
+	if assert.NoError(t, err) {
+		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+		if assert.NoError(t, err) {
+			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+			assert.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt)
+		}
+	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("TimerFanOut", id),
+		assertTimer(id),
+		assertTimer(id),
+		assertTimer(id),
+		assertOrchestratorExecuted("TimerFanOut", id, "COMPLETED"),
+	)
+}
+
 func Test_IsReplaying(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
