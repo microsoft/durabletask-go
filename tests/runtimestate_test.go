@@ -199,32 +199,36 @@ func Test_ContinueAsNew(t *testing.T) {
 
 func Test_CreateTimer(t *testing.T) {
 	const iid = "abc"
-	const expectedTimerID int32 = 1
 	expectedFireAt := time.Now().UTC().Add(72 * time.Hour)
 
 	s := backend.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{
 		helpers.NewExecutionStartedEvent("MyOrchestration", iid, nil, nil, nil),
 	})
 
-	actions := []*protos.OrchestratorAction{
-		helpers.NewCreateTimerAction(expectedTimerID, expectedFireAt),
+	var actions []*protos.OrchestratorAction
+	timerCount := 3
+	for i := 1; i <= timerCount; i++ {
+		actions = append(actions, helpers.NewCreateTimerAction(int32(i), expectedFireAt))
 	}
 
 	continuedAsNew, err := s.ApplyActions(actions, nil)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
-		if assert.Len(t, s.NewEvents(), 1) {
-			e := s.NewEvents()[0]
-			assert.NotNil(t, e.Timestamp)
-			if timerCreated := e.GetTimerCreated(); assert.NotNil(t, timerCreated) {
-				assert.WithinDuration(t, expectedFireAt, timerCreated.FireAt.AsTime(), 0)
+		if assert.Len(t, s.NewEvents(), timerCount) {
+			for _, e := range s.NewEvents() {
+				assert.NotNil(t, e.Timestamp)
+				if timerCreated := e.GetTimerCreated(); assert.NotNil(t, timerCreated) {
+					assert.WithinDuration(t, expectedFireAt, timerCreated.FireAt.AsTime(), 0)
+				}
 			}
 		}
-		if assert.Len(t, s.PendingTimers(), 1) {
-			e := s.PendingTimers()[0]
-			assert.NotNil(t, e.Timestamp)
-			if timerFired := e.GetTimerFired(); assert.NotNil(t, timerFired) {
-				assert.WithinDuration(t, expectedFireAt, timerFired.FireAt.AsTime(), 0)
-				assert.Equal(t, expectedTimerID, timerFired.TimerId)
+		if assert.Len(t, s.PendingTimers(), timerCount) {
+			for i, e := range s.PendingTimers() {
+				assert.NotNil(t, e.Timestamp)
+				if timerFired := e.GetTimerFired(); assert.NotNil(t, timerFired) {
+					expectedTimerID := int32(i + 1)
+					assert.WithinDuration(t, expectedFireAt, timerFired.FireAt.AsTime(), 0)
+					assert.Equal(t, expectedTimerID, timerFired.TimerId)
+				}
 			}
 		}
 	}

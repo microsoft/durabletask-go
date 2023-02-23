@@ -158,7 +158,7 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 			}
 		} else if createtimer := action.GetCreateTimer(); createtimer != nil {
 			s.AddEvent(helpers.NewTimerCreatedEvent(action.Id, createtimer.FireAt))
-			s.pendingTimers = append(s.pendingTasks, helpers.NewTimerFiredEvent(action.Id, createtimer.FireAt, currentTraceContext))
+			s.pendingTimers = append(s.pendingTimers, helpers.NewTimerFiredEvent(action.Id, createtimer.FireAt, currentTraceContext))
 		} else if scheduleTask := action.GetScheduleTask(); scheduleTask != nil {
 			scheduledEvent := helpers.NewTaskScheduledEvent(
 				action.Id,
