@@ -818,6 +818,53 @@ func (be *sqliteBackend) AbandonActivityWorkItem(ctx context.Context, wi *backen
 	return nil
 }
 
+func (be *sqliteBackend) PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error {
+	if err := be.ensureDB(); err != nil {
+		return err
+	}
+
+	tx, err := be.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRowContext(ctx, "SELECT 1 FROM Instances WHERE [InstanceID] = ?", string(id))
+	if err := row.Err(); err != nil {
+		return fmt.Errorf("failed to query for instance existence: %w", err)
+	}
+
+	var unused int
+	if err := row.Scan(&unused); err == sql.ErrNoRows {
+		return api.ErrInstanceNotFound
+	} else if err != nil {
+		return fmt.Errorf("failed to scan instance existence: %w", err)
+	}
+
+	dbResult, err := tx.ExecContext(ctx, "DELETE FROM Instances WHERE [InstanceID] = ? AND [RuntimeStatus] IN ('COMPLETED', 'FAILED', 'TERMINATED')", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from the Instances table: %w", err)
+	}
+
+	rowsAffected, err := dbResult.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected in Instances delete operation: %w", err)
+	}
+	if rowsAffected == 0 {
+		return api.ErrNotCompleted
+	}
+
+	_, err = tx.ExecContext(ctx, "DELETE FROM History WHERE [InstanceID] = ?", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from History table: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
 // Start implements backend.Backend
 func (*sqliteBackend) Start(context.Context) error {
 	return nil

@@ -515,6 +515,44 @@ func (_c *Backend_GetOrchestrationWorkItem_Call) Return(_a0 *backend.Orchestrati
 	return _c
 }
 
+// PurgeOrchestrationState provides a mock function with given fields: _a0, _a1
+func (_m *Backend) PurgeOrchestrationState(_a0 context.Context, _a1 api.InstanceID) error {
+	ret := _m.Called(_a0, _a1)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID) error); ok {
+		r0 = rf(_a0, _a1)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// Backend_PurgeOrchestrationState_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PurgeOrchestrationState'
+type Backend_PurgeOrchestrationState_Call struct {
+	*mock.Call
+}
+
+// PurgeOrchestrationState is a helper method to define mock.On call
+//  - _a0 context.Context
+//  - _a1 api.InstanceID
+func (_e *Backend_Expecter) PurgeOrchestrationState(_a0 interface{}, _a1 interface{}) *Backend_PurgeOrchestrationState_Call {
+	return &Backend_PurgeOrchestrationState_Call{Call: _e.mock.On("PurgeOrchestrationState", _a0, _a1)}
+}
+
+func (_c *Backend_PurgeOrchestrationState_Call) Run(run func(_a0 context.Context, _a1 api.InstanceID)) *Backend_PurgeOrchestrationState_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(api.InstanceID))
+	})
+	return _c
+}
+
+func (_c *Backend_PurgeOrchestrationState_Call) Return(_a0 error) *Backend_PurgeOrchestrationState_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
 // Start provides a mock function with given fields: _a0
 func (_m *Backend) Start(_a0 context.Context) error {
 	ret := _m.Called(_a0)

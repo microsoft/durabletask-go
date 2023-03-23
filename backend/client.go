@@ -26,6 +26,7 @@ type TaskHubClient interface {
 	RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, data any) error
 	SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	ResumeOrchestration(ctx context.Context, id api.InstanceID, reason string) error
+	PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error
 }
 
 type backendClient struct {
@@ -173,6 +174,17 @@ func (c *backendClient) ResumeOrchestration(ctx context.Context, id api.Instance
 	e := helpers.NewResumeOrchestrationEvent(reason)
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
 		return fmt.Errorf("failed to resume orchestration: %w", err)
+	}
+	return nil
+}
+
+// PurgeOrchestrationState deletes the state of the specified orchestration instance.
+//
+// [api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
+// [api.ErrNotCompleted] is returned if the specified orchestration instance is still running.
+func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error {
+	if err := c.be.PurgeOrchestrationState(ctx, id); err != nil {
+		return fmt.Errorf("failed to purge orchestration state: %w", err)
 	}
 	return nil
 }

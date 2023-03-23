@@ -85,6 +85,12 @@ type Backend interface {
 	//
 	// This is called when an internal failure occurs during activity work-item processing.
 	AbandonActivityWorkItem(context.Context, *ActivityWorkItem) error
+
+	// PurgeOrchestrationState deletes all saved state for the specified orchestration instance.
+	//
+	// [api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
+	// [api.ErrNotCompleted] is returned if the specified orchestration instance is still running.
+	PurgeOrchestrationState(context.Context, api.InstanceID) error
 }
 
 // MarshalHistoryEvent serializes the [HistoryEvent] into a protobuf byte array.
