@@ -558,6 +558,59 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 	)
 }
 
+func Test_PurgeCompletedOrchestration(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ExternalEventOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.WaitForSingleEvent("MyEvent", 30*time.Second).Await(nil); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestration")
+	if !assert.NoError(t, err) {
+		return
+	}
+	if _, err = client.WaitForOrchestrationStart(ctx, id); !assert.NoError(t, err) {
+		return
+	}
+
+	// Try to purge the orchestration state before it completes and verify that it fails with ErrNotCompleted
+	if err = client.PurgeOrchestrationState(ctx, id); !assert.ErrorIs(t, err, api.ErrNotCompleted) {
+		return
+	}
+
+	// Raise an event to the orchestration so that it can complete
+	if err = client.RaiseEvent(ctx, id, "MyEvent", nil); !assert.NoError(t, err) {
+		return
+	}
+	if _, err = client.WaitForOrchestrationCompletion(ctx, id); !assert.NoError(t, err) {
+		return
+	}
+
+	// Try to purge the orchestration state again and verify that it succeeds
+	if err = client.PurgeOrchestrationState(ctx, id); !assert.NoError(t, err) {
+		return
+	}
+
+	// Try to fetch the orchestration metadata and verify that it fails with ErrInstanceNotFound
+	if _, err = client.FetchOrchestrationMetadata(ctx, id); !assert.ErrorIs(t, err, api.ErrInstanceNotFound) {
+		return
+	}
+
+	// Try to purge again and verify that it also fails with ErrInstanceNotFound
+	if err = client.PurgeOrchestrationState(ctx, id); !assert.ErrorIs(t, err, api.ErrInstanceNotFound) {
+		return
+	}
+}
+
 func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {
 	// TODO: Switch to options pattern
 	logger := backend.DefaultLogger()

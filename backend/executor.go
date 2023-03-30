@@ -254,8 +254,15 @@ func (g *grpcExecutor) GetInstance(ctx context.Context, req *protos.GetInstanceR
 }
 
 // PurgeInstances implements protos.TaskHubSidecarServiceServer
-func (grpcExecutor) PurgeInstances(context.Context, *protos.PurgeInstancesRequest) (*protos.PurgeInstancesResponse, error) {
-	return nil, errors.New("unimplemented")
+func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInstancesRequest) (*protos.PurgeInstancesResponse, error) {
+	if req.GetPurgeInstanceFilter() != nil {
+		return nil, errors.New("multi-instance purge is not unimplemented")
+	}
+
+	if err := g.backend.PurgeOrchestrationState(ctx, api.InstanceID(req.GetInstanceId())); err != nil {
+		return nil, err
+	}
+	return &protos.PurgeInstancesResponse{DeletedInstanceCount: 1}, nil
 }
 
 // QueryInstances implements protos.TaskHubSidecarServiceServer
@@ -276,7 +283,7 @@ func (g *grpcExecutor) RaiseEvent(ctx context.Context, req *protos.RaiseEventReq
 // StartInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInstanceRequest) (*protos.CreateInstanceResponse, error) {
 	instanceID := req.InstanceId
-	ctx, span := helpers.StartNewCreateOrchestrationSpan(ctx, req.Name, req.Version.Value, instanceID)
+	ctx, span := helpers.StartNewCreateOrchestrationSpan(ctx, req.Name, req.Version.GetValue(), instanceID)
 	defer span.End()
 
 	e := helpers.NewExecutionStartedEvent(req.Name, instanceID, req.Input, nil, helpers.TraceContextFromSpan(span))

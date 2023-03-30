@@ -174,6 +174,23 @@ func (c *grpcClient) ResumeOrchestration(ctx context.Context, id InstanceID, rea
 	return nil
 }
 
+// PurgeOrchestrationState deletes the state of the specified orchestration instance.
+//
+// [api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
+func (c *grpcClient) PurgeOrchestrationState(ctx context.Context, id InstanceID) error {
+	req := &protos.PurgeInstancesRequest{
+		Request: &protos.PurgeInstancesRequest_InstanceId{InstanceId: string(id)},
+	}
+
+	res, err := c.client.PurgeInstances(ctx, req)
+	if err != nil {
+		return fmt.Errorf("failed to purge orchestration state: %w", err)
+	} else if res.GetDeletedInstanceCount() == 0 {
+		return ErrInstanceNotFound
+	}
+	return nil
+}
+
 func makeGetInstanceRequest(id InstanceID, opts []FetchOrchestrationMetadataOptions) *protos.GetInstanceRequest {
 	req := &protos.GetInstanceRequest{InstanceId: string(id)}
 	for _, configure := range opts {

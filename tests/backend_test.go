@@ -359,6 +359,60 @@ func Test_GetNonExistingMetadata(t *testing.T) {
 	}
 }
 
+func Test_PurgeOrchestrationState(t *testing.T) {
+	for i, be := range backends {
+		initTest(t, be, i, true)
+
+		expectedResult := "done!"
+
+		// Produce an ExecutionCompleted event with a particular output
+		getOrchestratorActions := func() []*protos.OrchestratorAction {
+			return []*protos.OrchestratorAction{{
+				OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
+					CompleteOrchestration: &protos.CompleteOrchestrationAction{
+						OrchestrationStatus: protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
+						Result:              wrapperspb.String(expectedResult),
+					},
+				},
+			}}
+		}
+
+		// Make sure the orchestration actually completed and get the instance ID
+		var instanceID api.InstanceID
+		validateMetadata := func(metadata *api.OrchestrationMetadata) {
+			instanceID = metadata.InstanceID
+			assert.True(t, metadata.IsComplete())
+			assert.False(t, metadata.IsRunning())
+		}
+
+		// Execute the test, which calls the above callbacks
+		workItemProcessingTestLogic(t, be, getOrchestratorActions, validateMetadata)
+
+		// Purge the workflow state
+		if err := be.PurgeOrchestrationState(ctx, instanceID); !assert.NoError(t, err) {
+			return
+		}
+
+		// The metadata should be gone
+		if _, err := be.GetOrchestrationMetadata(ctx, instanceID); !assert.ErrorIs(t, err, api.ErrInstanceNotFound) {
+			return
+		}
+
+		wi := &backend.OrchestrationWorkItem{InstanceID: instanceID}
+		state, err := be.GetOrchestrationRuntimeState(ctx, wi)
+		assert.NoError(t, err)
+
+		// The state should be empty
+		assert.Equal(t, 0, len(state.NewEvents()))
+		assert.Equal(t, 0, len(state.OldEvents()))
+
+		// Attempting to purge again should fail with api.ErrInstanceNotFound
+		if err := be.PurgeOrchestrationState(ctx, instanceID); !assert.ErrorIs(t, err, api.ErrInstanceNotFound) {
+			return
+		}
+	}
+}
+
 func initTest(t *testing.T, be backend.Backend, testIteration int, createTaskHub bool) {
 	t.Logf("(%d) Testing %s...", testIteration, reflect.TypeOf(be).String())
 	err := be.DeleteTaskHub(ctx)
