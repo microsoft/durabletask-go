@@ -24,6 +24,9 @@ type NewOrchestrationOptions func(*protos.CreateInstanceRequest)
 // GetOrchestrationMetadataOptions is a set of options for fetching orchestration metadata.
 type FetchOrchestrationMetadataOptions func(*protos.GetInstanceRequest)
 
+// RaiseEventOptions is a set of options for raising an orchestration event.
+type RaiseEventOptions func(*protos.RaiseEventRequest)
+
 // WithInstanceID configures an explicit orchestration instance ID. If not specified,
 // a random UUID value will be used for the orchestration instance ID.
 func WithInstanceID(id InstanceID) NewOrchestrationOptions {
@@ -42,6 +45,13 @@ func WithInput(input any) NewOrchestrationOptions {
 	}
 }
 
+// WithRawInput configures an input for the orchestration. The specified input must be a string.
+func WithRawInput(rawInput string) NewOrchestrationOptions {
+	return func(req *protos.CreateInstanceRequest) {
+		req.Input = wrapperspb.String(rawInput)
+	}
+}
+
 // WithStartTime configures a start time at which the orchestration should start running.
 // Note that the actual start time could be later than the specified start time if the
 // task hub is under load or if the app is not running at the specified start time.
@@ -55,6 +65,21 @@ func WithStartTime(startTime time.Time) NewOrchestrationOptions {
 func WithFetchPayloads(fetchPayloads bool) FetchOrchestrationMetadataOptions {
 	return func(req *protos.GetInstanceRequest) {
 		req.GetInputsAndOutputs = fetchPayloads
+	}
+}
+
+// WithJsonSerializableEventData configures an event payload that can be serialized to JSON.
+func WithJsonSerializableEventData(data any) RaiseEventOptions {
+	return func(req *protos.RaiseEventRequest) {
+		bytes, _ := json.Marshal(data)
+		req.Input = wrapperspb.String(string(bytes))
+	}
+}
+
+// WithRawEventData configures an event payload that is a raw, unprocessed string (e.g. JSON data).
+func WithRawEventData(data string) RaiseEventOptions {
+	return func(req *protos.RaiseEventRequest) {
+		req.Input = wrapperspb.String(data)
 	}
 }
 

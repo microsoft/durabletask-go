@@ -387,7 +387,8 @@ func Test_ExternalEventOrchestration(t *testing.T) {
 	id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestration", api.WithInput(0))
 	if assert.NoError(t, err) {
 		for i := 0; i < eventCount; i++ {
-			if err := client.RaiseEvent(ctx, id, "MyEvent", i); !assert.NoError(t, err) {
+			opts := api.WithJsonSerializableEventData(i)
+			if err := client.RaiseEvent(ctx, id, "MyEvent", opts); !assert.NoError(t, err) {
 				return
 			}
 		}
@@ -438,7 +439,7 @@ func Test_ExternalEventTimeout(t *testing.T) {
 				return
 			}
 			if raiseEvent {
-				if err := client.RaiseEvent(ctx, id, "MyEvent", nil); !assert.NoError(t, err) {
+				if err := client.RaiseEvent(ctx, id, "MyEvent"); !assert.NoError(t, err) {
 					return
 				}
 			}
@@ -519,7 +520,8 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 
 	// Raise a bunch of events to the orchestration (they should get buffered but not consumed)
 	for i := 0; i < eventCount; i++ {
-		if err := client.RaiseEvent(ctx, id, "MyEvent", i); !assert.NoError(t, err) {
+		opts := api.WithJsonSerializableEventData(i)
+		if err := client.RaiseEvent(ctx, id, "MyEvent", opts); !assert.NoError(t, err) {
 			return
 		}
 	}
@@ -588,7 +590,7 @@ func Test_PurgeCompletedOrchestration(t *testing.T) {
 	}
 
 	// Raise an event to the orchestration so that it can complete
-	if err = client.RaiseEvent(ctx, id, "MyEvent", nil); !assert.NoError(t, err) {
+	if err = client.RaiseEvent(ctx, id, "MyEvent"); !assert.NoError(t, err) {
 		return
 	}
 	if _, err = client.WaitForOrchestrationCompletion(ctx, id); !assert.NoError(t, err) {

@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -23,7 +22,7 @@ type TaskHubClient interface {
 	WaitForOrchestrationStart(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
 	WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
 	TerminateOrchestration(ctx context.Context, id api.InstanceID, reason string) error
-	RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, data any) error
+	RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, opts ...api.RaiseEventOptions) error
 	SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	ResumeOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error
@@ -140,15 +139,15 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 // subscribing to that event name is created.
 //
 // Raised events for a completed or non-existent orchestration instance will be silently discarded.
-func (c *backendClient) RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, data any) error {
+func (c *backendClient) RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, opts ...api.RaiseEventOptions) error {
+	req := &protos.RaiseEventRequest{InstanceId: string(id), Name: eventName}
+	for _, configure := range opts {
+		configure(req)
+	}
+
 	var rawValue *wrapperspb.StringValue
-	if data != nil {
-		// CONSIDER: Support alternate serialization formats
-		bytes, err := json.Marshal(data)
-		if err != nil {
-			return fmt.Errorf("failed to marshal event data: %w", err)
-		}
-		rawValue = wrapperspb.String(string(bytes))
+	if req.Input != nil {
+		rawValue = wrapperspb.String(string(req.Input.Value))
 	}
 
 	e := helpers.NewEventRaisedEvent(eventName, rawValue)
