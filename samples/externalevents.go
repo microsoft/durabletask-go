@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/task"
 )
 
@@ -31,7 +32,7 @@ func RunExternalEventsSample() {
 		fmt.Println("Enter your first name: ")
 		var nameInput string
 		fmt.Scanln(&nameInput)
-		if err = client.RaiseEvent(ctx, id, "Name", nameInput); err != nil {
+		if err = client.RaiseEvent(ctx, id, "Name", api.WithJsonSerializableEventData(nameInput)); err != nil {
 			panic(err)
 		}
 	}()

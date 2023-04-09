@@ -166,7 +166,8 @@ go func() {
 	var nameInput string
 	fmt.Scanln(&nameInput)
 	
-	client.RaiseEvent(ctx, id, "Name", nameInput)
+	opts := api.WithJsonSerializableEventData(nameInput)
+	client.RaiseEvent(ctx, id, "Name", opts)
 }()
 ```
 
