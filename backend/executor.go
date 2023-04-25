@@ -304,6 +304,26 @@ func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.Termin
 	return &protos.TerminateResponse{}, nil
 }
 
+// SuspendInstance implements protos.TaskHubSidecarServiceServer
+func (g *grpcExecutor) SuspendInstance(ctx context.Context, req *protos.SuspendRequest) (*protos.SuspendResponse, error) {
+	e := helpers.NewSuspendOrchestrationEvent(req.Reason.GetValue())
+	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
+		return nil, err
+	}
+
+	return &protos.SuspendResponse{}, nil
+}
+
+// ResumeInstance implements protos.TaskHubSidecarServiceServer
+func (g *grpcExecutor) ResumeInstance(ctx context.Context, req *protos.ResumeRequest) (*protos.ResumeResponse, error) {
+	e := helpers.NewResumeOrchestrationEvent(req.Reason.GetValue())
+	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
+		return nil, err
+	}
+
+	return &protos.ResumeResponse{}, nil
+}
+
 // WaitForInstanceCompletion implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) WaitForInstanceCompletion(ctx context.Context, req *protos.GetInstanceRequest) (*protos.GetInstanceResponse, error) {
 	return g.waitForInstance(ctx, req, func(m *api.OrchestrationMetadata) bool {

@@ -170,6 +170,11 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 			s.AddEvent(scheduledEvent)
 			s.pendingTasks = append(s.pendingTasks, scheduledEvent)
 		} else if createSO := action.GetCreateSubOrchestration(); createSO != nil {
+			// Autogenerate an instance ID for the sub-orchestration if none is provided, using a
+			// deterministic algorithm based on the parent instance ID to help enable de-duplication.
+			if createSO.InstanceId == "" {
+				createSO.InstanceId = fmt.Sprintf("%s:%04x", s.instanceID, action.Id)
+			}
 			s.AddEvent(helpers.NewSubOrchestrationCreatedEvent(
 				action.Id,
 				createSO.Name,

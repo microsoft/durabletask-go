@@ -102,28 +102,31 @@ func (w *worker) Start(ctx context.Context) {
 		}
 		b.Reset()
 
-		ticker := backoff.NewTicker(&b)
-		defer ticker.Stop()
-
-		w.waiting = false
 	loop:
-		for range ticker.C {
-			select {
-			case <-ctx.Done():
-				w.logger.Infof("%v: received cancellation signal", w.Name())
-				break loop
-			default:
-				if ok, err := w.ProcessNext(ctx); ok {
-					// found a work item - reset the timer to get the next one
-					b.Reset()
-				} else if err != nil && errors.Is(err, ctx.Err()) {
+		for {
+			ticker := backoff.NewTicker(&b)
+			w.waiting = false
+		ticker:
+			for range ticker.C {
+				select {
+				case <-ctx.Done():
 					w.logger.Infof("%v: received cancellation signal", w.Name())
+					ticker.Stop()
 					break loop
-				} else if err != nil {
-					// log the error and inject some extra sleep to avoid tight failure loops
-					w.logger.Errorf("unexpected worker error: %v. Adding 5 extra seconds of backoff.", err)
-					// TODO: Make this a cancellable sleep
-					time.Sleep(5 * time.Second)
+				default:
+					if ok, err := w.ProcessNext(ctx); ok {
+						// found a work item - reset the ticker to check for the next one right away
+						break ticker
+					} else if err != nil && errors.Is(err, ctx.Err()) {
+						w.logger.Infof("%v: received cancellation signal", w.Name())
+						ticker.Stop()
+						break loop
+					} else if err != nil {
+						// log the error and inject some extra sleep to avoid tight failure loops
+						w.logger.Errorf("unexpected worker error: %v. Adding 5 extra seconds of backoff.", err)
+						// TODO: Make this a cancellable sleep
+						time.Sleep(5 * time.Second)
+					}
 				}
 			}
 		}

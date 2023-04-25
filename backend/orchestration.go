@@ -170,7 +170,7 @@ func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *Orchestra
 
 		// Special case logic for specific event types
 		if es := e.GetExecutionStarted(); es != nil {
-			w.logger.Infof("%v: starting new '%s' instance.", wi.InstanceID, es.Name)
+			w.logger.Infof("%v: starting new '%s' instance with ID = '%s'.", wi.InstanceID, es.Name, es.OrchestrationInstance.InstanceId)
 		} else if timerFired := e.GetTimerFired(); timerFired != nil {
 			// Timer spans are created and completed once the TimerFired event is received.
 			// TODO: Ideally we don't emit spans for cancelled timers. Is there a way to support this?
