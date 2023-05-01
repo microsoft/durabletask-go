@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
@@ -309,7 +310,7 @@ func Test_ActivityFanOut(t *testing.T) {
 	)
 }
 
-func Test_ContinueAsNewOrchestration(t *testing.T) {
+func Test_ContinueAsNew(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
@@ -359,6 +360,43 @@ func Test_ContinueAsNewOrchestration(t *testing.T) {
 		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
 		assertOrchestratorExecuted("ContinueAsNewTest", id, "COMPLETED"),
 	)
+}
+
+func Test_ContinueAsNew_Events(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
+		var input int32
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var complete bool
+		if err := ctx.WaitForSingleEvent("MyEvent", -1).Await(&complete); err != nil {
+			return nil, err
+		}
+		if complete {
+			return input, nil
+		}
+		ctx.ContinueAsNew(input+1, task.WithKeepUnprocessedEvents())
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest", api.WithInput(0))
+	require.NoError(t, err)
+	for i := 0; i < 10; i++ {
+		require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithJsonSerializableEventData(false)))
+	}
+	require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithJsonSerializableEventData(true)))
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	assert.Equal(t, `10`, metadata.SerializedOutput)
 }
 
 func Test_ExternalEventOrchestration(t *testing.T) {
