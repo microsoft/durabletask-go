@@ -96,8 +96,6 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 			// When continuing-as-new, we re-execute the orchestrator from the beginning with a truncated state in a tight loop
 			// until the orchestrator performs some non-continue-as-new action.
 			if continuedAsNew {
-				w.logger.Debugf("%v: continued-as-new with %d new event(s).", wi.InstanceID, len(wi.State.NewEvents()))
-
 				const MaxContinueAsNewCount = 20
 				if continueAsNewCount >= MaxContinueAsNewCount {
 					return fmt.Errorf("exceeded tight-loop continue-as-new limit of %d iterations", MaxContinueAsNewCount)

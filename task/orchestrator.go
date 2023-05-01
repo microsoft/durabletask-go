@@ -39,8 +39,20 @@ type OrchestrationContext struct {
 	continuedAsNew      bool
 	continuedAsNewInput any
 
-	bufferedExternalEvents    map[string]*list.List
-	pendingExternalEventTasks map[string]*list.List
+	bufferedExternalEvents     map[string]*list.List
+	pendingExternalEventTasks  map[string]*list.List
+	saveBufferedExternalEvents bool
+}
+
+// ContinueAsNewOption is a functional option type for the ContinueAsNew orchestrator method.
+type ContinueAsNewOption func(*OrchestrationContext)
+
+// WithKeepUnprocessedEvents returns a ContinueAsNewOptions struct that instructs the
+// runtime to carry forward any unprocessed external events to the new instance.
+func WithKeepUnprocessedEvents() ContinueAsNewOption {
+	return func(ctx *OrchestrationContext) {
+		ctx.saveBufferedExternalEvents = true
+	}
 }
 
 // NewOrchestrationContext returns a new [OrchestrationContext] struct with the specified parameters.
@@ -141,7 +153,7 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 	} else if tf := e.GetTimerFired(); tf != nil {
 		err = ctx.onTimerFired(tf)
 	} else if er := e.GetEventRaised(); er != nil {
-		err = ctx.onExternalEventRaised(er)
+		err = ctx.onExternalEventRaised(e)
 	} else if es := e.GetExecutionSuspended(); es != nil {
 		err = ctx.onExecutionSuspended(es)
 	} else if er := e.GetExecutionResumed(); er != nil {
@@ -204,7 +216,8 @@ func (ctx *OrchestrationContext) createTimerInternal(delay time.Duration) *compl
 // The [timeout] parameter can be used to define a timeout for receiving the event. If the timeout expires before the
 // named event is received, the task will be completed and will return a timeout error value [ErrTaskCanceled] when
 // awaited. Otherwise, the awaited task will return the deserialized payload of the received event. A Duration value
-// of zero or less results in no timeout.
+// of zero returns a canceled task if the event isn't already available in the history. Use a negative Duration to
+// wait indefinitely for the event to be received.
 //
 // Orchestrators can wait for the same event name multiple times, so waiting for multiple events with the same name
 // is allowed. Each event received by an orchestrator will complete just one task returned by this method.
@@ -221,7 +234,7 @@ func (ctx *OrchestrationContext) WaitForSingleEvent(eventName string, timeout ti
 		} else {
 			delete(ctx.bufferedExternalEvents, key)
 		}
-		rawValue := []byte(next.Value.(*protos.EventRaisedEvent).GetInput().GetValue())
+		rawValue := []byte(next.Value.(*protos.HistoryEvent).GetEventRaised().GetInput().GetValue())
 		task.complete(rawValue)
 	} else if timeout == 0 {
 		// Zero-timeout means fail immediately if the event isn't already buffered.
@@ -246,9 +259,12 @@ func (ctx *OrchestrationContext) WaitForSingleEvent(eventName string, timeout ti
 	return task
 }
 
-func (ctx *OrchestrationContext) ContinueAsNew(newInput any) {
+func (ctx *OrchestrationContext) ContinueAsNew(newInput any, options ...ContinueAsNewOption) {
 	ctx.continuedAsNew = true
 	ctx.continuedAsNewInput = newInput
+	for _, option := range options {
+		option(ctx)
+	}
 }
 
 func (ctx *OrchestrationContext) onExecutionStarted(es *protos.ExecutionStartedEvent) error {
@@ -359,7 +375,8 @@ func (ctx *OrchestrationContext) onTimerFired(tf *protos.TimerFiredEvent) error 
 	return nil
 }
 
-func (ctx *OrchestrationContext) onExternalEventRaised(er *protos.EventRaisedEvent) error {
+func (ctx *OrchestrationContext) onExternalEventRaised(e *protos.HistoryEvent) error {
+	er := e.GetEventRaised()
 	key := strings.ToUpper(er.GetName())
 	if pendingTasks, ok := ctx.pendingExternalEventTasks[key]; ok {
 		// Complete the previously allocated task associated with this event name.
@@ -380,7 +397,7 @@ func (ctx *OrchestrationContext) onExternalEventRaised(er *protos.EventRaisedEve
 			eventList = list.New()
 			ctx.bufferedExternalEvents[key] = eventList
 		}
-		eventList.PushBack(er)
+		eventList.PushBack(e)
 	}
 	return nil
 }
@@ -449,7 +466,7 @@ func (ctx *OrchestrationContext) setCompleteInternal(
 		sequenceNumber,
 		status,
 		rawResult,
-		nil, // carryoverEvents
+		nil, // carryoverEvents is assigned later
 		failureDetails,
 	)
 	ctx.pendingActions[sequenceNumber] = completedAction
@@ -466,6 +483,16 @@ func (ctx *OrchestrationContext) actions() []*protos.OrchestratorAction {
 	var actions []*protos.OrchestratorAction
 	for _, a := range ctx.pendingActions {
 		actions = append(actions, a)
+		if ctx.continuedAsNew && ctx.saveBufferedExternalEvents {
+			if co := a.GetCompleteOrchestration(); co != nil {
+				for _, eventList := range ctx.bufferedExternalEvents {
+					for item := eventList.Front(); item != nil; item = item.Next() {
+						e := item.Value.(*protos.HistoryEvent)
+						co.CarryoverEvents = append(co.CarryoverEvents, e)
+					}
+				}
+			}
+		}
 	}
 	return actions
 }

@@ -146,7 +146,7 @@ func Test_CompletedSubOrchestration(t *testing.T) {
 	}
 }
 
-func Test_ContinueAsNew(t *testing.T) {
+func Test_RuntimeState_ContinueAsNew(t *testing.T) {
 	iid := "abc"
 	expectedName := "MyOrchestration"
 	continueAsNewInput := "\"done!\""
