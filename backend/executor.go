@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -44,8 +45,8 @@ type Executor interface {
 type grpcExecutor struct {
 	protos.UnimplementedTaskHubSidecarServiceServer
 	workItemQueue        chan *protos.WorkItem
-	pendingOrchestrators map[api.InstanceID]*ExecutionResults
-	pendingActivities    map[string]*activityExecutionResult
+	pendingOrchestrators sync.Map // map[api.InstanceID]*ExecutionResults
+	pendingActivities    sync.Map // map[string]*activityExecutionResult
 	backend              Backend
 	logger               Logger
 	onWorkItemConnection func(context.Context) error
@@ -77,11 +78,9 @@ func WithStreamShutdownChannel(c <-chan any) grpcExecutorOptions {
 
 func NewGrpcExecutor(grpcServer *grpc.Server, be Backend, logger Logger, opts ...grpcExecutorOptions) Executor {
 	executor := &grpcExecutor{
-		workItemQueue:        make(chan *protos.WorkItem),
-		pendingOrchestrators: make(map[api.InstanceID]*ExecutionResults),
-		pendingActivities:    make(map[string]*activityExecutionResult),
-		backend:              be,
-		logger:               logger,
+		workItemQueue: make(chan *protos.WorkItem),
+		backend:       be,
+		logger:        logger,
 	}
 
 	for _, opt := range opts {
@@ -95,8 +94,8 @@ func NewGrpcExecutor(grpcServer *grpc.Server, be Backend, logger Logger, opts ..
 // ExecuteOrchestrator implements Executor
 func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*ExecutionResults, error) {
 	result := &ExecutionResults{complete: make(chan interface{})}
-	executor.pendingOrchestrators[iid] = result
-	defer delete(executor.pendingOrchestrators, iid)
+	executor.pendingOrchestrators.Store(iid, result)
+	defer executor.pendingOrchestrators.Delete(iid)
 
 	// Queue up the orchestration execution work-item for the connected worker to process
 	executor.workItemQueue <- &protos.WorkItem{
@@ -125,8 +124,8 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 func (executor grpcExecutor) ExecuteActivity(ctx context.Context, iid api.InstanceID, e *protos.HistoryEvent) (*protos.HistoryEvent, error) {
 	key := getActivityExecutionKey(string(iid), e.EventId)
 	result := &activityExecutionResult{complete: make(chan interface{})}
-	executor.pendingActivities[key] = result
-	defer delete(executor.pendingActivities, key)
+	executor.pendingActivities.Store(key, result)
+	defer executor.pendingActivities.Delete(key)
 
 	task := e.GetTaskScheduled()
 	executor.workItemQueue <- &protos.WorkItem{
@@ -205,7 +204,8 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 // CompleteOrchestratorTask implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) CompleteOrchestratorTask(ctx context.Context, res *protos.OrchestratorResponse) (*protos.CompleteTaskResponse, error) {
 	iid := api.InstanceID(res.InstanceId)
-	if pending, ok := g.pendingOrchestrators[iid]; ok {
+	if p, ok := g.pendingOrchestrators.Load(iid); ok {
+		pending := p.(*ExecutionResults)
 		pending.Response = res
 		pending.complete <- true
 		return emptyCompleteTaskResponse, nil
@@ -217,7 +217,8 @@ func (g *grpcExecutor) CompleteOrchestratorTask(ctx context.Context, res *protos
 // CompleteActivityTask implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) CompleteActivityTask(ctx context.Context, res *protos.ActivityResponse) (*protos.CompleteTaskResponse, error) {
 	key := getActivityExecutionKey(res.InstanceId, res.TaskId)
-	if pending, ok := g.pendingActivities[key]; ok {
+	if p, ok := g.pendingActivities.Load(key); ok {
+		pending := p.(*activityExecutionResult)
 		pending.response = res
 		pending.complete <- true
 		return emptyCompleteTaskResponse, nil
