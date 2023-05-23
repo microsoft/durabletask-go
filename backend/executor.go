@@ -45,8 +45,8 @@ type Executor interface {
 type grpcExecutor struct {
 	protos.UnimplementedTaskHubSidecarServiceServer
 	workItemQueue        chan *protos.WorkItem
-	pendingOrchestrators sync.Map // map[api.InstanceID]*ExecutionResults
-	pendingActivities    sync.Map // map[string]*activityExecutionResult
+	pendingOrchestrators *sync.Map // map[api.InstanceID]*ExecutionResults
+	pendingActivities    *sync.Map // map[string]*activityExecutionResult
 	backend              Backend
 	logger               Logger
 	onWorkItemConnection func(context.Context) error
@@ -78,9 +78,11 @@ func WithStreamShutdownChannel(c <-chan any) grpcExecutorOptions {
 
 func NewGrpcExecutor(grpcServer *grpc.Server, be Backend, logger Logger, opts ...grpcExecutorOptions) Executor {
 	executor := &grpcExecutor{
-		workItemQueue: make(chan *protos.WorkItem),
-		backend:       be,
-		logger:        logger,
+		workItemQueue:        make(chan *protos.WorkItem),
+		backend:              be,
+		logger:               logger,
+		pendingOrchestrators: &sync.Map{},
+		pendingActivities:    &sync.Map{},
 	}
 
 	for _, opt := range opts {
