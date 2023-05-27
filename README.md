@@ -62,6 +62,7 @@ The Durable Task Framework for Go currently supports writing orchestrations in t
 | - | - | - | - |
 | .NET | [![NuGet](https://img.shields.io/nuget/v/Microsoft.DurableTask.Client.svg?style=flat)](https://www.nuget.org/packages/Microsoft.DurableTask.Client/) | [GitHub](https://github.com/microsoft/durabletask-dotnet) | [Samples](https://github.com/microsoft/durabletask-dotnet/tree/main/samples) |
 | Java | [![Maven Central](https://img.shields.io/maven-central/v/com.microsoft/durabletask-client?label=durabletask-client)](https://search.maven.org/artifact/com.microsoft/durabletask-client) | [GitHub](https://github.com/microsoft/durabletask-java) | [Samples](https://github.com/microsoft/durabletask-java/tree/main/samples/src/main/java/io/durabletask/samples) |
+| Python | [![PyPI version](https://badge.fury.io/py/durabletask.svg)](https://badge.fury.io/py/durabletask) | [GitHub](https://github.com/microsoft/durabletask-python) | [Samples](https://github.com/microsoft/durabletask-python/tree/main/examples) |
 
 More language SDKs are planned to be added in the future. In particular, SDKs for Python and JavaScript/TypeScript. Anyone can theoretically create an SDK using a language that supports gRPC. However, there is not yet a guide for how to do this, so developers would need to reference existing SDK code as a reference. Starting with the Java implementation is recommended. The gRPC API is defined [here](https://github.com/microsoft/durabletask-protobuf).
 
