@@ -105,6 +105,8 @@ func (w *worker) Start(ctx context.Context) {
 	loop:
 		for {
 			ticker := backoff.NewTicker(&b)
+			defer ticker.Stop()
+
 			w.waiting = false
 		ticker:
 			for range ticker.C {
@@ -116,6 +118,7 @@ func (w *worker) Start(ctx context.Context) {
 				default:
 					if ok, err := w.ProcessNext(ctx); ok {
 						// found a work item - reset the ticker to check for the next one right away
+						ticker.Stop()
 						break ticker
 					} else if err != nil && errors.Is(err, ctx.Err()) {
 						w.logger.Infof("%v: received cancellation signal", w.Name())
@@ -181,6 +184,7 @@ func (w *worker) StopAndDrain() {
 	}
 
 	// Wait for outstanding work-items to finish processing.
+	// TODO: Need to find a way to cancel this if it takes too long for some reason.
 	w.pending.Wait()
 }
 

@@ -45,8 +45,8 @@ type Executor interface {
 type grpcExecutor struct {
 	protos.UnimplementedTaskHubSidecarServiceServer
 	workItemQueue        chan *protos.WorkItem
-	pendingOrchestrators sync.Map // map[api.InstanceID]*ExecutionResults
-	pendingActivities    sync.Map // map[string]*activityExecutionResult
+	pendingOrchestrators *sync.Map // map[api.InstanceID]*ExecutionResults
+	pendingActivities    *sync.Map // map[string]*activityExecutionResult
 	backend              Backend
 	logger               Logger
 	onWorkItemConnection func(context.Context) error
@@ -78,9 +78,11 @@ func WithStreamShutdownChannel(c <-chan any) grpcExecutorOptions {
 
 func NewGrpcExecutor(grpcServer *grpc.Server, be Backend, logger Logger, opts ...grpcExecutorOptions) Executor {
 	executor := &grpcExecutor{
-		workItemQueue: make(chan *protos.WorkItem),
-		backend:       be,
-		logger:        logger,
+		workItemQueue:        make(chan *protos.WorkItem),
+		backend:              be,
+		logger:               logger,
+		pendingOrchestrators: &sync.Map{},
+		pendingActivities:    &sync.Map{},
 	}
 
 	for _, opt := range opts {
@@ -97,8 +99,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 	executor.pendingOrchestrators.Store(iid, result)
 	defer executor.pendingOrchestrators.Delete(iid)
 
-	// Queue up the orchestration execution work-item for the connected worker to process
-	executor.workItemQueue <- &protos.WorkItem{
+	workItem := &protos.WorkItem{
 		Request: &protos.WorkItem_OrchestratorRequest{
 			OrchestratorRequest: &protos.OrchestratorRequest{
 				InstanceId:  string(iid),
@@ -107,6 +108,14 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 				NewEvents:   newEvents,
 			},
 		},
+	}
+
+	// Send the orchestration execution work-item to the connected worker.
+	// This will block if the worker isn't listening for work items.
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case executor.workItemQueue <- workItem:
 	}
 
 	// Wait for the connected worker to signal that it's done executing the work-item
@@ -128,7 +137,7 @@ func (executor grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Instan
 	defer executor.pendingActivities.Delete(key)
 
 	task := e.GetTaskScheduled()
-	executor.workItemQueue <- &protos.WorkItem{
+	workItem := &protos.WorkItem{
 		Request: &protos.WorkItem_ActivityRequest{
 			ActivityRequest: &protos.ActivityRequest{
 				Name:                  task.Name,
@@ -138,6 +147,14 @@ func (executor grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Instan
 				TaskId:                e.EventId,
 			},
 		},
+	}
+
+	// Send the activity execution work-item to the connected worker.
+	// This will block if the worker isn't listening for work items.
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case executor.workItemQueue <- workItem:
 	}
 
 	// Wait for the connected worker to signal that it's done executing the work-item

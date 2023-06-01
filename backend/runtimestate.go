@@ -195,7 +195,7 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 			s.AddEvent(e)
 			s.pendingMessages = append(s.pendingMessages, OrchestratorMessage{HistoryEvent: e, TargetInstanceID: sendEvent.Instance.InstanceId})
 		} else {
-			return false, fmt.Errorf("Unknown action type: %v", action)
+			return false, fmt.Errorf("unknown action type: %v", action)
 		}
 	}
 

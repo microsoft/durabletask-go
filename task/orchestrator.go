@@ -480,6 +480,10 @@ func (ctx *OrchestrationContext) getNextSequenceNumber() int32 {
 }
 
 func (ctx *OrchestrationContext) actions() []*protos.OrchestratorAction {
+	if ctx.isSuspended {
+		return nil
+	}
+
 	var actions []*protos.OrchestratorAction
 	for _, a := range ctx.pendingActions {
 		actions = append(actions, a)
