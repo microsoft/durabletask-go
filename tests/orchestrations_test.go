@@ -390,9 +390,9 @@ func Test_ContinueAsNew_Events(t *testing.T) {
 	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest", api.WithInput(0))
 	require.NoError(t, err)
 	for i := 0; i < 10; i++ {
-		require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithJsonSerializableEventData(false)))
+		require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithJsonEventPayload(false)))
 	}
-	require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithJsonSerializableEventData(true)))
+	require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithJsonEventPayload(true)))
 	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
@@ -425,30 +425,36 @@ func Test_ExternalEventOrchestration(t *testing.T) {
 	id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestration", api.WithInput(0))
 	if assert.NoError(t, err) {
 		for i := 0; i < eventCount; i++ {
-			opts := api.WithJsonSerializableEventData(i)
-			if err := client.RaiseEvent(ctx, id, "MyEvent", opts); !assert.NoError(t, err) {
-				return
-			}
+			opts := api.WithJsonEventPayload(i)
+			require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", opts))
 		}
 
 		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
-		if assert.NoError(t, err) {
-			assert.True(t, metadata.IsComplete())
-			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-		} else {
-			return
-		}
+		require.NoError(t, err)
+		require.True(t, metadata.IsComplete())
+		require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
 	}
 
 	// Validate the exported OTel traces
-	// TODO: Validate the external event trace events, once those are implemented
+	eventSizeInBytes := 1
 	spans := exporter.GetSpans().Snapshots()
 	assertSpanSequence(t, spans,
 		assertOrchestratorCreated("ExternalEventOrchestration", id),
-		assertOrchestratorExecuted("ExternalEventOrchestration", id, "COMPLETED"),
+		assertOrchestratorExecuted("ExternalEventOrchestration", id, "COMPLETED", assertSpanEvents(
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+		)),
 	)
 }
 
@@ -473,25 +479,18 @@ func Test_ExternalEventTimeout(t *testing.T) {
 		t.Run(fmt.Sprintf("RaiseEvent:%v", raiseEvent), func(t *testing.T) {
 			// Run the orchestration
 			id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestrationWithTimeout")
-			if !assert.NoError(t, err) {
-				return
-			}
+			require.NoError(t, err)
 			if raiseEvent {
-				if err := client.RaiseEvent(ctx, id, "MyEvent"); !assert.NoError(t, err) {
-					return
-				}
+				require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent"))
 			}
 
 			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 
 			metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
-			if !assert.NoError(t, err) {
-				return
-			}
+			require.NoError(t, err)
 
 			// Validate the exported OTel traces
-			// TODO: Validate the external event trace events, once those are implemented
 			spans := exporter.GetSpans().Snapshots()
 			if raiseEvent {
 				assert.True(t, metadata.IsComplete())
@@ -499,11 +498,13 @@ func Test_ExternalEventTimeout(t *testing.T) {
 
 				assertSpanSequence(t, spans,
 					assertOrchestratorCreated("ExternalEventOrchestrationWithTimeout", id),
-					assertOrchestratorExecuted("ExternalEventOrchestrationWithTimeout", id, "COMPLETED"),
+					assertOrchestratorExecuted("ExternalEventOrchestrationWithTimeout", id, "COMPLETED", assertSpanEvents(
+						assertExternalEvent("MyEvent", 0),
+					)),
 				)
 			} else {
-				assert.True(t, metadata.IsComplete())
-				assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+				require.True(t, metadata.IsComplete())
+				require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
 				if assert.NotNil(t, metadata.FailureDetails) {
 					// The exact message is not important - just make sure it's something clear
 					// NOTE: In a future version, we might have a specifc ErrorType contract. For now, the
@@ -515,7 +516,7 @@ func Test_ExternalEventTimeout(t *testing.T) {
 					assertOrchestratorCreated("ExternalEventOrchestrationWithTimeout", id),
 					// A timer is used to implement the event timeout
 					assertTimer(id),
-					assertOrchestratorExecuted("ExternalEventOrchestrationWithTimeout", id, "FAILED"),
+					assertOrchestratorExecuted("ExternalEventOrchestrationWithTimeout", id, "FAILED", assertSpanEvents()),
 				)
 			}
 		})
@@ -547,29 +548,26 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 
 	// Run the orchestration, which will block waiting for external events
 	id, err := client.ScheduleNewOrchestration(ctx, "SuspendResumeOrchestration", api.WithInput(0))
-	if !assert.NoError(t, err) {
-		return
-	}
+	require.NoError(t, err)
+
+	// Wait for the orchestration to finish starting
+	_, err = client.WaitForOrchestrationStart(ctx, id)
+	require.NoError(t, err)
 
 	// Suspend the orchestration
-	if err := client.SuspendOrchestration(ctx, id, ""); !assert.NoError(t, err) {
-		return
-	}
+	require.NoError(t, client.SuspendOrchestration(ctx, id, ""))
 
 	// Raise a bunch of events to the orchestration (they should get buffered but not consumed)
 	for i := 0; i < eventCount; i++ {
-		opts := api.WithJsonSerializableEventData(i)
-		if err := client.RaiseEvent(ctx, id, "MyEvent", opts); !assert.NoError(t, err) {
-			return
-		}
+		opts := api.WithJsonEventPayload(i)
+		require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", opts))
 	}
 
 	// Make sure the orchestration *doesn't* complete
 	timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if _, err := client.WaitForOrchestrationCompletion(timeoutCtx, id); !assert.ErrorIs(t, err, timeoutCtx.Err()) {
-		return
-	}
+	_, err = client.WaitForOrchestrationCompletion(timeoutCtx, id)
+	require.ErrorIs(t, err, timeoutCtx.Err())
 
 	var metadata *api.OrchestrationMetadata
 	metadata, err = client.FetchOrchestrationMetadata(ctx, id)
@@ -579,22 +577,31 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 	}
 
 	// Resume the orchestration and wait for it to complete
-	if err := client.ResumeOrchestration(ctx, id, ""); !assert.NoError(t, err) {
-		return
-	}
+	require.NoError(t, client.ResumeOrchestration(ctx, id, ""))
 	timeoutCtx, cancel = context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	metadata, err = client.WaitForOrchestrationCompletion(timeoutCtx, id)
-	if !assert.NoError(t, err) {
-		return
-	}
+	_, err = client.WaitForOrchestrationCompletion(timeoutCtx, id)
+	require.NoError(t, err)
 
 	// Validate the exported OTel traces
-	// TODO: Validate the external event and suspend/resume trace events, once those are implemented
+	eventSizeInBytes := 1
 	spans := exporter.GetSpans().Snapshots()
 	assertSpanSequence(t, spans,
 		assertOrchestratorCreated("SuspendResumeOrchestration", id),
-		assertOrchestratorExecuted("SuspendResumeOrchestration", id, "COMPLETED"),
+		assertOrchestratorExecuted("SuspendResumeOrchestration", id, "COMPLETED", assertSpanEvents(
+			assertSuspendedEvent(),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertExternalEvent("MyEvent", eventSizeInBytes),
+			assertResumedEvent(),
+		)),
 	)
 }
 

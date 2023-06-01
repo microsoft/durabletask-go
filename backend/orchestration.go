@@ -186,15 +186,6 @@ func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *Orchestra
 	return ctx, span, true
 }
 
-func (w *orchestratorProcessor) abortWorkItem(ctx context.Context, wi *OrchestrationWorkItem, err error, message string) {
-	w.logger.Warnf("aborting work item: %v: %v: %v", wi, message, err)
-	err = w.be.AbandonOrchestrationWorkItem(ctx, wi)
-	if err != nil {
-		w.logger.Errorf("failed to abort work item: %v", wi)
-		return
-	}
-}
-
 func getOrchestrationStateDescription(wi *OrchestrationWorkItem) string {
 	name, err := wi.State.Name()
 	if err != nil {
@@ -209,7 +200,8 @@ func getOrchestrationStateDescription(wi *OrchestrationWorkItem) string {
 	ageStr := "(new)"
 	createdAt, err := wi.State.CreatedTime()
 	if err == nil {
-		age := time.Now().Sub(createdAt)
+		age := time.Since(createdAt)
+
 		if age > 0 {
 			ageStr = age.Round(time.Second).String()
 		}
@@ -274,6 +266,8 @@ func (w *orchestratorProcessor) endOrchestratorSpan(ctx context.Context, wi *Orc
 			Key:   "durabletask.runtime_status",
 			Value: attribute.StringValue(helpers.ToRuntimeStatusString(wi.State.RuntimeStatus())),
 		})
+		addNotableEventsToSpan(wi.State.OldEvents(), span)
+		addNotableEventsToSpan(wi.State.NewEvents(), span)
 	} else if continuedAsNew {
 		span.SetAttributes(attribute.KeyValue{
 			Key:   "durabletask.runtime_status",
@@ -288,4 +282,28 @@ func (w *orchestratorProcessor) endOrchestratorSpan(ctx context.Context, wi *Orc
 	// We must always call End() on a span to ensure we don't leak resources.
 	// See https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/api.md#span-creation
 	span.End()
+}
+
+// Adds notable events to the span that are interesting to the user.
+// More info: https://opentelemetry.io/docs/instrumentation/go/manual/#events
+func addNotableEventsToSpan(events []*protos.HistoryEvent, span trace.Span) {
+	for _, e := range events {
+		if eventRaised := e.GetEventRaised(); eventRaised != nil {
+			eventByteCount := len(eventRaised.Input.GetValue())
+			span.AddEvent(
+				"Received external event",
+				trace.WithTimestamp(e.Timestamp.AsTime()),
+				trace.WithAttributes(attribute.String("name", eventRaised.Name), attribute.Int("size", eventByteCount)))
+		} else if suspended := e.GetExecutionSuspended(); suspended != nil {
+			span.AddEvent(
+				"Execution suspended",
+				trace.WithTimestamp(e.Timestamp.AsTime()),
+				trace.WithAttributes(attribute.String("reason", suspended.Input.GetValue())))
+		} else if resumed := e.GetExecutionResumed(); resumed != nil {
+			span.AddEvent(
+				"Execution resumed",
+				trace.WithTimestamp(e.Timestamp.AsTime()),
+				trace.WithAttributes(attribute.String("reason", resumed.Input.GetValue())))
+		}
+	}
 }

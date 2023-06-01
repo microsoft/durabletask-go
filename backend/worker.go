@@ -184,6 +184,7 @@ func (w *worker) StopAndDrain() {
 	}
 
 	// Wait for outstanding work-items to finish processing.
+	// TODO: Need to find a way to cancel this if it takes too long for some reason.
 	w.pending.Wait()
 }
 

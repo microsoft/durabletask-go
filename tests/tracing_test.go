@@ -17,6 +17,7 @@ import (
 type (
 	spanValidator          func(t assert.TestingT, spans []trace.ReadOnlySpan, index int)
 	spanAttributeValidator func(t assert.TestingT, span trace.ReadOnlySpan) bool
+	spanEventValidator     func(t assert.TestingT, span trace.ReadOnlySpan, eventIndex int) bool
 )
 
 var (
@@ -69,6 +70,49 @@ func assertActivity(name string, id api.InstanceID, taskID int64, optionalAssert
 
 func assertTimer(id api.InstanceID) spanValidator {
 	return assertSpan("timer", assertInstanceID(id), assertTimerFired())
+}
+
+func assertSpanEvents(eventAsserts ...spanEventValidator) spanAttributeValidator {
+	return func(t assert.TestingT, span trace.ReadOnlySpan) bool {
+		if assert.Equal(t, len(eventAsserts), len(span.Events()), "unexpected number of span events") {
+			for i, f := range eventAsserts {
+				if !f(t, span, i) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+}
+
+func assertExternalEvent(eventName string, payloadSize int) spanEventValidator {
+	return func(t assert.TestingT, span trace.ReadOnlySpan, eventIndex int) bool {
+		event := span.Events()[eventIndex]
+		hasMessage := assert.Equal(t, "Received external event", event.Name)
+		hasNameAttribute := assert.Contains(t, event.Attributes, attribute.KeyValue{
+			Key:   "name",
+			Value: attribute.StringValue(eventName),
+		})
+		hasSizeAttribute := assert.Contains(t, event.Attributes, attribute.KeyValue{
+			Key:   "size",
+			Value: attribute.IntValue(payloadSize),
+		})
+		return hasMessage && hasNameAttribute && hasSizeAttribute
+	}
+}
+
+func assertSuspendedEvent() spanEventValidator {
+	return func(t assert.TestingT, span trace.ReadOnlySpan, eventIndex int) bool {
+		event := span.Events()[eventIndex]
+		return assert.Equal(t, "Execution suspended", event.Name)
+	}
+}
+
+func assertResumedEvent() spanEventValidator {
+	return func(t assert.TestingT, span trace.ReadOnlySpan, eventIndex int) bool {
+		event := span.Events()[eventIndex]
+		return assert.Equal(t, "Execution resumed", event.Name)
+	}
 }
 
 func assertSpan(name string, optionalAsserts ...spanAttributeValidator) spanValidator {

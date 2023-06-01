@@ -99,8 +99,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 	executor.pendingOrchestrators.Store(iid, result)
 	defer executor.pendingOrchestrators.Delete(iid)
 
-	// Queue up the orchestration execution work-item for the connected worker to process
-	executor.workItemQueue <- &protos.WorkItem{
+	workItem := &protos.WorkItem{
 		Request: &protos.WorkItem_OrchestratorRequest{
 			OrchestratorRequest: &protos.OrchestratorRequest{
 				InstanceId:  string(iid),
@@ -109,6 +108,14 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 				NewEvents:   newEvents,
 			},
 		},
+	}
+
+	// Send the orchestration execution work-item to the connected worker.
+	// This will block if the worker isn't listening for work items.
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case executor.workItemQueue <- workItem:
 	}
 
 	// Wait for the connected worker to signal that it's done executing the work-item
@@ -130,7 +137,7 @@ func (executor grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Instan
 	defer executor.pendingActivities.Delete(key)
 
 	task := e.GetTaskScheduled()
-	executor.workItemQueue <- &protos.WorkItem{
+	workItem := &protos.WorkItem{
 		Request: &protos.WorkItem_ActivityRequest{
 			ActivityRequest: &protos.ActivityRequest{
 				Name:                  task.Name,
@@ -140,6 +147,14 @@ func (executor grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Instan
 				TaskId:                e.EventId,
 			},
 		},
+	}
+
+	// Send the activity execution work-item to the connected worker.
+	// This will block if the worker isn't listening for work items.
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case executor.workItemQueue <- workItem:
 	}
 
 	// Wait for the connected worker to signal that it's done executing the work-item
