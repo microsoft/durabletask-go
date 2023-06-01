@@ -8,6 +8,7 @@ import (
 
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -35,6 +36,71 @@ type OrchestrationMetadata struct {
 	FailureDetails         *protos.TaskFailureDetails
 }
 
+// NewOrchestrationOptions configures options for starting a new orchestration.
+type NewOrchestrationOptions func(*protos.CreateInstanceRequest)
+
+// GetOrchestrationMetadataOptions is a set of options for fetching orchestration metadata.
+type FetchOrchestrationMetadataOptions func(*protos.GetInstanceRequest)
+
+// RaiseEventOptions is a set of options for raising an orchestration event.
+type RaiseEventOptions func(*protos.RaiseEventRequest)
+
+// WithInstanceID configures an explicit orchestration instance ID. If not specified,
+// a random UUID value will be used for the orchestration instance ID.
+func WithInstanceID(id InstanceID) NewOrchestrationOptions {
+	return func(req *protos.CreateInstanceRequest) {
+		req.InstanceId = string(id)
+	}
+}
+
+// WithInput configures an input for the orchestration. The specified input must be serializable.
+func WithInput(input any) NewOrchestrationOptions {
+	return func(req *protos.CreateInstanceRequest) {
+		// TODO: Make the encoder configurable
+		// TODO: Error handling?
+		bytes, _ := json.Marshal(input)
+		req.Input = wrapperspb.String(string(bytes))
+	}
+}
+
+// WithRawInput configures an input for the orchestration. The specified input must be a string.
+func WithRawInput(rawInput string) NewOrchestrationOptions {
+	return func(req *protos.CreateInstanceRequest) {
+		req.Input = wrapperspb.String(rawInput)
+	}
+}
+
+// WithStartTime configures a start time at which the orchestration should start running.
+// Note that the actual start time could be later than the specified start time if the
+// task hub is under load or if the app is not running at the specified start time.
+func WithStartTime(startTime time.Time) NewOrchestrationOptions {
+	return func(req *protos.CreateInstanceRequest) {
+		req.ScheduledStartTimestamp = timestamppb.New(startTime)
+	}
+}
+
+// WithFetchPayloads configures whether to load orchestration inputs, outputs, and custom status values, which could be large.
+func WithFetchPayloads(fetchPayloads bool) FetchOrchestrationMetadataOptions {
+	return func(req *protos.GetInstanceRequest) {
+		req.GetInputsAndOutputs = fetchPayloads
+	}
+}
+
+// WithJsonEventPayload configures an event payload that can be serialized to JSON.
+func WithJsonEventPayload(data any) RaiseEventOptions {
+	return func(req *protos.RaiseEventRequest) {
+		bytes, _ := json.Marshal(data)
+		req.Input = wrapperspb.String(string(bytes))
+	}
+}
+
+// WithRawEventData configures an event payload that is a raw, unprocessed string (e.g. JSON data).
+func WithRawEventData(data string) RaiseEventOptions {
+	return func(req *protos.RaiseEventRequest) {
+		req.Input = wrapperspb.String(data)
+	}
+}
+
 func NewOrchestrationMetadata(
 	iid InstanceID,
 	name string,
@@ -44,7 +110,8 @@ func NewOrchestrationMetadata(
 	serializedInput string,
 	serializedOutput string,
 	serializedCustomStatus string,
-	failureDetails *protos.TaskFailureDetails) *OrchestrationMetadata {
+	failureDetails *protos.TaskFailureDetails,
+) *OrchestrationMetadata {
 	return &OrchestrationMetadata{
 		InstanceID:             iid,
 		Name:                   name,
