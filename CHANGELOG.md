@@ -20,6 +20,7 @@ Go in an out-of-process worker process. It also contains various minor improveme
 
 - Renamed `WithJsonSerializableEventData` to `WithJsonEventPayload`
 - Moved gRPC client and related functions from `api` package to `client` package
+- Switched SQLite driver to pure-Go implementation (no CGO dependency) ([#17](https://github.com/microsoft/durabletask-go/pull/17)) - contributed by [@ItalyPaleAle](https://github.com/ItalyPaleAle)
 - (Tests) Switched from `assert` to `require` in several tests to simplify code
 
 ### Fixed

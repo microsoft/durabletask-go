@@ -17,7 +17,7 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/proto"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 //go:embed schema.sql
@@ -63,7 +63,7 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 
 	be := &sqliteBackend{
 		db:         nil,
-		workerName: fmt.Sprintf("%v,%d,%v", hostname, pid, uuidStr),
+		workerName: fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
 		options:    opts,
 		logger:     logger,
 	}
@@ -73,15 +73,17 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 	}
 	if opts.FilePath == "" {
 		be.dsn = "file::memory:"
+	} else if !strings.HasPrefix(opts.FilePath, "file:") {
+		be.dsn = "file:" + opts.FilePath
 	} else {
-		be.dsn = fmt.Sprintf("file:%v", opts.FilePath)
+		be.dsn = opts.FilePath
 	}
 	return be
 }
 
 // CreateTaskHub creates the sqlite database and applies the schema
 func (be *sqliteBackend) CreateTaskHub(context.Context) error {
-	db, err := sql.Open("sqlite3", be.dsn)
+	db, err := sql.Open("sqlite", be.dsn)
 	if err != nil {
 		panic(fmt.Errorf("failed to open the database: %w", err))
 	}
