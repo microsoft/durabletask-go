@@ -43,7 +43,7 @@ func RunParallelSample() {
 func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	// Get a dynamic list of devices to perform updates on
 	var devices []string
-	if err := ctx.CallActivity(GetDevicesToUpdate, nil).Await(&devices); err != nil {
+	if err := ctx.CallActivity(GetDevicesToUpdate).Await(&devices); err != nil {
 		return nil, err
 	}
 
