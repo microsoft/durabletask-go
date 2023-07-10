@@ -12,6 +12,7 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.TaskRegistry) error {
@@ -67,7 +68,7 @@ func (c *TaskHubGrpcClient) processOrchestrationWorkItem(
 		failureAction := helpers.NewCompleteOrchestrationAction(
 			-1,
 			protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,
-			"An internal error occured while executing the orchestration.",
+			wrapperspb.String("An internal error occured while executing the orchestration."),
 			nil,
 			&protos.TaskFailureDetails{
 				ErrorType:    fmt.Sprintf("%T", err),

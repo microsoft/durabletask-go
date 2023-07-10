@@ -79,15 +79,15 @@ Activity sequences like the following are the simplest and most common pattern u
 // as an array.
 func ActivitySequenceOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	var helloTokyo string
-	if err := ctx.CallActivity(SayHelloActivity, "Tokyo").Await(&helloTokyo); err != nil {
+	if err := ctx.CallActivity(SayHelloActivity, task.WithActivityInput("Tokyo")).Await(&helloTokyo); err != nil {
 		return nil, err
 	}
 	var helloLondon string
-	if err := ctx.CallActivity(SayHelloActivity, "London").Await(&helloLondon); err != nil {
+	if err := ctx.CallActivity(SayHelloActivity, task.WithActivityInput("London")).Await(&helloLondon); err != nil {
 		return nil, err
 	}
 	var helloSeattle string
-	if err := ctx.CallActivity(SayHelloActivity, "Seattle").Await(&helloSeattle); err != nil {
+	if err := ctx.CallActivity(SayHelloActivity, task.WithActivityInput("Seattle")).Await(&helloSeattle); err != nil {
 		return nil, err
 	}
 	return []string{helloTokyo, helloLondon, helloSeattle}, nil
@@ -114,14 +114,14 @@ The next most common pattern is "fan-out / fan-in" where multiple activities are
 func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	// Get a dynamic list of devices to perform updates on
 	var devices []string
-	if err := ctx.CallActivity(GetDevicesToUpdate, nil).Await(&devices); err != nil {
+	if err := ctx.CallActivity(GetDevicesToUpdate).Await(&devices); err != nil {
 		return nil, err
 	}
 
 	// Start a dynamic number of tasks in parallel, not waiting for any to complete (yet)
 	tasks := make([]task.Task, 0, len(devices))
 	for _, id := range devices {
-		tasks = append(tasks, ctx.CallActivity(UpdateDevice, id))
+		tasks = append(tasks, ctx.CallActivity(UpdateDevice, task.WithActivityInput(id)))
 	}
 
 	// Now that all are started, wait for them to complete and then return the success rate
@@ -167,8 +167,7 @@ go func() {
 	var nameInput string
 	fmt.Scanln(&nameInput)
 	
-	opts := api.WithJsonSerializableEventData(nameInput)
-	client.RaiseEvent(ctx, id, "Name", opts)
+	client.RaiseEvent(ctx, id, "Name", api.WithEventPayload(nameInput))
 }()
 ```
 

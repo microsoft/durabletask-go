@@ -111,11 +111,14 @@ func (c *TaskHubGrpcClient) WaitForOrchestrationCompletion(ctx context.Context, 
 
 // TerminateOrchestration terminates a running orchestration by causing it to stop receiving new events and
 // putting it directly into the TERMINATED state.
-func (c *TaskHubGrpcClient) TerminateOrchestration(ctx context.Context, id api.InstanceID, reason string) error {
-	req := &protos.TerminateRequest{
-		InstanceId: string(id),
-		Output:     wrapperspb.String(reason),
+func (c *TaskHubGrpcClient) TerminateOrchestration(ctx context.Context, id api.InstanceID, opts ...api.TerminateOptions) error {
+	req := &protos.TerminateRequest{InstanceId: string(id), Recursive: true}
+	for _, configure := range opts {
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure termination request: %w", err)
+		}
 	}
+
 	_, err := c.client.TerminateInstance(ctx, req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -130,7 +133,9 @@ func (c *TaskHubGrpcClient) TerminateOrchestration(ctx context.Context, id api.I
 func (c *TaskHubGrpcClient) RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, opts ...api.RaiseEventOptions) error {
 	req := &protos.RaiseEventRequest{InstanceId: string(id), Name: eventName}
 	for _, configure := range opts {
-		configure(req)
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure raise event request: %w", err)
+		}
 	}
 
 	if _, err := c.client.RaiseEvent(ctx, req); err != nil {
@@ -195,7 +200,10 @@ func (c *TaskHubGrpcClient) PurgeOrchestrationState(ctx context.Context, id api.
 }
 
 func makeGetInstanceRequest(id api.InstanceID, opts []api.FetchOrchestrationMetadataOptions) *protos.GetInstanceRequest {
-	req := &protos.GetInstanceRequest{InstanceId: string(id)}
+	req := &protos.GetInstanceRequest{
+		InstanceId:          string(id),
+		GetInputsAndOutputs: true,
+	}
 	for _, configure := range opts {
 		configure(req)
 	}

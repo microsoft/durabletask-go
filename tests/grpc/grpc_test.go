@@ -89,7 +89,7 @@ func Test_Grpc_HelloOrchestration(t *testing.T) {
 			return nil, err
 		}
 		var output string
-		err := ctx.CallActivity("SayHello", input).Await(&output)
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		return output, err
 	})
 	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
@@ -141,7 +141,7 @@ func Test_Grpc_SuspendResume(t *testing.T) {
 
 	// Raise a bunch of events to the orchestration (they should get buffered but not consumed)
 	for i := 0; i < eventCount; i++ {
-		opts := api.WithJsonEventPayload(i)
+		opts := api.WithEventPayload(i)
 		require.NoError(t, grpcClient.RaiseEvent(ctx, id, "MyEvent", opts))
 	}
 
@@ -164,4 +164,65 @@ func Test_Grpc_SuspendResume(t *testing.T) {
 	_, err = grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id)
 	require.NoError(t, err)
 	time.Sleep(1 * time.Second)
+}
+
+func Test_Grpc_Terminate_Recursive(t *testing.T) {
+	delayTime := 4 * time.Second
+	executedActivity := false
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
+		tasks := []task.Task{}
+		for i := 0; i < 5; i++ {
+			task := ctx.CallSubOrchestrator("L1")
+			tasks = append(tasks, task)
+		}
+		for _, task := range tasks {
+			task.Await(nil)
+		}
+		return nil, nil
+	})
+	r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CallSubOrchestrator("L2").Await(nil)
+		return nil, nil
+	})
+	r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CreateTimer(delayTime).Await(nil)
+		ctx.CallActivity("Fail").Await(nil)
+		return nil, nil
+	})
+	r.AddActivityN("Fail", func(ctx task.ActivityContext) (any, error) {
+		executedActivity = true
+		return nil, errors.New("Failed: Should not have executed the activity")
+	})
+
+	cancelListener := startGrpcListener(t, r)
+	defer cancelListener()
+
+	// Test terminating with and without recursion
+	for _, recurse := range []bool{true, false} {
+		t.Run(fmt.Sprintf("Recurse = %v", recurse), func(t *testing.T) {
+			// Run the orchestration, which will block waiting for external events
+			id, err := grpcClient.ScheduleNewOrchestration(ctx, "Root")
+			require.NoError(t, err)
+
+			// Wait long enough to ensure all orchestrations have started (but not longer than the timer delay)
+			time.Sleep(2 * time.Second)
+
+			// Terminate the root orchestration and mark whether a recursive termination
+			output := fmt.Sprintf("Recursive termination = %v", recurse)
+			opts := []api.TerminateOptions{api.WithOutput(output), api.WithRecursive(recurse)}
+			require.NoError(t, grpcClient.TerminateOrchestration(ctx, id, opts...))
+
+			// Wait for the root orchestration to complete and verify its terminated status
+			metadata, err := grpcClient.WaitForOrchestrationCompletion(ctx, id)
+			require.NoError(t, err)
+			require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, metadata.RuntimeStatus)
+			require.Equal(t, fmt.Sprintf("\"%s\"", output), metadata.SerializedOutput)
+
+			// Wait longer to ensure that none of the sub-orchestrations continued to the next step
+			// of executing the activity function.
+			time.Sleep(delayTime)
+			assert.NotEqual(t, recurse, executedActivity)
+		})
+	}
 }

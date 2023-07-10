@@ -52,12 +52,15 @@ func NewExecutionCompletedEvent(eventID int32, status protos.OrchestrationStatus
 	}
 }
 
-func NewExecutionTerminatedEvent(rawReason *wrapperspb.StringValue) *protos.HistoryEvent {
+func NewExecutionTerminatedEvent(rawReason *wrapperspb.StringValue, recurse bool) *protos.HistoryEvent {
 	return &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.Now(),
 		EventType: &protos.HistoryEvent_ExecutionTerminated{
-			ExecutionTerminated: &protos.ExecutionTerminatedEvent{Input: rawReason},
+			ExecutionTerminated: &protos.ExecutionTerminatedEvent{
+				Input:   rawReason,
+				Recurse: recurse,
+			},
 		},
 	}
 }
@@ -286,7 +289,7 @@ func NewCreateSubOrchestrationAction(
 func NewCompleteOrchestrationAction(
 	taskID int32,
 	status protos.OrchestrationStatus,
-	result string,
+	rawResult *wrapperspb.StringValue,
 	carryoverEvents []*protos.HistoryEvent,
 	failureDetails *protos.TaskFailureDetails,
 ) *protos.OrchestratorAction {
@@ -295,11 +298,34 @@ func NewCompleteOrchestrationAction(
 		OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
 			CompleteOrchestration: &protos.CompleteOrchestrationAction{
 				OrchestrationStatus: status,
-				Result:              wrapperspb.String(result),
+				Result:              rawResult,
 				CarryoverEvents:     carryoverEvents,
 				FailureDetails:      failureDetails,
 			},
 		},
+	}
+}
+
+func NewTerminateOrchestrationAction(taskID int32, iid string, recurse bool, rawReason *wrapperspb.StringValue) *protos.OrchestratorAction {
+	return &protos.OrchestratorAction{
+		Id: taskID,
+		OrchestratorActionType: &protos.OrchestratorAction_TerminateOrchestration{
+			TerminateOrchestration: &protos.TerminateOrchestrationAction{
+				InstanceId: iid,
+				Recurse:    recurse,
+				Reason:     rawReason,
+			},
+		},
+	}
+}
+
+func NewTaskFailureDetails(err error) *protos.TaskFailureDetails {
+	if err == nil {
+		return nil
+	}
+	return &protos.TaskFailureDetails{
+		ErrorType:    reflect.TypeOf(err).String(),
+		ErrorMessage: err.Error(),
 	}
 }
 

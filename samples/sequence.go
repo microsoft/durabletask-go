@@ -31,15 +31,15 @@ func RunSequenceSample() {
 // as an array.
 func ActivitySequenceOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	var helloTokyo string
-	if err := ctx.CallActivity(SayHelloActivity, "Tokyo").Await(&helloTokyo); err != nil {
+	if err := ctx.CallActivity(SayHelloActivity, task.WithActivityInput("Tokyo")).Await(&helloTokyo); err != nil {
 		return nil, err
 	}
 	var helloLondon string
-	if err := ctx.CallActivity(SayHelloActivity, "London").Await(&helloLondon); err != nil {
+	if err := ctx.CallActivity(SayHelloActivity, task.WithActivityInput("London")).Await(&helloLondon); err != nil {
 		return nil, err
 	}
 	var helloSeattle string
-	if err := ctx.CallActivity(SayHelloActivity, "Seattle").Await(&helloSeattle); err != nil {
+	if err := ctx.CallActivity(SayHelloActivity, task.WithActivityInput("Seattle")).Await(&helloSeattle); err != nil {
 		return nil, err
 	}
 	return []string{helloTokyo, helloLondon, helloSeattle}, nil

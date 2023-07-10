@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	ErrInstanceNotFound = errors.New("No such instance exists")
+	ErrInstanceNotFound = errors.New("no such instance exists")
 	ErrNotStarted       = errors.New("orchestration has not started")
 	ErrNotCompleted     = errors.New("orchestration has not yet completed")
 	ErrNoFailures       = errors.New("orchestration did not report failure details")
@@ -37,36 +37,43 @@ type OrchestrationMetadata struct {
 }
 
 // NewOrchestrationOptions configures options for starting a new orchestration.
-type NewOrchestrationOptions func(*protos.CreateInstanceRequest)
+type NewOrchestrationOptions func(*protos.CreateInstanceRequest) error
 
 // GetOrchestrationMetadataOptions is a set of options for fetching orchestration metadata.
 type FetchOrchestrationMetadataOptions func(*protos.GetInstanceRequest)
 
 // RaiseEventOptions is a set of options for raising an orchestration event.
-type RaiseEventOptions func(*protos.RaiseEventRequest)
+type RaiseEventOptions func(*protos.RaiseEventRequest) error
+
+// TerminateOptions is a set of options for terminating an orchestration.
+type TerminateOptions func(*protos.TerminateRequest) error
 
 // WithInstanceID configures an explicit orchestration instance ID. If not specified,
 // a random UUID value will be used for the orchestration instance ID.
 func WithInstanceID(id InstanceID) NewOrchestrationOptions {
-	return func(req *protos.CreateInstanceRequest) {
+	return func(req *protos.CreateInstanceRequest) error {
 		req.InstanceId = string(id)
+		return nil
 	}
 }
 
 // WithInput configures an input for the orchestration. The specified input must be serializable.
 func WithInput(input any) NewOrchestrationOptions {
-	return func(req *protos.CreateInstanceRequest) {
-		// TODO: Make the encoder configurable
-		// TODO: Error handling?
-		bytes, _ := json.Marshal(input)
+	return func(req *protos.CreateInstanceRequest) error {
+		bytes, err := json.Marshal(input)
+		if err != nil {
+			return err
+		}
 		req.Input = wrapperspb.String(string(bytes))
+		return nil
 	}
 }
 
 // WithRawInput configures an input for the orchestration. The specified input must be a string.
 func WithRawInput(rawInput string) NewOrchestrationOptions {
-	return func(req *protos.CreateInstanceRequest) {
+	return func(req *protos.CreateInstanceRequest) error {
 		req.Input = wrapperspb.String(rawInput)
+		return nil
 	}
 }
 
@@ -74,8 +81,9 @@ func WithRawInput(rawInput string) NewOrchestrationOptions {
 // Note that the actual start time could be later than the specified start time if the
 // task hub is under load or if the app is not running at the specified start time.
 func WithStartTime(startTime time.Time) NewOrchestrationOptions {
-	return func(req *protos.CreateInstanceRequest) {
+	return func(req *protos.CreateInstanceRequest) error {
 		req.ScheduledStartTimestamp = timestamppb.New(startTime)
+		return nil
 	}
 }
 
@@ -86,18 +94,51 @@ func WithFetchPayloads(fetchPayloads bool) FetchOrchestrationMetadataOptions {
 	}
 }
 
-// WithJsonEventPayload configures an event payload that can be serialized to JSON.
-func WithJsonEventPayload(data any) RaiseEventOptions {
-	return func(req *protos.RaiseEventRequest) {
-		bytes, _ := json.Marshal(data)
+// WithEventPayload configures an event payload. The specified payload must be serializable.
+func WithEventPayload(data any) RaiseEventOptions {
+	return func(req *protos.RaiseEventRequest) error {
+		bytes, err := json.Marshal(data)
+		if err != nil {
+			return err
+		}
 		req.Input = wrapperspb.String(string(bytes))
+		return nil
 	}
 }
 
 // WithRawEventData configures an event payload that is a raw, unprocessed string (e.g. JSON data).
 func WithRawEventData(data string) RaiseEventOptions {
-	return func(req *protos.RaiseEventRequest) {
+	return func(req *protos.RaiseEventRequest) error {
 		req.Input = wrapperspb.String(data)
+		return nil
+	}
+}
+
+// WithOutput configures an output for the terminated orchestration. The specified output must be serializable.
+func WithOutput(data any) TerminateOptions {
+	return func(req *protos.TerminateRequest) error {
+		bytes, err := json.Marshal(data)
+		if err != nil {
+			return err
+		}
+		req.Output = wrapperspb.String(string(bytes))
+		return nil
+	}
+}
+
+// WithRawOutput configures a raw, unprocessed output (i.e. pre-serialized) for the terminated orchestration.
+func WithRawOutput(data string) TerminateOptions {
+	return func(req *protos.TerminateRequest) error {
+		req.Output = wrapperspb.String(data)
+		return nil
+	}
+}
+
+// WithRecursive configures whether to terminate all sub-orchestrations created by the target orchestration.
+func WithRecursive(recursive bool) TerminateOptions {
+	return func(req *protos.TerminateRequest) error {
+		req.Recursive = recursive
+		return nil
 	}
 }
 

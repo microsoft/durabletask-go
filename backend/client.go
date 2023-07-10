@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/helpers"
@@ -21,7 +20,7 @@ type TaskHubClient interface {
 	FetchOrchestrationMetadata(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
 	WaitForOrchestrationStart(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
 	WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
-	TerminateOrchestration(ctx context.Context, id api.InstanceID, reason string) error
+	TerminateOrchestration(ctx context.Context, id api.InstanceID, opts ...api.TerminateOptions) error
 	RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, opts ...api.RaiseEventOptions) error
 	SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	ResumeOrchestration(ctx context.Context, id api.InstanceID, reason string) error
@@ -42,7 +41,9 @@ func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrat
 	name := helpers.GetTaskFunctionName(orchestrator)
 	req := &protos.CreateInstanceRequest{Name: name}
 	for _, configure := range opts {
-		configure(req)
+		if err := configure(req); err != nil {
+			return api.EmptyInstanceID, fmt.Errorf("failed to configure create instance request: %w", err)
+		}
 	}
 	if req.InstanceId == "" {
 		req.InstanceId = uuid.NewString()
@@ -123,8 +124,15 @@ func (c *backendClient) waitForOrchestrationCondition(ctx context.Context, id ap
 // TerminateOrchestration enqueues a message to terminate a running orchestration, causing it to stop receiving new events and
 // go directly into the TERMINATED state. This operation is asynchronous. An orchestration worker must
 // dequeue the termination event before the orchestration will be terminated.
-func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.InstanceID, reason string) error {
-	e := helpers.NewExecutionTerminatedEvent(wrapperspb.String(reason))
+func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.InstanceID, opts ...api.TerminateOptions) error {
+	req := &protos.TerminateRequest{InstanceId: string(id), Recursive: true}
+	for _, configure := range opts {
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure termination request: %w", err)
+		}
+	}
+
+	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
 		return fmt.Errorf("failed to add terminate event: %w", err)
 	}
@@ -142,15 +150,12 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 func (c *backendClient) RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, opts ...api.RaiseEventOptions) error {
 	req := &protos.RaiseEventRequest{InstanceId: string(id), Name: eventName}
 	for _, configure := range opts {
-		configure(req)
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure raise event request: %w", err)
+		}
 	}
 
-	var rawValue *wrapperspb.StringValue
-	if req.Input != nil {
-		rawValue = wrapperspb.String(string(req.Input.Value))
-	}
-
-	e := helpers.NewEventRaisedEvent(eventName, rawValue)
+	e := helpers.NewEventRaisedEvent(req.Name, req.Input)
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
 		return fmt.Errorf("failed to raise event: %w", err)
 	}

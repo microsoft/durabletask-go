@@ -314,7 +314,7 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 
 // TerminateInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
-	e := helpers.NewExecutionTerminatedEvent(req.Output)
+	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
 		return nil, err
 	}
