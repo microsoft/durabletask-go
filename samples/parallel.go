@@ -50,7 +50,7 @@ func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	// Start a dynamic number of tasks in parallel, not waiting for any to complete (yet)
 	tasks := make([]task.Task, 0, len(devices))
 	for _, id := range devices {
-		tasks = append(tasks, ctx.CallActivity(UpdateDevice, id))
+		tasks = append(tasks, ctx.CallActivity(UpdateDevice, task.WithActivityInput(id)))
 	}
 
 	// Now that all are started, wait for them to complete and then return the success rate

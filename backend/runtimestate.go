@@ -194,6 +194,13 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 			e := helpers.NewSendEventEvent(action.Id, sendEvent.Instance.InstanceId, sendEvent.Name, sendEvent.Data)
 			s.AddEvent(e)
 			s.pendingMessages = append(s.pendingMessages, OrchestratorMessage{HistoryEvent: e, TargetInstanceID: sendEvent.Instance.InstanceId})
+		} else if terminate := action.GetTerminateOrchestration(); terminate != nil {
+			// Send a message to terminate the target orchestration
+			msg := OrchestratorMessage{
+				TargetInstanceID: terminate.InstanceId,
+				HistoryEvent:     helpers.NewExecutionTerminatedEvent(terminate.Reason, terminate.Recurse),
+			}
+			s.pendingMessages = append(s.pendingMessages, msg)
 		} else {
 			return false, fmt.Errorf("unknown action type: %v", action)
 		}

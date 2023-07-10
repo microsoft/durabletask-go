@@ -4,7 +4,35 @@ import (
 	"context"
 
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
+
+type callActivityOption func(*callActivityOptions) error
+
+type callActivityOptions struct {
+	rawInput *wrapperspb.StringValue
+}
+
+// WithActivityInput configures an input for an activity invocation.
+// The specified input must be JSON serializable.
+func WithActivityInput(input any) callActivityOption {
+	return func(opt *callActivityOptions) error {
+		data, err := marshalData(input)
+		if err != nil {
+			return err
+		}
+		opt.rawInput = wrapperspb.String(string(data))
+		return nil
+	}
+}
+
+// WithRawActivityInput configures a raw input for an activity invocation.
+func WithRawActivityInput(input string) callActivityOption {
+	return func(opt *callActivityOptions) error {
+		opt.rawInput = wrapperspb.String(input)
+		return nil
+	}
+}
 
 // ActivityContext is the context parameter type for activity implementations.
 type ActivityContext interface {

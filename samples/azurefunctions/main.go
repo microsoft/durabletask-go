@@ -12,15 +12,15 @@ import (
 // HelloCities is an orchestrator function that generates a "hello" message for several cities.
 func HelloCities(ctx *task.OrchestrationContext) (any, error) {
 	var helloTokyo string
-	if err := ctx.CallActivity(SayHello, "Tokyo").Await(&helloTokyo); err != nil {
+	if err := ctx.CallActivity(SayHello, task.WithActivityInput("Tokyo")).Await(&helloTokyo); err != nil {
 		return nil, err
 	}
 	var helloLondon string
-	if err := ctx.CallActivity(SayHello, "London").Await(&helloLondon); err != nil {
+	if err := ctx.CallActivity(SayHello, task.WithActivityInput("London")).Await(&helloLondon); err != nil {
 		return nil, err
 	}
 	var helloSeattle string
-	if err := ctx.CallActivity(SayHello, "Seattle").Await(&helloSeattle); err != nil {
+	if err := ctx.CallActivity(SayHello, task.WithActivityInput("Seattle")).Await(&helloSeattle); err != nil {
 		return nil, err
 	}
 	return []string{helloTokyo, helloLondon, helloSeattle}, nil

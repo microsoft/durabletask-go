@@ -11,6 +11,7 @@ import (
 	"github.com/microsoft/durabletask-go/tests/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // https://github.com/stretchr/testify/issues/519
@@ -80,7 +81,12 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	result := &backend.ExecutionResults{
 		Response: &protos.OrchestratorResponse{
 			Actions: []*protos.OrchestratorAction{
-				helpers.NewCompleteOrchestrationAction(-1, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, resultValue, nil, nil),
+				helpers.NewCompleteOrchestrationAction(
+					-1,
+					protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
+					wrapperspb.String(resultValue),
+					nil,
+					nil),
 			},
 		},
 	}

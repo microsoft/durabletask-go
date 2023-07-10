@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -44,6 +43,15 @@ type OrchestrationContext struct {
 	saveBufferedExternalEvents bool
 }
 
+// callSubOrchestratorOptions is a struct that holds the options for the CallSubOrchestrator orchestrator method.
+type callSubOrchestratorOptions struct {
+	instanceID string
+	rawInput   *wrapperspb.StringValue
+}
+
+// subOrchestratorOption is a functional option type for the CallSubOrchestrator orchestrator method.
+type subOrchestratorOption func(*callSubOrchestratorOptions) error
+
 // ContinueAsNewOption is a functional option type for the ContinueAsNew orchestrator method.
 type ContinueAsNewOption func(*OrchestrationContext)
 
@@ -52,6 +60,37 @@ type ContinueAsNewOption func(*OrchestrationContext)
 func WithKeepUnprocessedEvents() ContinueAsNewOption {
 	return func(ctx *OrchestrationContext) {
 		ctx.saveBufferedExternalEvents = true
+	}
+}
+
+// WithSubOrchestratorInput is a functional option type for the CallSubOrchestrator
+// orchestrator method that takes an input value and marshals it to JSON.
+func WithSubOrchestratorInput(input any) subOrchestratorOption {
+	return func(opts *callSubOrchestratorOptions) error {
+		bytes, err := marshalData(input)
+		if err != nil {
+			return fmt.Errorf("failed to marshal input to JSON: %w", err)
+		}
+		opts.rawInput = wrapperspb.String(string(bytes))
+		return nil
+	}
+}
+
+// WithRawSubOrchestratorInput is a functional option type for the CallSubOrchestrator
+// orchestrator method that takes a raw input value.
+func WithRawSubOrchestratorInput(input string) subOrchestratorOption {
+	return func(opts *callSubOrchestratorOptions) error {
+		opts.rawInput = wrapperspb.String(input)
+		return nil
+	}
+}
+
+// WithSubOrchestrationInstanceID is a functional option type for the CallSubOrchestrator
+// orchestrator method that specifies the instance ID of the sub-orchestration.
+func WithSubOrchestrationInstanceID(instanceID string) subOrchestratorOption {
+	return func(opts *callSubOrchestratorOptions) error {
+		opts.instanceID = instanceID
+		return nil
 	}
 }
 
@@ -148,6 +187,12 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 		err = ctx.onTaskCompleted(tc)
 	} else if tf := e.GetTaskFailed(); tf != nil {
 		err = ctx.onTaskFailed(tf)
+	} else if ts := e.GetSubOrchestrationInstanceCreated(); ts != nil {
+		err = ctx.onSubOrchestrationScheduled(e.EventId, ts)
+	} else if sc := e.GetSubOrchestrationInstanceCompleted(); sc != nil {
+		err = ctx.onSubOrchestrationCompleted(sc)
+	} else if sf := e.GetSubOrchestrationInstanceFailed(); sf != nil {
+		err = ctx.onSubOrchestrationFailed(sf)
 	} else if tc := e.GetTimerCreated(); tc != nil {
 		err = ctx.onTimerCreated(e)
 	} else if tf := e.GetTimerFired(); tf != nil {
@@ -158,6 +203,8 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 		err = ctx.onExecutionSuspended(es)
 	} else if er := e.GetExecutionResumed(); er != nil {
 		err = ctx.onExecutionResumed(er)
+	} else if et := e.GetExecutionTerminated(); et != nil {
+		err = ctx.onExecutionTerminated(et)
 	} else if oc := e.GetOrchestratorCompleted(); oc != nil {
 		// Nothing to do
 	} else {
@@ -174,24 +221,48 @@ func (octx *OrchestrationContext) GetInput(v any) error {
 // CallActivity schedules an asynchronous invocation of an activity function. The [activity]
 // parameter can be either the name of an activity as a string or can be a pointer to the function
 // that implements the activity, in which case the name is obtained via reflection.
-//
-// The [input] value must be marshalable to JSON.
-func (ctx *OrchestrationContext) CallActivity(activity interface{}, input any) Task {
-	var serializedInput *wrapperspb.StringValue
-	bytes, err := marshalData(input)
-	if err != nil {
-		// TODO: Fail the task ("task completed but failed to unmarshal the return payload")
-	} else if len(bytes) > 0 {
-		serializedInput = wrapperspb.String(string(bytes))
+func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...callActivityOption) Task {
+	options := new(callActivityOptions)
+	for _, configure := range opts {
+		if err := configure(options); err != nil {
+			failedTask := newTask(ctx)
+			failedTask.fail(helpers.NewTaskFailureDetails(err))
+			return failedTask
+		}
 	}
+
 	scheduleTaskAction := helpers.NewScheduleTaskAction(
 		ctx.getNextSequenceNumber(),
 		helpers.GetTaskFunctionName(activity),
-		serializedInput)
+		options.rawInput)
+
 	ctx.pendingActions[scheduleTaskAction.Id] = scheduleTaskAction
 
 	task := newTask(ctx)
 	ctx.pendingTasks[scheduleTaskAction.Id] = task
+	return task
+}
+
+func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, opts ...subOrchestratorOption) Task {
+	options := new(callSubOrchestratorOptions)
+	for _, configure := range opts {
+		if err := configure(options); err != nil {
+			failedTask := newTask(ctx)
+			failedTask.fail(helpers.NewTaskFailureDetails(err))
+			return failedTask
+		}
+	}
+
+	createSubOrchestrationAction := helpers.NewCreateSubOrchestrationAction(
+		ctx.getNextSequenceNumber(),
+		helpers.GetTaskFunctionName(orchestrator),
+		options.instanceID,
+		options.rawInput,
+	)
+	ctx.pendingActions[createSubOrchestrationAction.Id] = createSubOrchestrationAction
+
+	task := newTask(ctx)
+	ctx.pendingTasks[createSubOrchestrationAction.Id] = task
 	return task
 }
 
@@ -348,6 +419,54 @@ func (ctx *OrchestrationContext) onTaskFailed(tf *protos.TaskFailedEvent) error 
 	return nil
 }
 
+func (ctx *OrchestrationContext) onSubOrchestrationScheduled(taskID int32, ts *protos.SubOrchestrationInstanceCreatedEvent) error {
+	if a, ok := ctx.pendingActions[taskID]; !ok || a.GetCreateSubOrchestration() == nil {
+		return fmt.Errorf(
+			"a previous execution called CallSubOrchestrator for '%s' and sequence number %d at this point in the orchestration logic, but the current execution doesn't have this action with this sequence number",
+			ts.Name,
+			taskID,
+		)
+	}
+	delete(ctx.pendingActions, taskID)
+	return nil
+}
+
+func (ctx *OrchestrationContext) onSubOrchestrationCompleted(soc *protos.SubOrchestrationInstanceCompletedEvent) error {
+	taskID := soc.TaskScheduledId
+	task, ok := ctx.pendingTasks[taskID]
+	if !ok {
+		// TODO: This could be a duplicate event or it could be a non-deterministic orchestration.
+		//       Duplicate events should be handled gracefully with a warning. Otherwise, the
+		//       orchestration should probably fail with an error.
+		return nil
+	}
+	delete(ctx.pendingTasks, taskID)
+
+	// completing a task will resume the corresponding Await() call
+	if soc.Result != nil {
+		task.complete([]byte(soc.Result.Value))
+	} else {
+		task.complete(nil)
+	}
+	return nil
+}
+
+func (ctx *OrchestrationContext) onSubOrchestrationFailed(sof *protos.SubOrchestrationInstanceFailedEvent) error {
+	taskID := sof.TaskScheduledId
+	task, ok := ctx.pendingTasks[taskID]
+	if !ok {
+		// TODO: This could be a duplicate event or it could be a non-deterministic orchestration.
+		//       Duplicate events should be handled gracefully with a warning. Otherwise, the
+		//       orchestration should probably fail with an error.
+		return nil
+	}
+	delete(ctx.pendingTasks, taskID)
+
+	// completing a task will resume the corresponding Await() call
+	task.fail(sof.FailureDetails)
+	return nil
+}
+
 func (ctx *OrchestrationContext) onTimerCreated(e *protos.HistoryEvent) error {
 	if a, ok := ctx.pendingActions[e.EventId]; !ok || a.GetCreateTimer() == nil {
 		return fmt.Errorf(
@@ -418,20 +537,63 @@ func (ctx *OrchestrationContext) onExecutionResumed(er *protos.ExecutionResumedE
 	return nil
 }
 
+func (ctx *OrchestrationContext) onExecutionTerminated(et *protos.ExecutionTerminatedEvent) error {
+	if et.Recurse {
+		// Use a map to track which sub-orchestrations have been created but not completed
+		instancesToTerminate := make(map[int32]string)
+		for _, e := range ctx.oldEvents {
+			if created := e.GetSubOrchestrationInstanceCreated(); created != nil {
+				instancesToTerminate[e.EventId] = created.InstanceId
+			} else if completed := e.GetSubOrchestrationInstanceCompleted(); completed != nil {
+				delete(instancesToTerminate, completed.TaskScheduledId)
+			} else if failed := e.GetSubOrchestrationInstanceFailed(); failed != nil {
+				delete(instancesToTerminate, failed.TaskScheduledId)
+			}
+		}
+		for _, e := range ctx.newEvents {
+			if created := e.GetSubOrchestrationInstanceCreated(); created != nil {
+				instancesToTerminate[e.EventId] = created.InstanceId
+			} else if completed := e.GetSubOrchestrationInstanceCompleted(); completed != nil {
+				delete(instancesToTerminate, completed.TaskScheduledId)
+			} else if failed := e.GetSubOrchestrationInstanceFailed(); failed != nil {
+				delete(instancesToTerminate, failed.TaskScheduledId)
+			}
+		}
+
+		// Create a terminate action for each sub-orchestration that has not yet completed
+		for _, instanceID := range instancesToTerminate {
+			terminateAction := helpers.NewTerminateOrchestrationAction(
+				ctx.getNextSequenceNumber(),
+				instanceID,
+				et.Recurse,
+				et.Input)
+			ctx.pendingActions[terminateAction.Id] = terminateAction
+		}
+	}
+	if err := ctx.setCompleteInternal(et.Input, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (ctx *OrchestrationContext) setComplete(output any) error {
 	status := protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
-	if err := ctx.setCompleteInternal(output, status, nil); err != nil {
+	var rawOutput *wrapperspb.StringValue
+	if output != nil {
+		bytes, err := json.Marshal(output)
+		if err != nil {
+			return fmt.Errorf("failed to marshal output to JSON: %w", err)
+		}
+		rawOutput = wrapperspb.String(string(bytes))
+	}
+	if err := ctx.setCompleteInternal(rawOutput, status, nil); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (ctx *OrchestrationContext) setFailed(appError error) error {
-	fd := &protos.TaskFailureDetails{
-		ErrorType:    reflect.TypeOf(appError).String(),
-		ErrorMessage: appError.Error(),
-	}
-
+	fd := helpers.NewTaskFailureDetails(appError)
 	failedStatus := protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED
 	if err := ctx.setCompleteInternal(nil, failedStatus, fd); err != nil {
 		return err
@@ -441,26 +603,25 @@ func (ctx *OrchestrationContext) setFailed(appError error) error {
 
 func (ctx *OrchestrationContext) setContinuedAsNew() error {
 	status := protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW
-	if err := ctx.setCompleteInternal(ctx.continuedAsNewInput, status, nil); err != nil {
+	var newRawInput *wrapperspb.StringValue
+	if ctx.continuedAsNewInput != nil {
+		bytes, err := json.Marshal(ctx.continuedAsNewInput)
+		if err != nil {
+			return fmt.Errorf("failed to marshal continue-as-new payload to JSON: %w", err)
+		}
+		newRawInput = wrapperspb.String(string(bytes))
+	}
+	if err := ctx.setCompleteInternal(newRawInput, status, nil); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (ctx *OrchestrationContext) setCompleteInternal(
-	result any,
+	rawResult *wrapperspb.StringValue,
 	status protos.OrchestrationStatus,
 	failureDetails *protos.TaskFailureDetails,
 ) error {
-	var rawResult string
-	if result != nil {
-		bytes, err := json.Marshal(result)
-		if err != nil {
-			return fmt.Errorf("failed to marshal orchestrator output to JSON: %w", err)
-		}
-		rawResult = string(bytes)
-	}
-
 	sequenceNumber := ctx.getNextSequenceNumber()
 	completedAction := helpers.NewCompleteOrchestrationAction(
 		sequenceNumber,

@@ -73,13 +73,13 @@ func ConfigureZipkinTracing() *trace.TracerProvider {
 // DistributedTraceSampleOrchestrator is a simple orchestration that's intended to generate
 // distributed trace output to the configured exporter (e.g. zipkin).
 func DistributedTraceSampleOrchestrator(ctx *task.OrchestrationContext) (any, error) {
-	if err := ctx.CallActivity(DoWorkActivity, 1*time.Second).Await(nil); err != nil {
+	if err := ctx.CallActivity(DoWorkActivity, task.WithActivityInput(1*time.Second)).Await(nil); err != nil {
 		return nil, err
 	}
 	if err := ctx.CreateTimer(2 * time.Second).Await(nil); err != nil {
 		return nil, err
 	}
-	if err := ctx.CallActivity(CallHttpEndpointActivity, "https://bing.com").Await(nil); err != nil {
+	if err := ctx.CallActivity(CallHttpEndpointActivity, task.WithActivityInput("https://bing.com")).Await(nil); err != nil {
 		return nil, err
 	}
 	return nil, nil

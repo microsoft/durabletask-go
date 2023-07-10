@@ -172,7 +172,7 @@ func Test_SingleActivity(t *testing.T) {
 			return nil, err
 		}
 		var output string
-		err := ctx.CallActivity("SayHello", input).Await(&output)
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		return output, err
 	})
 	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
@@ -214,7 +214,7 @@ func Test_ActivityChain(t *testing.T) {
 	r.AddOrchestratorN("ActivityChain", func(ctx *task.OrchestrationContext) (any, error) {
 		val := 0
 		for i := 0; i < 10; i++ {
-			if err := ctx.CallActivity("PlusOne", val).Await(&val); err != nil {
+			if err := ctx.CallActivity("PlusOne", task.WithActivityInput(val)).Await(&val); err != nil {
 				return nil, err
 			}
 		}
@@ -261,7 +261,7 @@ func Test_ActivityFanOut(t *testing.T) {
 	r.AddOrchestratorN("ActivityFanOut", func(ctx *task.OrchestrationContext) (any, error) {
 		tasks := []task.Task{}
 		for i := 0; i < 10; i++ {
-			tasks = append(tasks, ctx.CallActivity("ToString", i))
+			tasks = append(tasks, ctx.CallActivity("ToString", task.WithActivityInput(i)))
 		}
 		results := []string{}
 		for _, t := range tasks {
@@ -307,6 +307,82 @@ func Test_ActivityFanOut(t *testing.T) {
 	assertSpanSequence(t, spans,
 		assertOrchestratorCreated("ActivityFanOut", id),
 		// TODO: Find a way to assert an unordered sequence of traces since the order of activity traces is non-deterministic.
+	)
+}
+
+func Test_SingleSubOrchestrator_Completed(t *testing.T) {
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+		var input any
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output any
+		err := ctx.CallSubOrchestrator(
+			"Child",
+			task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_child"),
+			task.WithSubOrchestratorInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return "", err
+		}
+		return input, nil
+	})
+
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	id, err := client.ScheduleNewOrchestration(ctx, "Parent", api.WithInput("Hello, world!"))
+	require.NoError(t, err)
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	assert.Equal(t, `"Hello, world!"`, metadata.SerializedOutput)
+
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("Parent", id),
+		assertOrchestratorExecuted("Child", id+"_child", "COMPLETED"),
+		assertOrchestratorExecuted("Parent", id, "COMPLETED"),
+	)
+}
+
+func Test_SingleSubOrchestrator_Failed(t *testing.T) {
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+		err := ctx.CallSubOrchestrator(
+			"Child",
+			task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_child")).Await(nil)
+		return nil, err
+	})
+	r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
+		return nil, errors.New("Child failed")
+	})
+
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	id, err := client.ScheduleNewOrchestration(ctx, "Parent")
+	require.NoError(t, err)
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+	if assert.NotNil(t, metadata.FailureDetails) {
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "Child failed")
+	}
+
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("Parent", id),
+		assertOrchestratorExecuted("Child", id+"_child", "FAILED"),
+		assertOrchestratorExecuted("Parent", id, "FAILED"),
 	)
 }
 
@@ -390,9 +466,9 @@ func Test_ContinueAsNew_Events(t *testing.T) {
 	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest", api.WithInput(0))
 	require.NoError(t, err)
 	for i := 0; i < 10; i++ {
-		require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithJsonEventPayload(false)))
+		require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithEventPayload(false)))
 	}
-	require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithJsonEventPayload(true)))
+	require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithEventPayload(true)))
 	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
@@ -425,7 +501,7 @@ func Test_ExternalEventOrchestration(t *testing.T) {
 	id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestration", api.WithInput(0))
 	if assert.NoError(t, err) {
 		for i := 0; i < eventCount; i++ {
-			opts := api.WithJsonEventPayload(i)
+			opts := api.WithEventPayload(i)
 			require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", opts))
 		}
 
@@ -559,7 +635,7 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 
 	// Raise a bunch of events to the orchestration (they should get buffered but not consumed)
 	for i := 0; i < eventCount; i++ {
-		opts := api.WithJsonEventPayload(i)
+		opts := api.WithEventPayload(i)
 		require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", opts))
 	}
 
@@ -602,6 +678,42 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 			assertExternalEvent("MyEvent", eventSizeInBytes),
 			assertResumedEvent(),
 		)),
+	)
+}
+
+func Test_TerminateOrchestration(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("MyOrchestrator", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CreateTimer(3 * time.Second).Await(nil)
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration, which will block waiting for external events
+	id, err := client.ScheduleNewOrchestration(ctx, "MyOrchestrator")
+	require.NoError(t, err)
+
+	// Terminate the orchestration before the timer expires
+	require.NoError(t, client.TerminateOrchestration(ctx, id, api.WithOutput("You got terminated!")))
+
+	// Wait for the orchestration to complete
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	require.True(t, metadata.IsComplete())
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, metadata.RuntimeStatus)
+	require.Equal(t, `"You got terminated!"`, metadata.SerializedOutput)
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("MyOrchestrator", id),
+		assertOrchestratorExecuted("MyOrchestrator", id, "TERMINATED"),
 	)
 }
 
