@@ -120,7 +120,12 @@ func Test_CompletedSubOrchestration(t *testing.T) {
 	})
 
 	actions := []*protos.OrchestratorAction{
-		helpers.NewCompleteOrchestrationAction(expectedTaskID, status, expectedOutput, []*protos.HistoryEvent{}, nil),
+		helpers.NewCompleteOrchestrationAction(
+			expectedTaskID,
+			status,
+			wrapperspb.String(expectedOutput),
+			[]*protos.HistoryEvent{},
+			nil),
 	}
 
 	continuedAsNew, err := s.ApplyActions(actions, nil)
@@ -163,7 +168,7 @@ func Test_RuntimeState_ContinueAsNew(t *testing.T) {
 		helpers.NewCompleteOrchestrationAction(
 			expectedTaskID,
 			protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
-			continueAsNewInput,
+			wrapperspb.String(continueAsNewInput),
 			carryoverEvents,
 			nil),
 	}

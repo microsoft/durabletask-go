@@ -32,7 +32,7 @@ func RunExternalEventsSample() {
 		fmt.Println("Enter your first name: ")
 		var nameInput string
 		fmt.Scanln(&nameInput)
-		if err = client.RaiseEvent(ctx, id, "Name", api.WithJsonEventPayload(nameInput)); err != nil {
+		if err = client.RaiseEvent(ctx, id, "Name", api.WithEventPayload(nameInput)); err != nil {
 			panic(err)
 		}
 	}()

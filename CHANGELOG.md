@@ -14,6 +14,8 @@ Go in an out-of-process worker process. It also contains various minor improveme
 
 - Added `client` package with `TaskHubGrpcClient` and related functions
 - Added otel span events for external events, suspend, and resume operations
+- Added termination support to task module
+- Added sub-orchestration support to task module
 - (Tests) Added test suite starter for Go-based orchestration execution logic
 
 ### Changed
@@ -21,6 +23,11 @@ Go in an out-of-process worker process. It also contains various minor improveme
 - Renamed `WithJsonSerializableEventData` to `WithJsonEventPayload`
 - Moved gRPC client and related functions from `api` package to `client` package
 - Switched SQLite driver to pure-Go implementation (no CGO dependency) ([#17](https://github.com/microsoft/durabletask-go/pull/17)) - contributed by [@ItalyPaleAle](https://github.com/ItalyPaleAle)
+- Orchestration metadata fetching now gets input and output data by default (previously had to opt-in)
+- Removed "input" parameter from CallActivity APIs and replaced with options pattern
+- Removed "reason" parameter from Termination APIs and replaced with options pattern
+- Renamed api.WithJsonEventPayload to api.WithEventPayload
+- Separate gRPC service registration from NewGrpcExecutor ([#26](https://github.com/microsoft/durabletask-go/pull/26)) - contributed by [@ItalyPaleAle](https://github.com/ItalyPaleAle)
 - (Tests) Switched from `assert` to `require` in several tests to simplify code
 
 ### Fixed
