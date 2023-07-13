@@ -37,7 +37,6 @@ type activityExecutionResult struct {
 }
 
 type Executor interface {
-	RegisterServer(grpcServer grpc.ServiceRegistrar)
 	ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*ExecutionResults, error)
 	ExecuteActivity(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error)
 }
@@ -76,8 +75,9 @@ func WithStreamShutdownChannel(c <-chan any) grpcExecutorOptions {
 	}
 }
 
-func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) Executor {
-	executor := &grpcExecutor{
+// NewGrpcExecutor returns the Executor object and a method to invoke to register the gRPC server in the executor.
+func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) (executor Executor, registerServerFn func(grpcServer grpc.ServiceRegistrar)) {
+	grpcExecutor := &grpcExecutor{
 		workItemQueue:        make(chan *protos.WorkItem),
 		backend:              be,
 		logger:               logger,
@@ -86,15 +86,12 @@ func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) Exe
 	}
 
 	for _, opt := range opts {
-		opt(executor)
+		opt(grpcExecutor)
 	}
 
-	return executor
-}
-
-// RegisterServer registers the gRPC server
-func (executor *grpcExecutor) RegisterServer(grpcServer grpc.ServiceRegistrar) {
-	protos.RegisterTaskHubSidecarServiceServer(grpcServer, executor)
+	return grpcExecutor, func(grpcServer grpc.ServiceRegistrar) {
+		protos.RegisterTaskHubSidecarServiceServer(grpcServer, grpcExecutor)
+	}
 }
 
 // ExecuteOrchestrator implements Executor
