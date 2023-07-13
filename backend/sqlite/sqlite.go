@@ -79,13 +79,6 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 		be.dsn = opts.FilePath
 	}
 
-	// See https://www.sqlite.org/sharedcache.html#shared_cache_and_in_memory_databases.
-	// Note that we only set ?cache=shared when using the default in-memory database DSN.
-	// Users can overide this by specifying a specific DSN.
-	if be.dsn == "file::memory:" {
-		be.dsn += "?cache=shared"
-	}
-
 	return be
 }
 
