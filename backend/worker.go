@@ -92,19 +92,19 @@ func (w *worker) Start(ctx context.Context) {
 	w.cancel = cancel
 
 	go func() {
-		b := backoff.ExponentialBackOff{
-			InitialInterval:     50 * time.Millisecond,
-			MaxInterval:         5 * time.Second,
-			Multiplier:          1.05,
-			RandomizationFactor: 0.05,
-			Stop:                backoff.Stop,
-			Clock:               backoff.SystemClock,
-		}
-		b.Reset()
-
 	loop:
 		for {
-			ticker := backoff.NewTicker(&b)
+			b := &backoff.ExponentialBackOff{
+				InitialInterval:     50 * time.Millisecond,
+				MaxInterval:         5 * time.Second,
+				Multiplier:          1.05,
+				RandomizationFactor: 0.05,
+				Stop:                backoff.Stop,
+				Clock:               backoff.SystemClock,
+			}
+			b.Reset()
+
+			ticker := backoff.NewTicker(b)
 			defer ticker.Stop()
 
 			w.waiting = false
