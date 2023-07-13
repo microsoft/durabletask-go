@@ -27,6 +27,7 @@ Go in an out-of-process worker process. It also contains various minor improveme
 - Removed "input" parameter from CallActivity APIs and replaced with options pattern
 - Removed "reason" parameter from Termination APIs and replaced with options pattern
 - Renamed api.WithJsonEventPayload to api.WithEventPayload
+- Separate gRPC service registration from NewGrpcExecutor ([#26](https://github.com/microsoft/durabletask-go/pull/26)) - contributed by [@ItalyPaleAle](https://github.com/ItalyPaleAle)
 - (Tests) Switched from `assert` to `require` in several tests to simplify code
 
 ### Fixed

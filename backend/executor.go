@@ -38,7 +38,6 @@ type activityExecutionResult struct {
 
 type Executor interface {
 	ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*ExecutionResults, error)
-
 	ExecuteActivity(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error)
 }
 
@@ -76,8 +75,9 @@ func WithStreamShutdownChannel(c <-chan any) grpcExecutorOptions {
 	}
 }
 
-func NewGrpcExecutor(grpcServer *grpc.Server, be Backend, logger Logger, opts ...grpcExecutorOptions) Executor {
-	executor := &grpcExecutor{
+// NewGrpcExecutor returns the Executor object and a method to invoke to register the gRPC server in the executor.
+func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) (executor Executor, registerServerFn func(grpcServer grpc.ServiceRegistrar)) {
+	grpcExecutor := &grpcExecutor{
 		workItemQueue:        make(chan *protos.WorkItem),
 		backend:              be,
 		logger:               logger,
@@ -86,11 +86,12 @@ func NewGrpcExecutor(grpcServer *grpc.Server, be Backend, logger Logger, opts ..
 	}
 
 	for _, opt := range opts {
-		opt(executor)
+		opt(grpcExecutor)
 	}
 
-	protos.RegisterTaskHubSidecarServiceServer(grpcServer, executor)
-	return executor
+	return grpcExecutor, func(grpcServer grpc.ServiceRegistrar) {
+		protos.RegisterTaskHubSidecarServiceServer(grpcServer, grpcExecutor)
+	}
 }
 
 // ExecuteOrchestrator implements Executor
@@ -130,7 +131,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 }
 
 // ExecuteActivity implements Executor
-func (executor grpcExecutor) ExecuteActivity(ctx context.Context, iid api.InstanceID, e *protos.HistoryEvent) (*protos.HistoryEvent, error) {
+func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.InstanceID, e *protos.HistoryEvent) (*protos.HistoryEvent, error) {
 	key := getActivityExecutionKey(string(iid), e.EventId)
 	result := &activityExecutionResult{complete: make(chan interface{})}
 	executor.pendingActivities.Store(key, result)
