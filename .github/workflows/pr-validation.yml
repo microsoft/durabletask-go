@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: [ '1.19.x', '1.18.x' ]
+        go-version: [ '1.20.x', '1.19.x', '1.18.x' ]
         
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE
@@ -38,4 +38,4 @@ jobs:
         run: go get .
         
       - name: Run integration tests
-        run: go test ./tests -coverpkg ./api,./task,./backend/...,./internal/helpers
+        run: go test ./tests/... -coverpkg ./api,./task,./client,./backend/...,./internal/helpers
