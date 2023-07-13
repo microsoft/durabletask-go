@@ -130,7 +130,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 }
 
 // ExecuteActivity implements Executor
-func (executor grpcExecutor) ExecuteActivity(ctx context.Context, iid api.InstanceID, e *protos.HistoryEvent) (*protos.HistoryEvent, error) {
+func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.InstanceID, e *protos.HistoryEvent) (*protos.HistoryEvent, error) {
 	key := getActivityExecutionKey(string(iid), e.EventId)
 	result := &activityExecutionResult{complete: make(chan interface{})}
 	executor.pendingActivities.Store(key, result)
