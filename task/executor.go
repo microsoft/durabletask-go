@@ -9,6 +9,7 @@ import (
 	"github.com/microsoft/durabletask-go/backend"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -21,6 +22,11 @@ func NewTaskExecutor(registry *TaskRegistry) backend.Executor {
 	return &taskExecutor{
 		Registry: registry,
 	}
+}
+
+// RegisterServer registers the gRPC server
+func (executor *taskExecutor) RegisterServer(grpcServer grpc.ServiceRegistrar) {
+	// Nop for the taskExecutor
 }
 
 // ExecuteActivity implements backend.Executor and executes an activity function in the current goroutine.

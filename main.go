@@ -43,7 +43,8 @@ func main() {
 func createTaskHubWorker(server *grpc.Server, sqliteFilePath string, logger backend.Logger) backend.TaskHubWorker {
 	sqliteOptions := sqlite.NewSqliteOptions(sqliteFilePath)
 	be := sqlite.NewSqliteBackend(sqliteOptions, logger)
-	executor := backend.NewGrpcExecutor(server, be, logger)
+	executor := backend.NewGrpcExecutor(be, logger)
+	executor.RegisterServer(server)
 	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
 	activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
 	taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
