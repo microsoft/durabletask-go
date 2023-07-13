@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v0.3.0] - 2023-07-12
 
 This is a breaking change release that introduces the ability to run workflows in 
 Go in an out-of-process worker process. It also contains various minor improvements.
@@ -28,6 +28,7 @@ Go in an out-of-process worker process. It also contains various minor improveme
 - Removed "reason" parameter from Termination APIs and replaced with options pattern
 - Renamed api.WithJsonEventPayload to api.WithEventPayload
 - Separate gRPC service registration from NewGrpcExecutor ([#26](https://github.com/microsoft/durabletask-go/pull/26)) - contributed by [@ItalyPaleAle](https://github.com/ItalyPaleAle)
+- Bump google.golang.org/grpc from 1.50.0 to 1.53.0 ([#23](https://github.com/microsoft/durabletask-go/pull/23))
 - (Tests) Switched from `assert` to `require` in several tests to simplify code
 
 ### Fixed
