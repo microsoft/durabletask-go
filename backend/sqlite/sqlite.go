@@ -78,6 +78,14 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 	} else {
 		be.dsn = opts.FilePath
 	}
+
+	// See https://www.sqlite.org/sharedcache.html#shared_cache_and_in_memory_databases.
+	// Note that we only set ?cache=shared when using the default in-memory database DSN.
+	// Users can overide this by specifying a specific DSN.
+	if be.dsn == "file::memory:" {
+		be.dsn += "?cache=shared"
+	}
+
 	return be
 }
 
@@ -93,9 +101,11 @@ func (be *sqliteBackend) CreateTaskHub(context.Context) error {
 		panic(fmt.Errorf("failed to initialize the database: %w", err))
 	}
 
-	if be.options.FilePath == "" {
-		db.SetMaxOpenConns(1)
-	}
+	// TODO: This is to avoid SQLITE_BUSY errors when there are concurrent
+	//       operations on the database. However, it can hurt performance.
+	//	     We should consider removing this and looking for alternate
+	//       solutions if sqlite performance becomes a problem for users.
+	db.SetMaxOpenConns(1)
 
 	be.db = db
 
@@ -254,7 +264,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	if err != nil {
 		return fmt.Errorf("failed to get the number of rows affected by the Instance table update: %w", err)
 	} else if count == 0 {
-		return fmt.Errorf("instance '%s' no longer exists or was locked by a different worker!", string(wi.InstanceID))
+		return fmt.Errorf("instance '%s' no longer exists or was locked by a different worker", string(wi.InstanceID))
 	}
 
 	// If continue-as-new, delete all existing history
@@ -666,6 +676,9 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 		instanceID,
 		now,
 	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query for orchestration work-items: %w", err)
+	}
 
 	maxDequeueCount := int32(0)
 
@@ -690,7 +703,7 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 	}
 
 	if err = tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to fetch orchestration work-item: %w", err)
+		return nil, fmt.Errorf("failed to update orchestration work-item: %w", err)
 	}
 
 	wi := &backend.OrchestrationWorkItem{

@@ -15,7 +15,7 @@ import (
 
 var (
 	port       = flag.Int("port", 4001, "The server port")
-	dbFilePath = flag.String("db", "taskhub.sqlite3", "The path to the sqlite file to use (or create if not exists)")
+	dbFilePath = flag.String("db", "", "The path to the sqlite file to use (or create if not exists)")
 	ctx        = context.Background()
 )
 
