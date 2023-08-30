@@ -90,23 +90,20 @@ func (w *worker) Start(ctx context.Context) {
 	// TODO: Check for already started worker
 	ctx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
-
+	b := &backoff.ExponentialBackOff{
+		InitialInterval:     50 * time.Millisecond,
+		MaxInterval:         5 * time.Second,
+		Multiplier:          1.05,
+		RandomizationFactor: 0.05,
+		Stop:                backoff.Stop,
+		Clock:               backoff.SystemClock,
+	}
 	go func() {
+		ticker := backoff.NewTicker(b)
+		defer ticker.Stop()
 	loop:
 		for {
-			b := &backoff.ExponentialBackOff{
-				InitialInterval:     50 * time.Millisecond,
-				MaxInterval:         5 * time.Second,
-				Multiplier:          1.05,
-				RandomizationFactor: 0.05,
-				Stop:                backoff.Stop,
-				Clock:               backoff.SystemClock,
-			}
 			b.Reset()
-
-			ticker := backoff.NewTicker(b)
-			defer ticker.Stop()
-
 			w.waiting = false
 		ticker:
 			for range ticker.C {
@@ -118,7 +115,6 @@ func (w *worker) Start(ctx context.Context) {
 				default:
 					if ok, err := w.ProcessNext(ctx); ok {
 						// found a work item - reset the ticker to check for the next one right away
-						ticker.Stop()
 						break ticker
 					} else if err != nil && errors.Is(err, ctx.Err()) {
 						w.logger.Infof("%v: received cancellation signal", w.Name())
