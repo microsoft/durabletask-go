@@ -120,19 +120,27 @@ func (w *worker) Start(ctx context.Context) {
 				// another error was encountered
 				// log the error and inject some extra sleep to avoid tight failure loops
 				w.logger.Errorf("unexpected worker error: %v. Adding 5 extra seconds of backoff.", err)
+				t := time.NewTimer(5 * time.Second)
 				select {
-				case <-time.After(5 * time.Second):
+				case <-t.C:
 					// nop - all good
 				case <-ctx.Done():
+					if !t.Stop() {
+						<-t.C
+					}
 					w.logger.Infof("%v: received cancellation signal", w.Name())
 					break loop
 				}
 			default:
 				// no work item found, so sleep until the next backoff
+				t := time.NewTimer(b.NextBackOff())
 				select {
-				case <-time.After(b.NextBackOff()):
+				case <-t.C:
 					// nop - all good
 				case <-ctx.Done():
+					if !t.Stop() {
+						<-t.C
+					}
 					w.logger.Infof("%v: received cancellation signal", w.Name())
 					break loop
 				}

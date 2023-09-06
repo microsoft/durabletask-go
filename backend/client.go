@@ -106,10 +106,14 @@ func (c *backendClient) waitForOrchestrationCondition(ctx context.Context, id ap
 	b.Reset()
 
 	for {
+		t := time.NewTimer(b.NextBackOff())
 		select {
 		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
 			return nil, ctx.Err()
-		case <-time.After(b.NextBackOff()):
+		case <-t.C:
 			metadata, err := c.FetchOrchestrationMetadata(ctx, id)
 			if err != nil {
 				return nil, err

@@ -360,7 +360,7 @@ func (g *grpcExecutor) WaitForInstanceStart(ctx context.Context, req *protos.Get
 func (g *grpcExecutor) waitForInstance(ctx context.Context, req *protos.GetInstanceRequest, condition func(*api.OrchestrationMetadata) bool) (*protos.GetInstanceResponse, error) {
 	iid := api.InstanceID(req.InstanceId)
 
-	b := backoff.ExponentialBackOff{
+	var b backoff.BackOff = &backoff.ExponentialBackOff{
 		InitialInterval:     1 * time.Millisecond,
 		MaxInterval:         3 * time.Second,
 		Multiplier:          1.5,
@@ -368,17 +368,20 @@ func (g *grpcExecutor) waitForInstance(ctx context.Context, req *protos.GetInsta
 		Stop:                backoff.Stop,
 		Clock:               backoff.SystemClock,
 	}
+	b = backoff.WithContext(b, ctx)
 	b.Reset()
 
-	ticker := backoff.NewTicker(&b)
-	defer ticker.Stop()
-
 loop:
-	for range ticker.C {
+	for {
+		t := time.NewTimer(b.NextBackOff())
 		select {
 		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
 			break loop
-		default:
+
+		case <-t.C:
 			metadata, err := g.backend.GetOrchestrationMetadata(ctx, iid)
 			if err != nil {
 				return nil, err
