@@ -109,7 +109,7 @@ func (w *worker) Start(ctx context.Context) {
 		ticker:
 			for range ticker.C {
 				if ok, err := w.ProcessNext(ctx); ok {
-					// found a work item - reset the ticker to check for the next one right away
+					// found a work item - reset the backoff and check for the next item
 					break ticker
 				} else if err != nil && errors.Is(err, ctx.Err()) {
 					w.logger.Infof("%v: received cancellation signal", w.Name())
