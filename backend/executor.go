@@ -57,7 +57,7 @@ type grpcExecutorOptions func(g *grpcExecutor)
 // IsDurableTaskGrpcRequest returns true if the specified gRPC method name represents an operation
 // that is compatible with the gRPC executor.
 func IsDurableTaskGrpcRequest(fullMethodName string) bool {
-	return strings.Index(fullMethodName, "/TaskHubSidecarService") == 0
+	return strings.HasPrefix(fullMethodName, "/TaskHubSidecarService/")
 }
 
 // WithOnGetWorkItemsConnectionCallback allows the caller to get a notification when an external process
