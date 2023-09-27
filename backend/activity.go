@@ -49,7 +49,7 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, wi WorkItem) er
 
 	ts := awi.NewEvent.GetTaskScheduled()
 	if ts == nil {
-		return fmt.Errorf("invalid TaskScheduled event")
+		return fmt.Errorf("%v: invalid TaskScheduled event", awi.InstanceID)
 	}
 
 	// Create span as child of spanContext found in TaskScheduledEvent
@@ -85,8 +85,11 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, wi WorkItem) er
 // CompleteWorkItem implements TaskDispatcher
 func (ap *activityProcessor) CompleteWorkItem(ctx context.Context, wi WorkItem) error {
 	awi := wi.(*ActivityWorkItem)
+	if awi.Result == nil {
+		return fmt.Errorf("can't complete work item '%s' with nil result", wi.Description())
+	}
 	if awi.Result.GetTaskCompleted() == nil && awi.Result.GetTaskFailed() == nil {
-		return fmt.Errorf("invalid result on activity work item '%s'", wi.Description())
+		return fmt.Errorf("can't complete work item '%s', which isn't TaskCompleted or TaskFailed", wi.Description())
 	}
 
 	return ap.be.CompleteActivityWorkItem(ctx, awi)
