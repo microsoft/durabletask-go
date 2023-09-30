@@ -115,6 +115,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 	// This will block if the worker isn't listening for work items.
 	select {
 	case <-ctx.Done():
+		executor.logger.Warnf("%s: context canceled before dispatching orchestrator work item", iid)
 		return nil, ctx.Err()
 	case executor.workItemQueue <- workItem:
 	}
@@ -123,6 +124,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 	// TODO: Timeout logic - i.e. handle the case where we never hear back from the remote worker (due to a hang, etc.).
 	select {
 	case <-ctx.Done():
+		executor.logger.Warnf("%s: context canceled before receiving orchestrator result", iid)
 		return nil, ctx.Err()
 	case <-result.complete:
 	}
@@ -154,6 +156,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 	// This will block if the worker isn't listening for work items.
 	select {
 	case <-ctx.Done():
+		executor.logger.Warnf("%s/%s#%d: context canceled before dispatching activity work item", iid, task.Name, e.EventId)
 		return nil, ctx.Err()
 	case executor.workItemQueue <- workItem:
 	}
@@ -162,6 +165,8 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 	// TODO: Timeout logic
 	select {
 	case <-ctx.Done():
+		executor.logger.Warnf("%s/%s#%d: context canceled before receiving activity result", iid, task.Name, e.EventId)
+		return nil, ctx.Err()
 	case <-result.complete:
 	}
 

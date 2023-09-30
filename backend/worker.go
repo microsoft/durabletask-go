@@ -216,6 +216,7 @@ func (w *worker) processWorkItem(ctx context.Context, wi WorkItem) {
 		if err := w.processor.AbandonWorkItem(ctx, wi); err != nil {
 			w.logger.Errorf("%v: failed to abandon work item: %v", w.Name(), err)
 		}
+		return
 	}
 
 	if err := w.processor.CompleteWorkItem(ctx, wi); err != nil {
