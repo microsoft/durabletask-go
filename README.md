@@ -12,7 +12,13 @@ The Durable Task engine is also intended to be used as the basis for the [Dapr e
 
 ## Storage providers
 
-This project includes a [sqlite](https://sqlite.org/) storage provider for persisting app state to disk.
+This project includes a couple different storage providers for storing orchestration state. Additional storage providers can be created by extending the `Backend` interface.
+
+### [Sqlite](https://sqlite.org/)
+
+The sqlite backend is the default storage provider. It stores all state in a single sqlite3 file (or in-memory) and is intended to be used primarily for local development and testing.
+
+Use the following code to create a new sqlite-based backend storage provider.
 
 ```go
 // Persists state to a file named test.sqlite3. Use "" for in-memory storage.
@@ -20,7 +26,23 @@ options := sqlite.NewSqliteOptions("test.sqlite3")
 be := sqlite.NewSqliteBackend(options, backend.DefaultLogger())
 ```
 
-Additional storage providers can be created by extending the `Backend` interface.
+### [PostgreSQL](https://www.postgresql.org/)
+
+The PostgreSQL backend stores orchestration state in a database that you provide. To avoid conflicts with existing database schema, it creates its tables in a separate schema named `durabletask`.
+
+Use the following code to create a new PostgreSQL-based backend storage provider.
+
+```go
+postgresOptions := postgres.NewPostgresOptions()
+postgresOptions.Host = "localhost"
+postgresOptions.Port = 5432
+postgresOptions.DBName = "durabledb"
+postgresOptions.Password = "secret"
+
+be := postgres.NewPostgresBackend(postgresOptions, backend.DefaultLogger())
+```
+
+The database schema will be provisioned automatically when the worker starts up. You can view the schema [here](./backend/postgres/schema.sql).
 
 ## Creating the standalone gRPC sidecar
 
@@ -249,7 +271,7 @@ git clone --recurse-submodules https://github.com/microsoft/durabletask-go
 
 ## Building the project
 
-This project requires go v1.18.x or greater. You can build a standalone executable by simply running `go build` at the project root.
+This project requires go v1.20.x or greater. You can build a standalone executable by simply running `go build` at the project root.
 
 ### Generating protobuf
 
@@ -326,6 +348,8 @@ Total tests: 33
 ## Running locally
 
 You can run the engine locally by pressing `F5` in [Visual Studio Code](https://code.visualstudio.com/) (the recommended editor). You can also simply run `go run main.go` to start a local Durable Task gRPC server that listens on port 4001.
+
+The following command will run a durable task host process with a sqlite database file named `test.sqlite3` for storing state.
 
 ```bash
 go run main.go --port 4001 --db ./test.sqlite3
