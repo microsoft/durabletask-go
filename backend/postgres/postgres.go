@@ -18,7 +18,7 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 //go:embed schema.sql
@@ -93,7 +93,7 @@ func NewPostgresBackend(opts *PostgresOptions, logger backend.Logger) backend.Ba
 
 // CreateTaskHub creates the postgres database and applies the schema
 func (be *postgresBackend) CreateTaskHub(context.Context) error {
-	db, err := sql.Open("postgres", be.connStr)
+	db, err := sql.Open("pgx", be.connStr)
 	if err != nil {
 		panic(fmt.Errorf("failed to open the database: %w", err))
 	}
