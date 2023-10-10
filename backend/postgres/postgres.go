@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,53 +27,20 @@ var schema string
 
 var emptyString string = ""
 
-type PostgresOptions struct {
-	Host     string
-	Port     int
-	User     string
-	Password string
-	DBName   string
-	SSLMode  string // can be 'disable', 'require', etc.
-
-	OrchestrationLockTimeout time.Duration
-	ActivityLockTimeout      time.Duration
-}
-
-func (opts *PostgresOptions) ConnectionString() string {
-	if opts.Password == "" {
-		return fmt.Sprintf(
-			"host=%s port=%d user=%s dbname=%s sslmode=%s",
-			opts.Host, opts.Port, opts.User, opts.DBName, opts.SSLMode)
-	}
-	return fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		opts.Host, opts.Port, opts.User, opts.Password, opts.DBName, opts.SSLMode)
-}
-
 type postgresBackend struct {
-	connStr    string
-	db         *sql.DB
-	workerName string
-	logger     backend.Logger
-	options    *PostgresOptions
-}
+	connStr     string
+	db          *sql.DB
+	workerName  string
+	logger      backend.Logger
+	initLock    sync.Mutex
+	initialized bool
 
-// NewPostgresOptions creates a new options object for the postgres backend provider.
-func NewPostgresOptions() *PostgresOptions {
-	// Default values are provided for required options
-	return &PostgresOptions{
-		Host:    "localhost",
-		Port:    5432,
-		User:    "postgres",
-		SSLMode: "disable",
-
-		OrchestrationLockTimeout: 2 * time.Minute,
-		ActivityLockTimeout:      2 * time.Minute,
-	}
+	orchestrationLockTimeout time.Duration
+	activityLockTimeout      time.Duration
 }
 
 // NewPostgresBackend creates a new postgres-based Backend object.
-func NewPostgresBackend(opts *PostgresOptions, logger backend.Logger) backend.Backend {
+func NewPostgresBackend(connString string, logger backend.Logger) backend.Backend {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
@@ -82,39 +50,52 @@ func NewPostgresBackend(opts *PostgresOptions, logger backend.Logger) backend.Ba
 	uuidStr := uuid.NewString()
 
 	be := &postgresBackend{
-		connStr:    opts.ConnectionString(),
-		workerName: fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
-		options:    opts,
-		logger:     logger,
+		connStr:                  connString,
+		workerName:               fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
+		logger:                   logger,
+		orchestrationLockTimeout: 2 * time.Minute,
+		activityLockTimeout:      2 * time.Minute,
 	}
 
 	return be
 }
 
 // CreateTaskHub creates the postgres database and applies the schema
-func (be *postgresBackend) CreateTaskHub(context.Context) error {
-	db, err := sql.Open("pgx", be.connStr)
-	if err != nil {
-		panic(fmt.Errorf("failed to open the database: %w", err))
+func (be *postgresBackend) CreateTaskHub(ctx context.Context) error {
+	be.initLock.Lock()
+	defer be.initLock.Unlock()
+
+	if be.db == nil {
+		be.logger.Debug("Opening database connection")
+		db, err := sql.Open("pgx", be.connStr)
+		if err != nil {
+			return fmt.Errorf("failed to open the database: %w", err)
+		}
+		be.db = db
 	}
 
-	// Initialize database
-	if _, err := db.Exec(schema); err != nil {
-		panic(fmt.Errorf("failed to initialize the database: %w", err))
+	if !be.initialized {
+		// Initialize database
+		be.logger.Info("Running database initialization script")
+		if _, err := be.db.Exec(schema); err != nil {
+			return fmt.Errorf("failed to initialize the database: %w", err)
+		}
+		be.initialized = true
 	}
-
-	be.db = db
-
 	return nil
 }
 
 func (be *postgresBackend) DeleteTaskHub(ctx context.Context) error {
+	be.initLock.Lock()
+	defer be.initLock.Unlock()
+
 	if be.db == nil {
 		return nil
 	}
 
 	// Delete all the tables in the durabletask schema
-	if _, err := be.db.Exec("DROP SCHEMA durabletask CASCADE;"); err != nil {
+	be.logger.Info("Dropping durabletask schema from database")
+	if _, err := be.db.Exec("DROP SCHEMA IF EXISTS durabletask CASCADE;"); err != nil {
 		panic(fmt.Errorf("failed to delete the 'durabletask' database schema: %w", err))
 	}
 
@@ -129,7 +110,7 @@ func (be *postgresBackend) DeleteTaskHub(ctx context.Context) error {
 
 // AbandonOrchestrationWorkItem implements backend.Backend
 func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi *backend.OrchestrationWorkItem) error {
-	if err := be.ensureDB(); err != nil {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -190,7 +171,7 @@ func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi 
 
 // CompleteOrchestrationWorkItem implements backend.Backend
 func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *backend.OrchestrationWorkItem) error {
-	if err := be.ensureDB(); err != nil {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -416,7 +397,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 
 // CreateOrchestrationInstance implements backend.Backend
 func (be *postgresBackend) CreateOrchestrationInstance(ctx context.Context, e *backend.HistoryEvent) error {
-	if err := be.ensureDB(); err != nil {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -535,7 +516,7 @@ func (be *postgresBackend) AddNewOrchestrationEvent(ctx context.Context, iid api
 
 // GetOrchestrationMetadata implements backend.Backend
 func (be *postgresBackend) GetOrchestrationMetadata(ctx context.Context, iid api.InstanceID) (*api.OrchestrationMetadata, error) {
-	if err := be.ensureDB(); err != nil {
+	if err := be.ensureDB(ctx); err != nil {
 		return nil, err
 	}
 
@@ -606,7 +587,7 @@ func (be *postgresBackend) GetOrchestrationMetadata(ctx context.Context, iid api
 
 // GetOrchestrationRuntimeState implements backend.Backend
 func (be *postgresBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *backend.OrchestrationWorkItem) (*backend.OrchestrationRuntimeState, error) {
-	if err := be.ensureDB(); err != nil {
+	if err := be.ensureDB(ctx); err != nil {
 		return nil, err
 	}
 
@@ -640,7 +621,7 @@ func (be *postgresBackend) GetOrchestrationRuntimeState(ctx context.Context, wi 
 
 // GetOrchestrationWorkItem implements backend.Backend
 func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend.OrchestrationWorkItem, error) {
-	if err := be.ensureDB(); err != nil {
+	if err := be.ensureDB(ctx); err != nil {
 		return nil, err
 	}
 
@@ -651,7 +632,7 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	defer tx.Rollback()
 
 	now := time.Now().UTC()
-	newLockExpiration := now.Add(be.options.OrchestrationLockTimeout)
+	newLockExpiration := now.Add(be.orchestrationLockTimeout)
 
 	// Place a lock on an orchestration instance that has new events that are ready to be executed.
 	row := tx.QueryRowContext(
@@ -751,12 +732,12 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 }
 
 func (be *postgresBackend) GetActivityWorkItem(ctx context.Context) (*backend.ActivityWorkItem, error) {
-	if err := be.ensureDB(); err != nil {
+	if err := be.ensureDB(ctx); err != nil {
 		return nil, err
 	}
 
 	now := time.Now().UTC()
-	newLockExpiration := now.Add(be.options.OrchestrationLockTimeout)
+	newLockExpiration := now.Add(be.activityLockTimeout)
 
 	row := be.db.QueryRowContext(
 		ctx,
@@ -810,7 +791,7 @@ func (be *postgresBackend) GetActivityWorkItem(ctx context.Context) (*backend.Ac
 }
 
 func (be *postgresBackend) CompleteActivityWorkItem(ctx context.Context, wi *backend.ActivityWorkItem) error {
-	if err := be.ensureDB(); err != nil {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -856,7 +837,7 @@ func (be *postgresBackend) CompleteActivityWorkItem(ctx context.Context, wi *bac
 }
 
 func (be *postgresBackend) AbandonActivityWorkItem(ctx context.Context, wi *backend.ActivityWorkItem) error {
-	if err := be.ensureDB(); err != nil {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -884,7 +865,7 @@ func (be *postgresBackend) AbandonActivityWorkItem(ctx context.Context, wi *back
 }
 
 func (be *postgresBackend) PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error {
-	if err := be.ensureDB(); err != nil {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -940,7 +921,18 @@ func (be *postgresBackend) PurgeOrchestrationState(ctx context.Context, id api.I
 }
 
 // Start implements backend.Backend
-func (*postgresBackend) Start(context.Context) error {
+func (be *postgresBackend) Start(context.Context) error {
+	be.initLock.Lock()
+	defer be.initLock.Unlock()
+
+	if be.db == nil {
+		be.logger.Debug("Opening database connection")
+		db, err := sql.Open("pgx", be.connStr)
+		if err != nil {
+			return fmt.Errorf("failed to open the database: %w", err)
+		}
+		be.db = db
+	}
 	return nil
 }
 
@@ -949,13 +941,15 @@ func (*postgresBackend) Stop(context.Context) error {
 	return nil
 }
 
-func (be *postgresBackend) ensureDB() error {
+func (be *postgresBackend) ensureDB(ctx context.Context) error {
 	if be.db == nil {
-		return backend.ErrNotInitialized
+		if err := be.CreateTaskHub(ctx); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (be *postgresBackend) String() string {
-	return fmt.Sprintf("postgres::%s@%s", be.options.User, be.options.Host)
+	return "postgres"
 }

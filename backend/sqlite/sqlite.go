@@ -715,7 +715,7 @@ func (be *sqliteBackend) GetActivityWorkItem(ctx context.Context) (*backend.Acti
 	}
 
 	now := time.Now().UTC()
-	newLockExpiration := now.Add(be.options.OrchestrationLockTimeout)
+	newLockExpiration := now.Add(be.options.ActivityLockTimeout)
 
 	row := be.db.QueryRowContext(
 		ctx,

@@ -171,7 +171,7 @@ func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *Orchestra
 			w.logger.Infof("%v: starting new '%s' instance with ID = '%s'.", wi.InstanceID, es.Name, es.OrchestrationInstance.InstanceId)
 		} else if timerFired := e.GetTimerFired(); timerFired != nil {
 			// Timer spans are created and completed once the TimerFired event is received.
-			// TODO: Ideally we don't emit spans for cancelled timers. Is there a way to support this?
+			// TODO: Ideally we don't emit spans for canceled timers. Is there a way to support this?
 			if err := helpers.StartAndEndNewTimerSpan(ctx, timerFired, e.Timestamp.AsTime(), string(wi.InstanceID)); err != nil {
 				w.logger.Warnf("%v: failed to generate distributed trace span for durable timer: %v", wi.InstanceID, err)
 			}
