@@ -16,7 +16,7 @@ type TaskWorker interface {
 
 	// ProcessNext attempts to fetch and process a work item. This method returns
 	// true if a work item was found and processing started; false otherwise. An
-	// error is returned if the context is cancelled.
+	// error is returned if the context is canceled.
 	ProcessNext(context.Context) (bool, error)
 
 	// StopAndDrain stops the worker and waits for all outstanding work items to finish.
@@ -155,7 +155,7 @@ func (w *worker) ProcessNext(ctx context.Context) (bool, error) {
 	if !w.dispatchSemaphore.TryAcquire(1) {
 		w.logger.Debugf("%v: waiting for one of %v in-flight execution(s) to complete", w.Name(), w.dispatchSemaphore.GetCount())
 		if err := w.dispatchSemaphore.Acquire(ctx, 1); err != nil {
-			// cancelled
+			// canceled
 			return false, err
 		}
 	}
@@ -213,7 +213,11 @@ func (w *worker) processWorkItem(ctx context.Context, wi WorkItem) {
 		} else {
 			w.logger.Errorf("%v: failed to process work item: %v", w.Name(), err)
 		}
-		if err := w.processor.AbandonWorkItem(ctx, wi); err != nil {
+
+		// Try to abandon the work item even if the existing context is canceled.
+		timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := w.processor.AbandonWorkItem(timeoutCtx, wi); err != nil {
 			w.logger.Errorf("%v: failed to abandon work item: %v", w.Name(), err)
 		}
 		return
@@ -221,7 +225,11 @@ func (w *worker) processWorkItem(ctx context.Context, wi WorkItem) {
 
 	if err := w.processor.CompleteWorkItem(ctx, wi); err != nil {
 		w.logger.Errorf("%v: failed to complete work item: %v", w.Name(), err)
-		if err := w.processor.AbandonWorkItem(ctx, wi); err != nil {
+
+		// Try to abandon the work item even if the existing context is canceled.
+		timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := w.processor.AbandonWorkItem(timeoutCtx, wi); err != nil {
 			w.logger.Errorf("%v: failed to abandon work item: %v", w.Name(), err)
 		}
 	}

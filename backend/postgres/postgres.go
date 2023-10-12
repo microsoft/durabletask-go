@@ -1,4 +1,4 @@
-package sqlite
+package postgres
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,9 +16,10 @@ import (
 	"github.com/microsoft/durabletask-go/backend"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
-	"google.golang.org/protobuf/proto"
 
-	_ "modernc.org/sqlite"
+	"google.golang.org/protobuf/encoding/protojson"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 //go:embed schema.sql
@@ -25,34 +27,20 @@ var schema string
 
 var emptyString string = ""
 
-type SqliteOptions struct {
-	OrchestrationLockTimeout time.Duration
-	ActivityLockTimeout      time.Duration
-	FilePath                 string
+type postgresBackend struct {
+	connStr     string
+	db          *sql.DB
+	workerName  string
+	logger      backend.Logger
+	initLock    sync.Mutex
+	initialized bool
+
+	orchestrationLockTimeout time.Duration
+	activityLockTimeout      time.Duration
 }
 
-type sqliteBackend struct {
-	dsn        string
-	db         *sql.DB
-	workerName string
-	logger     backend.Logger
-	options    *SqliteOptions
-}
-
-// NewSqliteOptions creates a new options object for the sqlite backend provider.
-//
-// Specify "" for filePath to configure an in-memory database.
-func NewSqliteOptions(filePath string) *SqliteOptions {
-	// Default values are provided for required options
-	return &SqliteOptions{
-		FilePath:                 filePath,
-		OrchestrationLockTimeout: 2 * time.Minute,
-		ActivityLockTimeout:      2 * time.Minute,
-	}
-}
-
-// NewSqliteBackend creates a new sqlite-based Backend object.
-func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backend {
+// NewPostgresBackend creates a new postgres-based Backend object.
+func NewPostgresBackend(connString string, logger backend.Logger) backend.Backend {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
@@ -61,72 +49,68 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 	pid := os.Getpid()
 	uuidStr := uuid.NewString()
 
-	be := &sqliteBackend{
-		db:         nil,
-		workerName: fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
-		options:    opts,
-		logger:     logger,
-	}
-
-	if opts == nil {
-		opts = NewSqliteOptions("")
-	}
-	if opts.FilePath == "" {
-		be.dsn = "file::memory:"
-	} else if !strings.HasPrefix(opts.FilePath, "file:") {
-		be.dsn = "file:" + opts.FilePath
-	} else {
-		be.dsn = opts.FilePath
+	be := &postgresBackend{
+		connStr:                  connString,
+		workerName:               fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
+		logger:                   logger,
+		orchestrationLockTimeout: 2 * time.Minute,
+		activityLockTimeout:      2 * time.Minute,
 	}
 
 	return be
 }
 
-// CreateTaskHub creates the sqlite database and applies the schema
-func (be *sqliteBackend) CreateTaskHub(context.Context) error {
-	db, err := sql.Open("sqlite", be.dsn)
-	if err != nil {
-		panic(fmt.Errorf("failed to open the database: %w", err))
+// CreateTaskHub creates the postgres database and applies the schema
+func (be *postgresBackend) CreateTaskHub(ctx context.Context) error {
+	be.initLock.Lock()
+	defer be.initLock.Unlock()
+
+	if be.db == nil {
+		be.logger.Debug("Opening database connection")
+		db, err := sql.Open("pgx", be.connStr)
+		if err != nil {
+			return fmt.Errorf("failed to open the database: %w", err)
+		}
+		be.db = db
 	}
 
-	// Initialize database
-	if _, err := db.Exec(schema); err != nil {
-		panic(fmt.Errorf("failed to initialize the database: %w", err))
+	if !be.initialized {
+		// Initialize database
+		be.logger.Info("Running database initialization script")
+		if _, err := be.db.Exec(schema); err != nil {
+			return fmt.Errorf("failed to initialize the database: %w", err)
+		}
+		be.initialized = true
 	}
-
-	// TODO: This is to avoid SQLITE_BUSY errors when there are concurrent
-	//       operations on the database. However, it can hurt performance.
-	//	     We should consider removing this and looking for alternate
-	//       solutions if sqlite performance becomes a problem for users.
-	db.SetMaxOpenConns(1)
-
-	be.db = db
-
 	return nil
 }
 
-func (be *sqliteBackend) DeleteTaskHub(ctx context.Context) error {
+func (be *postgresBackend) DeleteTaskHub(ctx context.Context) error {
+	be.initLock.Lock()
+	defer be.initLock.Unlock()
+
+	if be.db == nil {
+		return nil
+	}
+
+	// Delete all the tables in the durabletask schema
+	be.logger.Info("Dropping durabletask schema from database")
+	if _, err := be.db.Exec("DROP SCHEMA IF EXISTS durabletask CASCADE;"); err != nil {
+		panic(fmt.Errorf("failed to delete the 'durabletask' database schema: %w", err))
+	}
+
+	if err := be.db.Close(); err != nil {
+		return fmt.Errorf("failed to close the database connection: %w", err)
+	}
 	be.db = nil
 
-	if be.options.FilePath == "" {
-		// In-memory DB
-		return nil
-	} else {
-		// File-system DB
-		err := os.Remove(be.options.FilePath)
-		if err == nil {
-			return nil
-		} else if os.IsNotExist(err) {
-			return backend.ErrTaskHubNotFound
-		} else {
-			return err
-		}
-	}
+	// TODO: Figure out what this means
+	return nil
 }
 
 // AbandonOrchestrationWorkItem implements backend.Backend
-func (be *sqliteBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi *backend.OrchestrationWorkItem) error {
-	if err := be.ensureDB(); err != nil {
+func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi *backend.OrchestrationWorkItem) error {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -144,7 +128,7 @@ func (be *sqliteBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi *b
 
 	dbResult, err := tx.ExecContext(
 		ctx,
-		"UPDATE NewEvents SET [LockedBy] = NULL, [VisibleTime] = ? WHERE [InstanceID] = ? AND [LockedBy] = ?",
+		"UPDATE durabletask.NewEvents SET LockedBy = NULL, VisibleTime = $1 WHERE InstanceID = $2 AND LockedBy = $3",
 		visibleTime,
 		string(wi.InstanceID),
 		wi.LockedBy,
@@ -162,7 +146,7 @@ func (be *sqliteBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi *b
 
 	dbResult, err = tx.ExecContext(
 		ctx,
-		"UPDATE Instances SET [LockedBy] = NULL, [LockExpiration] = NULL WHERE [InstanceID] = ? AND [LockedBy] = ?",
+		"UPDATE durabletask.Instances SET LockedBy = NULL, LockExpiration = NULL WHERE InstanceID = $1 AND LockedBy = $2",
 		string(wi.InstanceID),
 		wi.LockedBy,
 	)
@@ -186,8 +170,8 @@ func (be *sqliteBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi *b
 }
 
 // CompleteOrchestrationWorkItem implements backend.Backend
-func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *backend.OrchestrationWorkItem) error {
-	if err := be.ensureDB(); err != nil {
+func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *backend.OrchestrationWorkItem) error {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -201,11 +185,12 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 
 	// Dynamically generate the UPDATE statement for the Instances table
 	var sqlSB strings.Builder
-	sqlSB.WriteString("UPDATE Instances SET ")
+	sqlSB.WriteString("UPDATE durabletask.Instances SET ")
 
 	sqlUpdateArgs := make([]interface{}, 0, 10)
 	isCreated := false
 	isCompleted := false
+	argIndex := 1
 
 	for _, e := range wi.State.NewEvents() {
 		if es := e.GetExecutionStarted(); es != nil {
@@ -214,20 +199,21 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 				continue
 			}
 			isCreated = true
-			sqlSB.WriteString("[CreatedTime] = ?, [Input] = ?, ")
+			sqlSB.WriteString(fmt.Sprintf("CreatedTime = $%d, Input = $%d, ", argIndex, argIndex+1))
 			sqlUpdateArgs = append(sqlUpdateArgs, e.Timestamp.AsTime())
 			sqlUpdateArgs = append(sqlUpdateArgs, es.Input.GetValue())
+			argIndex += 2
 		} else if ec := e.GetExecutionCompleted(); ec != nil {
 			if isCompleted {
 				// TODO: Log warning about duplicate completion event
 				continue
 			}
 			isCompleted = true
-			sqlSB.WriteString("[CompletedTime] = ?, [Output] = ?, [FailureDetails] = ?, ")
+			sqlSB.WriteString(fmt.Sprintf("CompletedTime = $%d, Output = $%d, FailureDetails = $%d, ", argIndex, argIndex+1, argIndex+2))
 			sqlUpdateArgs = append(sqlUpdateArgs, now)
 			sqlUpdateArgs = append(sqlUpdateArgs, ec.Result.GetValue())
 			if ec.FailureDetails != nil {
-				bytes, err := proto.Marshal(ec.FailureDetails)
+				bytes, err := protojson.Marshal(ec.FailureDetails)
 				if err != nil {
 					return fmt.Errorf("failed to marshal FailureDetails: %w", err)
 				}
@@ -235,20 +221,26 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 			} else {
 				sqlUpdateArgs = append(sqlUpdateArgs, nil)
 			}
+			argIndex += 3
 		}
 		// TODO: Execution suspended & resumed
 	}
 
 	if wi.State.CustomStatus != nil {
-		sqlSB.WriteString("[CustomStatus] = ?, ")
+		sqlSB.WriteString(fmt.Sprintf("CustomStatus = $%d, ", argIndex))
 		sqlUpdateArgs = append(sqlUpdateArgs, wi.State.CustomStatus.Value)
+		argIndex++
 	}
 
 	// TODO: Support for stickiness, which would extend the LockExpiration
-	sqlSB.WriteString("[RuntimeStatus] = ?, [LastUpdatedTime] = ?, [LockExpiration] = NULL WHERE [InstanceID] = ? AND [LockedBy] = ?")
+	sqlSB.WriteString(fmt.Sprintf(
+		"RuntimeStatus = $%d, LastUpdatedTime = $%d, LockExpiration = NULL WHERE InstanceID = $%d AND LockedBy = $%d",
+		argIndex, argIndex+1, argIndex+2, argIndex+3))
 	sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()), now, string(wi.InstanceID), wi.LockedBy)
+	argIndex += 4
 
-	result, err := tx.ExecContext(ctx, sqlSB.String(), sqlUpdateArgs...)
+	command := sqlSB.String()
+	result, err := tx.ExecContext(ctx, command, sqlUpdateArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to update Instances table: %w", err)
 	}
@@ -262,7 +254,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 
 	// If continue-as-new, delete all existing history
 	if wi.State.ContinuedAsNew() {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM History WHERE InstanceID = ?", string(wi.InstanceID)); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM durabletask.History WHERE InstanceID = $1", string(wi.InstanceID)); err != nil {
 			return fmt.Errorf("failed to delete from History table: %w", err)
 		}
 	}
@@ -270,13 +262,17 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	// Save new history events
 	newHistoryCount := len(wi.State.NewEvents())
 	if newHistoryCount > 0 {
-		query := "INSERT INTO History ([InstanceID], [SequenceNumber], [EventPayload]) VALUES (?, ?, ?)" +
-			strings.Repeat(", (?, ?, ?)", newHistoryCount-1)
-
+		var sqlSB strings.Builder
+		sqlSB.WriteString("INSERT INTO durabletask.History (InstanceID, SequenceNumber, EventPayload) VALUES ($1, $2, $3)")
+		for i := 1; i < newHistoryCount; i++ {
+			counter := i * 3
+			sqlSB.WriteString(fmt.Sprintf(", ($%d, $%d, $%d)", counter+1, counter+2, counter+3))
+		}
+		query := sqlSB.String()
 		args := make([]interface{}, 0, newHistoryCount*3)
 		nextSequenceNumber := len(wi.State.OldEvents())
 		for _, e := range wi.State.NewEvents() {
-			eventPayload, err := backend.MarshalHistoryEvent(e)
+			eventPayload, err := protojson.Marshal(e) //
 			if err != nil {
 				return err
 			}
@@ -294,12 +290,17 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	// Save outbound activity tasks
 	newActivityCount := len(wi.State.PendingTasks())
 	if newActivityCount > 0 {
-		insertSql := "INSERT INTO NewTasks ([InstanceID], [EventPayload]) VALUES (?, ?)" +
-			strings.Repeat(", (?, ?)", newActivityCount-1)
+		var sqlSB strings.Builder
+		sqlSB.WriteString("INSERT INTO durabletask.NewTasks (InstanceID, EventPayload) VALUES ($1, $2)")
+		for i := 1; i < newActivityCount; i++ {
+			counter := i * 2
+			sqlSB.WriteString(fmt.Sprintf(", ($%d, $%d)", counter+1, counter+2))
+		}
+		insertSql := sqlSB.String()
 
 		sqlInsertArgs := make([]interface{}, 0, newActivityCount*2)
 		for _, e := range wi.State.PendingTasks() {
-			eventPayload, err := backend.MarshalHistoryEvent(e)
+			eventPayload, err := protojson.Marshal(e)
 			if err != nil {
 				return err
 			}
@@ -316,12 +317,17 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	// Save outbound orchestrator events
 	newEventCount := len(wi.State.PendingTimers()) + len(wi.State.PendingMessages())
 	if newEventCount > 0 {
-		insertSql := "INSERT INTO NewEvents ([InstanceID], [EventPayload], [VisibleTime]) VALUES (?, ?, ?)" +
-			strings.Repeat(", (?, ?, ?)", newEventCount-1)
+		var sqlSB strings.Builder
+		sqlSB.WriteString("INSERT INTO durabletask.NewEvents (InstanceID, EventPayload, VisibleTime) VALUES ($1, $2, $3)")
+		for i := 1; i < newEventCount; i++ {
+			counter := i * 3
+			sqlSB.WriteString(fmt.Sprintf(", ($%d, $%d, $%d)", counter+1, counter+2, counter+3))
+		}
+		insertSql := sqlSB.String()
 
 		sqlInsertArgs := make([]interface{}, 0, newEventCount*3)
 		for _, e := range wi.State.PendingTimers() {
-			eventPayload, err := backend.MarshalHistoryEvent(e)
+			eventPayload, err := protojson.Marshal(e)
 			if err != nil {
 				return err
 			}
@@ -346,7 +352,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 				}
 			}
 
-			eventPayload, err := backend.MarshalHistoryEvent(msg.HistoryEvent)
+			eventPayload, err := protojson.Marshal(msg.HistoryEvent)
 			if err != nil {
 				return err
 			}
@@ -363,7 +369,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	// Delete inbound events
 	dbResult, err := tx.ExecContext(
 		ctx,
-		"DELETE FROM NewEvents WHERE [InstanceID] = ? AND [LockedBy] = ?",
+		"DELETE FROM durabletask.NewEvents WHERE InstanceID = $1 AND LockedBy = $2",
 		string(wi.InstanceID),
 		wi.LockedBy,
 	)
@@ -390,8 +396,8 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 }
 
 // CreateOrchestrationInstance implements backend.Backend
-func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *backend.HistoryEvent) error {
-	if err := be.ensureDB(); err != nil {
+func (be *postgresBackend) CreateOrchestrationInstance(ctx context.Context, e *backend.HistoryEvent) error {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -406,19 +412,22 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 		return err
 	}
 
-	eventPayload, err := backend.MarshalHistoryEvent(e)
+	eventPayload, err := protojson.Marshal(e)
 	if err != nil {
 		return err
 	}
 
 	_, err = tx.ExecContext(
 		ctx,
-		`INSERT INTO NewEvents ([InstanceID], [EventPayload]) VALUES (?, ?)`,
+		`INSERT INTO durabletask.NewEvents (InstanceID, EventPayload) VALUES ($1, $2)`,
 		instanceID,
 		eventPayload,
 	)
 
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to insert row into [NewEvents] table: %w", err)
 	}
 
@@ -429,7 +438,7 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 	return nil
 }
 
-func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx, instanceID *string) error {
+func (be *postgresBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx, instanceID *string) error {
 	if e == nil {
 		return errors.New("HistoryEvent must be non-nil")
 	} else if e.Timestamp == nil {
@@ -444,15 +453,16 @@ func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context
 	// TODO: Support for re-using orchestration instance IDs
 	res, err := tx.ExecContext(
 		ctx,
-		`INSERT OR IGNORE INTO [Instances] (
-			[Name],
-			[Version],
-			[InstanceID],
-			[ExecutionID],
-			[Input],
-			[RuntimeStatus],
-			[CreatedTime]
-		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO durabletask.Instances (
+			Name,
+			Version,
+			InstanceID,
+			ExecutionID,
+			Input,
+			RuntimeStatus,
+			CreatedTime
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (InstanceID) DO NOTHING`,
 		startEvent.Name,
 		startEvent.Version.GetValue(),
 		startEvent.OrchestrationInstance.InstanceId,
@@ -478,21 +488,21 @@ func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context
 	return nil
 }
 
-func (be *sqliteBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.InstanceID, e *backend.HistoryEvent) error {
+func (be *postgresBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.InstanceID, e *backend.HistoryEvent) error {
 	if e == nil {
 		return errors.New("HistoryEvent must be non-nil")
 	} else if e.Timestamp == nil {
 		return errors.New("HistoryEvent must have a non-nil timestamp")
 	}
 
-	eventPayload, err := backend.MarshalHistoryEvent(e)
+	eventPayload, err := protojson.Marshal(e)
 	if err != nil {
 		return err
 	}
 
 	_, err = be.db.ExecContext(
 		ctx,
-		`INSERT INTO NewEvents ([InstanceID], [EventPayload]) VALUES (?, ?)`,
+		`INSERT INTO durabletask.NewEvents (InstanceID, EventPayload) VALUES ($1, $2)`,
 		string(iid),
 		eventPayload,
 	)
@@ -505,15 +515,15 @@ func (be *sqliteBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.I
 }
 
 // GetOrchestrationMetadata implements backend.Backend
-func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.InstanceID) (*api.OrchestrationMetadata, error) {
-	if err := be.ensureDB(); err != nil {
+func (be *postgresBackend) GetOrchestrationMetadata(ctx context.Context, iid api.InstanceID) (*api.OrchestrationMetadata, error) {
+	if err := be.ensureDB(ctx); err != nil {
 		return nil, err
 	}
 
 	row := be.db.QueryRowContext(
 		ctx,
-		`SELECT [InstanceID], [Name], [RuntimeStatus], [CreatedTime], [LastUpdatedTime], [Input], [Output], [CustomStatus], [FailureDetails]
-		FROM Instances WHERE [InstanceID] = ?`,
+		`SELECT InstanceID, Name, RuntimeStatus, CreatedTime, LastUpdatedTime, Input, Output, CustomStatus, FailureDetails
+		FROM durabletask.Instances WHERE InstanceID = $1`,
 		string(iid),
 	)
 
@@ -556,7 +566,7 @@ func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.I
 
 	if len(failureDetailsPayload) > 0 {
 		failureDetails = new(protos.TaskFailureDetails)
-		if err := proto.Unmarshal(failureDetailsPayload, failureDetails); err != nil {
+		if err := protojson.Unmarshal(failureDetailsPayload, failureDetails); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal failure details: %w", err)
 		}
 	}
@@ -576,14 +586,14 @@ func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.I
 }
 
 // GetOrchestrationRuntimeState implements backend.Backend
-func (be *sqliteBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *backend.OrchestrationWorkItem) (*backend.OrchestrationRuntimeState, error) {
-	if err := be.ensureDB(); err != nil {
+func (be *postgresBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *backend.OrchestrationWorkItem) (*backend.OrchestrationRuntimeState, error) {
+	if err := be.ensureDB(ctx); err != nil {
 		return nil, err
 	}
 
 	rows, err := be.db.QueryContext(
 		ctx,
-		"SELECT [EventPayload] FROM History WHERE [InstanceID] = ? ORDER BY [SequenceNumber] ASC",
+		"SELECT EventPayload FROM durabletask.History WHERE InstanceID = $1 ORDER BY SequenceNumber ASC",
 		string(wi.InstanceID),
 	)
 	if err != nil {
@@ -596,8 +606,8 @@ func (be *sqliteBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *b
 		if err := rows.Scan(&eventPayload); err != nil {
 			return nil, fmt.Errorf("failed to read history event: %w", err)
 		}
-
-		e, err := backend.UnmarshalHistoryEvent(eventPayload)
+		e := new(protos.HistoryEvent)
+		err := protojson.Unmarshal(eventPayload, e)
 		if err != nil {
 			return nil, err
 		}
@@ -610,8 +620,8 @@ func (be *sqliteBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *b
 }
 
 // GetOrchestrationWorkItem implements backend.Backend
-func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend.OrchestrationWorkItem, error) {
-	if err := be.ensureDB(); err != nil {
+func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend.OrchestrationWorkItem, error) {
+	if err := be.ensureDB(ctx); err != nil {
 		return nil, err
 	}
 
@@ -622,20 +632,20 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 	defer tx.Rollback()
 
 	now := time.Now().UTC()
-	newLockExpiration := now.Add(be.options.OrchestrationLockTimeout)
+	newLockExpiration := now.Add(be.orchestrationLockTimeout)
 
 	// Place a lock on an orchestration instance that has new events that are ready to be executed.
 	row := tx.QueryRowContext(
 		ctx,
-		`UPDATE Instances SET [LockedBy] = ?, [LockExpiration] = ?
-		WHERE [rowid] = (
-			SELECT [rowid] FROM Instances I
-			WHERE (I.[LockExpiration] IS NULL OR I.[LockExpiration] < ?) AND EXISTS (
-				SELECT 1 FROM NewEvents E
-				WHERE E.[InstanceID] = I.[InstanceID] AND (E.[VisibleTime] IS NULL OR E.[VisibleTime] < ?)
+		`UPDATE durabletask.Instances SET LockedBy = $1, LockExpiration = $2
+		WHERE ctid = (
+			SELECT ctid FROM durabletask.Instances I
+			WHERE (I.LockExpiration IS NULL OR I.LockExpiration < $3) AND EXISTS (
+				SELECT 1 FROM durabletask.NewEvents E
+				WHERE E.InstanceID = I.InstanceID AND (E.VisibleTime IS NULL OR E.VisibleTime < $4)
 			)
 			LIMIT 1
-		) RETURNING [InstanceID]`,
+		) RETURNING InstanceID`,
 		be.workerName,     // LockedBy for Instances table
 		newLockExpiration, // Updated LockExpiration for Instances table
 		now,               // LockExpiration for Instances table
@@ -643,6 +653,9 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 	)
 
 	if err := row.Err(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("failed to query for orchestration work-items: %w", err)
 	}
 
@@ -659,17 +672,22 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 	// TODO: Get all the unprocessed events associated with the locked instance
 	events, err := tx.QueryContext(
 		ctx,
-		`UPDATE NewEvents SET [DequeueCount] = [DequeueCount] + 1, [LockedBy] = ? WHERE rowid IN (
-			SELECT rowid FROM NewEvents
-			WHERE [InstanceID] = ? AND ([VisibleTime] IS NULL OR [VisibleTime] <= ?)
-			LIMIT 1000
+		`WITH selected AS (
+			UPDATE durabletask.NewEvents SET DequeueCount = DequeueCount + 1, LockedBy = $1 WHERE ctid IN (
+				SELECT ctid FROM durabletask.NewEvents
+				WHERE InstanceID = $2 AND (VisibleTime IS NULL OR VisibleTime <= $3)
+				LIMIT 1000
+			) RETURNING EventPayload, DequeueCount, SequenceNumber
 		)
-		RETURNING [EventPayload], [DequeueCount]`,
+		SELECT EventPayload, DequeueCount FROM selected ORDER BY SequenceNumber ASC`,
 		be.workerName,
 		instanceID,
 		now,
 	)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("failed to query for orchestration work-items: %w", err)
 	}
 
@@ -687,7 +705,8 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 			maxDequeueCount = dequeueCount
 		}
 
-		e, err := backend.UnmarshalHistoryEvent(eventPayload)
+		e := new(protos.HistoryEvent)
+		err := protojson.Unmarshal(eventPayload, e)
 		if err != nil {
 			return nil, err
 		}
@@ -696,6 +715,9 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 	}
 
 	if err = tx.Commit(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("failed to update orchestration work-item: %w", err)
 	}
 
@@ -709,28 +731,32 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 	return wi, nil
 }
 
-func (be *sqliteBackend) GetActivityWorkItem(ctx context.Context) (*backend.ActivityWorkItem, error) {
-	if err := be.ensureDB(); err != nil {
+func (be *postgresBackend) GetActivityWorkItem(ctx context.Context) (*backend.ActivityWorkItem, error) {
+	if err := be.ensureDB(ctx); err != nil {
 		return nil, err
 	}
 
 	now := time.Now().UTC()
-	newLockExpiration := now.Add(be.options.ActivityLockTimeout)
+	newLockExpiration := now.Add(be.activityLockTimeout)
 
 	row := be.db.QueryRowContext(
 		ctx,
-		`UPDATE NewTasks SET [LockedBy] = ?, [LockExpiration] = ?, [DequeueCount] = [DequeueCount] + 1
-		WHERE [SequenceNumber] = (
-			SELECT [SequenceNumber] FROM NewTasks T
-			WHERE T.[LockExpiration] IS NULL OR T.[LockExpiration] < ?
+		`UPDATE durabletask.NewTasks SET LockedBy = $1, LockExpiration = $2, DequeueCount = DequeueCount + 1
+		WHERE SequenceNumber = (
+			SELECT SequenceNumber FROM durabletask.NewTasks T
+			WHERE T.LockExpiration IS NULL OR T.LockExpiration < $3
+			ORDER BY SequenceNumber ASC
 			LIMIT 1
-		) RETURNING [SequenceNumber], [InstanceID], [EventPayload]`,
+		) RETURNING SequenceNumber, InstanceID, EventPayload`,
 		be.workerName,
 		newLockExpiration,
 		now,
 	)
 
 	if err := row.Err(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("failed to query for activity work-items: %w", err)
 	}
 
@@ -739,15 +765,18 @@ func (be *sqliteBackend) GetActivityWorkItem(ctx context.Context) (*backend.Acti
 	var eventPayload []byte
 
 	if err := row.Scan(&sequenceNumber, &instanceID, &eventPayload); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err == sql.ErrNoRows {
 			// No new activity tasks to process
 			return nil, backend.ErrNoWorkItems
 		}
-
 		return nil, fmt.Errorf("failed to scan the activity work-item: %w", err)
 	}
 
-	e, err := backend.UnmarshalHistoryEvent(eventPayload)
+	e := new(protos.HistoryEvent)
+	err := protojson.Unmarshal(eventPayload, e)
 	if err != nil {
 		return nil, err
 	}
@@ -761,8 +790,8 @@ func (be *sqliteBackend) GetActivityWorkItem(ctx context.Context) (*backend.Acti
 	return wi, nil
 }
 
-func (be *sqliteBackend) CompleteActivityWorkItem(ctx context.Context, wi *backend.ActivityWorkItem) error {
-	if err := be.ensureDB(); err != nil {
+func (be *postgresBackend) CompleteActivityWorkItem(ctx context.Context, wi *backend.ActivityWorkItem) error {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -772,18 +801,24 @@ func (be *sqliteBackend) CompleteActivityWorkItem(ctx context.Context, wi *backe
 	}
 	defer tx.Rollback()
 
-	bytes, err := backend.MarshalHistoryEvent(wi.Result)
+	bytes, err := protojson.Marshal(wi.Result)
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.ExecContext(ctx, "INSERT INTO NewEvents ([InstanceID], [EventPayload]) VALUES (?, ?)", string(wi.InstanceID), bytes)
+	_, err = tx.ExecContext(ctx, "INSERT INTO durabletask.NewEvents (InstanceID, EventPayload) VALUES ($1, $2)", string(wi.InstanceID), bytes)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to insert into NewEvents table: %w", err)
 	}
 
-	dbResult, err := tx.ExecContext(ctx, "DELETE FROM NewTasks WHERE [SequenceNumber] = ? AND [LockedBy] = ?", wi.SequenceNumber, wi.LockedBy)
+	dbResult, err := tx.ExecContext(ctx, "DELETE FROM durabletask.NewTasks WHERE SequenceNumber = $1 AND LockedBy = $2", wi.SequenceNumber, wi.LockedBy)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to delete from NewTasks table: %w", err)
 	}
 
@@ -801,18 +836,21 @@ func (be *sqliteBackend) CompleteActivityWorkItem(ctx context.Context, wi *backe
 	return nil
 }
 
-func (be *sqliteBackend) AbandonActivityWorkItem(ctx context.Context, wi *backend.ActivityWorkItem) error {
-	if err := be.ensureDB(); err != nil {
+func (be *postgresBackend) AbandonActivityWorkItem(ctx context.Context, wi *backend.ActivityWorkItem) error {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
 	dbResult, err := be.db.ExecContext(
 		ctx,
-		"UPDATE NewTasks SET [LockedBy] = NULL, [LockExpiration] = NULL WHERE [SequenceNumber] = ? AND [LockedBy] = ?",
+		"UPDATE durabletask.NewTasks SET LockedBy = NULL, LockExpiration = NULL WHERE SequenceNumber = $1 AND LockedBy = $2",
 		wi.SequenceNumber,
 		wi.LockedBy,
 	)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to update the NewTasks table for abandon: %w", err)
 	}
 
@@ -826,8 +864,8 @@ func (be *sqliteBackend) AbandonActivityWorkItem(ctx context.Context, wi *backen
 	return nil
 }
 
-func (be *sqliteBackend) PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error {
-	if err := be.ensureDB(); err != nil {
+func (be *postgresBackend) PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error {
+	if err := be.ensureDB(ctx); err != nil {
 		return err
 	}
 
@@ -837,8 +875,11 @@ func (be *sqliteBackend) PurgeOrchestrationState(ctx context.Context, id api.Ins
 	}
 	defer tx.Rollback()
 
-	row := tx.QueryRowContext(ctx, "SELECT 1 FROM Instances WHERE [InstanceID] = ?", string(id))
+	row := tx.QueryRowContext(ctx, "SELECT 1 FROM durabletask.Instances WHERE InstanceID = $1", string(id))
 	if err := row.Err(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to query for instance existence: %w", err)
 	}
 
@@ -849,8 +890,11 @@ func (be *sqliteBackend) PurgeOrchestrationState(ctx context.Context, id api.Ins
 		return fmt.Errorf("failed to scan instance existence: %w", err)
 	}
 
-	dbResult, err := tx.ExecContext(ctx, "DELETE FROM Instances WHERE [InstanceID] = ? AND [RuntimeStatus] IN ('COMPLETED', 'FAILED', 'TERMINATED')", string(id))
+	dbResult, err := tx.ExecContext(ctx, "DELETE FROM durabletask.Instances WHERE InstanceID = $1 AND RuntimeStatus IN ('COMPLETED', 'FAILED', 'TERMINATED')", string(id))
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to delete from the Instances table: %w", err)
 	}
 
@@ -862,8 +906,11 @@ func (be *sqliteBackend) PurgeOrchestrationState(ctx context.Context, id api.Ins
 		return api.ErrNotCompleted
 	}
 
-	_, err = tx.ExecContext(ctx, "DELETE FROM History WHERE [InstanceID] = ?", string(id))
+	_, err = tx.ExecContext(ctx, "DELETE FROM durabletask.History WHERE InstanceID = $1", string(id))
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to delete from History table: %w", err)
 	}
 
@@ -874,22 +921,35 @@ func (be *sqliteBackend) PurgeOrchestrationState(ctx context.Context, id api.Ins
 }
 
 // Start implements backend.Backend
-func (*sqliteBackend) Start(context.Context) error {
-	return nil
-}
+func (be *postgresBackend) Start(context.Context) error {
+	be.initLock.Lock()
+	defer be.initLock.Unlock()
 
-// Stop implements backend.Backend
-func (*sqliteBackend) Stop(context.Context) error {
-	return nil
-}
-
-func (be *sqliteBackend) ensureDB() error {
 	if be.db == nil {
-		return backend.ErrNotInitialized
+		be.logger.Debug("Opening database connection")
+		db, err := sql.Open("pgx", be.connStr)
+		if err != nil {
+			return fmt.Errorf("failed to open the database: %w", err)
+		}
+		be.db = db
 	}
 	return nil
 }
 
-func (be *sqliteBackend) String() string {
-	return fmt.Sprintf("sqlite::%s", be.options.FilePath)
+// Stop implements backend.Backend
+func (*postgresBackend) Stop(context.Context) error {
+	return nil
+}
+
+func (be *postgresBackend) ensureDB(ctx context.Context) error {
+	if be.db == nil {
+		if err := be.CreateTaskHub(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (be *postgresBackend) String() string {
+	return "postgres"
 }
