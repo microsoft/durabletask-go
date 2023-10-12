@@ -68,7 +68,10 @@ More language SDKs are planned to be added in the future. In particular, SDKs fo
 
 ## Embedded orchestrations
 
-It's also possible to create orchestrations in Go and run them in the local process. You can find code samples in the [samples](./samples/) directory. The full set of Durable Task features is not yet available as part of the Go SDK, but will be added over time.
+It's also possible to create orchestrations in Go and run them in the local process. The full set of Durable Task features is not yet available as part of the Go SDK, but will be added over time.
+
+> You can find code samples in the [samples](./samples/) directory.  
+> To run them, get into the folder of each sample and run `go run .`
 
 ### Activity sequence example
 
@@ -103,7 +106,7 @@ func SayHelloActivity(ctx task.ActivityContext) (any, error) {
 }
 ```
 
-You can find the full sample [here](./samples/sequence.go).
+You can find the full sample [here](./samples/sequence).
 
 ### Fan-out / fan-in execution example
 
@@ -119,9 +122,9 @@ func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	}
 
 	// Start a dynamic number of tasks in parallel, not waiting for any to complete (yet)
-	tasks := make([]task.Task, 0, len(devices))
-	for _, id := range devices {
-		tasks = append(tasks, ctx.CallActivity(UpdateDevice, task.WithActivityInput(id)))
+	tasks := make([]task.Task, len(devices))
+	for i, id := range devices {
+		tasks[i] = ctx.CallActivity(UpdateDevice, task.WithActivityInput(id))
 	}
 
 	// Now that all are started, wait for them to complete and then return the success rate
@@ -132,11 +135,12 @@ func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 			successCount++
 		}
 	}
+
 	return float32(successCount) / float32(len(devices)), nil
 }
 ```
 
-The full sample can be found [here](./samples/parallel.go).
+The full sample can be found [here](./samples/parallel).
 
 ### External orchestration inputs (events) example
 
@@ -171,7 +175,7 @@ go func() {
 }()
 ```
 
-The full sample can be found [here](./samples/externalevents.go).
+The full sample can be found [here](./samples/externalevents).
 
 ### Managing local orchestrations
 
@@ -192,10 +196,12 @@ id, err := client.ScheduleNewOrchestration(ctx, ActivitySequenceOrchestrator)
 if err != nil {
   panic(err)
 }
+
 metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 if err != nil {
   panic(err)
 }
+
 fmt.Printf("orchestration completed: %v\n", metadata)
 ```
 
@@ -208,11 +214,11 @@ The Durable Task Framework for Go supports publishing distributed traces to any 
 The following example code shows how you can configure distributed trace collection with [Zipkin](https://zipkin.io/), a popular open source distributed tracing system. The example assumes Zipkin is running locally, as shown in the code.
 
 ```go
-func ConfigureZipkinTracing() *trace.TracerProvider {
+func ConfigureZipkinTracing() (*trace.TracerProvider, error) {
 	// Inspired by this sample: https://github.com/open-telemetry/opentelemetry-go/blob/main/example/zipkin/main.go
 	exp, err := zipkin.New("http://localhost:9411/api/v2/spans")
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	// NOTE: The simple span processor is not recommended for production.
@@ -229,11 +235,11 @@ func ConfigureZipkinTracing() *trace.TracerProvider {
 		)),
 	)
 	otel.SetTracerProvider(tp)
-	return tp
+	return tp, nil
 }
 ```
 
-You can find this code in the [distributedtracing.go](./samples/distributedtracing.go) sample. The following is a screenshot showing the trace for the sample's orchestration, which calls an activity, creates a 2-second durable timer, and uses another activity to make an HTTP request to bing.com:
+You can find this code in the [distributedtracing](./samples/distributedtracing) sample. The following is a screenshot showing the trace for the sample's orchestration, which calls an activity, creates a 2-second durable timer, and uses another activity to make an HTTP request to bing.com:
 
 ![image](https://user-images.githubusercontent.com/2704139/205171291-8d12d6fe-5d4f-40c7-9a48-2586a4c4af49.png)
 
