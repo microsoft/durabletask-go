@@ -41,14 +41,14 @@ func main() {
 		var nameInput string
 		fmt.Scanln(&nameInput)
 		if err = client.RaiseEvent(ctx, id, "Name", api.WithEventPayload(nameInput)); err != nil {
-			panic(err)
+			log.Fatalf("Failed to raise event: %v", err)
 		}
 	}()
 
 	// After the orchestration receives the event, it should complete on its own
 	metadata, err = client.WaitForOrchestrationCompletion(ctx, id)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to wait for orchestration to complete: %v", err)
 	}
 	if metadata.FailureDetails != nil {
 		log.Println("orchestration failed:", metadata.FailureDetails.ErrorMessage)
