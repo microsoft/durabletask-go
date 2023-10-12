@@ -1,8 +1,8 @@
-package samples
+package main
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"log"
 	"time"
 
@@ -13,44 +13,88 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/backend/sqlite"
 	"github.com/microsoft/durabletask-go/task"
 )
 
-func RunDistributedTracingSample() {
+func main() {
 	// Tracing can be configured independently of the orchestration code.
-	tp := ConfigureZipkinTracing()
+	tp, err := ConfigureZipkinTracing()
+	if err != nil {
+		log.Fatalf("Failed to create tracer: %w", err)
+	}
 	defer func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
-			log.Fatal(err)
+			log.Fatalf("Failed to stop tracer: %v", err)
 		}
 	}()
 
-	// Set up and run the orchestration, which will automatically discover the zipkin configuration.
+	// Create a new task registry and add the orchestrator and activities
 	r := task.NewTaskRegistry()
 	r.AddOrchestrator(DistributedTraceSampleOrchestrator)
 	r.AddActivity(DoWorkActivity)
 	r.AddActivity(CallHttpEndpointActivity)
 
+	// Init the client
 	ctx := context.Background()
-	client, worker := Init(ctx, r)
+	client, worker, err := Init(ctx, r)
+	if err != nil {
+		log.Fatalf("Failed to initialize the client: %v", err)
+	}
 	defer worker.Shutdown(ctx)
 
+	// Start a new orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, DistributedTraceSampleOrchestrator)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to schedule new orchestration: %v", err)
 	}
+
+	// Wait for the orchestration to complete
 	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to wait for orchestration to complete: %v", err)
 	}
-	fmt.Printf("orchestration completed: %v\n", metadata)
+
+	// Print the results
+	metadataEnc, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to encode result to JSON: %v", err)
+	}
+	log.Printf("Orchestration completed: %v", string(metadataEnc))
 }
 
-func ConfigureZipkinTracing() *trace.TracerProvider {
+// Init creates and initializes an in-memory client and worker pair with default configuration.
+func Init(ctx context.Context, r *task.TaskRegistry) (backend.TaskHubClient, backend.TaskHubWorker, error) {
+	logger := backend.DefaultLogger()
+
+	// Create an executor
+	executor := task.NewTaskExecutor(r)
+
+	// Create a new backend
+	// Use the in-memory sqlite provider by specifying ""
+	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions(""), logger)
+	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
+	activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
+	taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
+
+	// Start the worker
+	err := taskHubWorker.Start(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Get the client to the backend
+	taskHubClient := backend.NewTaskHubClient(be)
+
+	return taskHubClient, taskHubWorker, nil
+}
+
+func ConfigureZipkinTracing() (*trace.TracerProvider, error) {
 	// Inspired by this sample: https://github.com/open-telemetry/opentelemetry-go/blob/main/example/zipkin/main.go
 	exp, err := zipkin.New("http://localhost:9411/api/v2/spans")
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	// NOTE: The simple span processor is not recommended for production.
@@ -67,7 +111,7 @@ func ConfigureZipkinTracing() *trace.TracerProvider {
 		)),
 	)
 	otel.SetTracerProvider(tp)
-	return tp
+	return tp, nil
 }
 
 // DistributedTraceSampleOrchestrator is a simple orchestration that's intended to generate
@@ -93,7 +137,13 @@ func DoWorkActivity(ctx task.ActivityContext) (any, error) {
 	}
 
 	// Simulate doing work
-	time.Sleep(duration)
+	select {
+	case <-time.After(duration):
+		// Ok
+	case <-ctx.Context().Done():
+		return nil, ctx.Context().Err()
+	}
+
 	return nil, nil
 }
 
