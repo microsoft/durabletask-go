@@ -255,7 +255,7 @@ git clone --recurse-submodules https://github.com/microsoft/durabletask-go
 
 ## Building the project
 
-This project requires go v1.18.x or greater. You can build a standalone executable by simply running `go build` at the project root.
+This project requires go v1.19.x or greater. You can build a standalone executable by simply running `go build` at the project root.
 
 ### Generating protobuf
 
