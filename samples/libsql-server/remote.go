@@ -56,6 +56,7 @@ func main() {
 	json.Unmarshal([]byte(metadata.SerializedOutput), &emps)
 	// Print the results
 	log.Printf("Orchestration completed: %v", emps)
+	// Cleanup the task hub
 	be.DeleteTaskHub(ctx)
 
 }
