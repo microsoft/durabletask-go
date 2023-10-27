@@ -17,18 +17,22 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/proto"
 
+	_ "github.com/libsql/libsql-client-go/libsql"
 	_ "modernc.org/sqlite"
 )
 
 //go:embed schema.sql
 var schema string
 
+//go:embed drop.sql
+var dropSchema string
+
 var emptyString string = ""
 
 type SqliteOptions struct {
 	OrchestrationLockTimeout time.Duration
 	ActivityLockTimeout      time.Duration
-	FilePath                 string
+	Uri                      string
 }
 
 type sqliteBackend struct {
@@ -42,10 +46,10 @@ type sqliteBackend struct {
 // NewSqliteOptions creates a new options object for the sqlite backend provider.
 //
 // Specify "" for filePath to configure an in-memory database.
-func NewSqliteOptions(filePath string) *SqliteOptions {
+func NewSqliteOptions(uri string) *SqliteOptions {
 	// Default values are provided for required options
 	return &SqliteOptions{
-		FilePath:                 filePath,
+		Uri:                      uri,
 		OrchestrationLockTimeout: 2 * time.Minute,
 		ActivityLockTimeout:      2 * time.Minute,
 	}
@@ -71,12 +75,14 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 	if opts == nil {
 		opts = NewSqliteOptions("")
 	}
-	if opts.FilePath == "" {
+	if opts.Uri == "" {
 		be.dsn = "file::memory:"
-	} else if !strings.HasPrefix(opts.FilePath, "file:") {
-		be.dsn = "file:" + opts.FilePath
-	} else {
-		be.dsn = opts.FilePath
+	} else if strings.HasPrefix(opts.Uri, "file") ||
+		strings.HasPrefix(opts.Uri, "http:") ||
+		strings.HasPrefix(opts.Uri, "https:") ||
+		strings.HasPrefix(opts.Uri, "libsql:") {
+
+		be.dsn = opts.Uri
 	}
 
 	return be
@@ -84,7 +90,17 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 
 // CreateTaskHub creates the sqlite database and applies the schema
 func (be *sqliteBackend) CreateTaskHub(context.Context) error {
-	db, err := sql.Open("sqlite", be.dsn)
+	var db *sql.DB
+	var err error
+
+	if strings.HasPrefix(be.dsn, "http:") ||
+		strings.HasPrefix(be.dsn, "https:") ||
+		strings.HasPrefix(be.dsn, "libsql:") {
+		db, err = sql.Open("libsql", be.dsn)
+	} else {
+		db, err = sql.Open("sqlite", be.dsn)
+	}
+
 	if err != nil {
 		panic(fmt.Errorf("failed to open the database: %w", err))
 	}
@@ -106,20 +122,29 @@ func (be *sqliteBackend) CreateTaskHub(context.Context) error {
 }
 
 func (be *sqliteBackend) DeleteTaskHub(ctx context.Context) error {
-	be.db = nil
-
-	if be.options.FilePath == "" {
+	defer func() {
+		be.db = nil
+	}()
+	if be.options.Uri == "" {
 		// In-memory DB
 		return nil
 	} else {
 		// File-system DB
-		err := os.Remove(be.options.FilePath)
-		if err == nil {
-			return nil
-		} else if os.IsNotExist(err) {
-			return backend.ErrTaskHubNotFound
+		if strings.HasPrefix("file:", be.dsn) {
+			err := os.Remove(be.options.Uri)
+			if err == nil {
+				return nil
+			} else if os.IsNotExist(err) {
+				return backend.ErrTaskHubNotFound
+			} else {
+				return err
+			}
 		} else {
-			return err
+			// Destroy the database
+			if _, err := be.db.Exec(dropSchema); err != nil {
+				return fmt.Errorf("failed to destroy the database: %w", err)
+			}
+			return nil
 		}
 	}
 }
@@ -891,5 +916,9 @@ func (be *sqliteBackend) ensureDB() error {
 }
 
 func (be *sqliteBackend) String() string {
-	return fmt.Sprintf("sqlite::%s", be.options.FilePath)
+	if strings.HasPrefix(be.dsn, "file:") {
+		return fmt.Sprintf("sqlite::%s", be.options.Uri)
+	}
+
+	return fmt.Sprintf("libsql://%s", be.options.Uri)
 }
