@@ -253,7 +253,7 @@ func Test_ScheduleTask(t *testing.T) {
 		helpers.NewScheduleTaskAction(expectedTaskID, expectedName, wrapperspb.String(expectedInput)),
 	}
 
-	tc := &protos.TraceContext{TraceID: "trace", SpanID: "span", TraceState: wrapperspb.String("state")}
+	tc := &protos.TraceContext{TraceParent: "trace", TraceState: wrapperspb.String("state")}
 	continuedAsNew, err := state.ApplyActions(actions, tc)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, state.NewEvents(), 1) {
@@ -263,8 +263,7 @@ func Test_ScheduleTask(t *testing.T) {
 				assert.Equal(t, expectedName, taskScheduled.Name)
 				assert.Equal(t, expectedInput, taskScheduled.Input.GetValue())
 				if assert.NotNil(t, taskScheduled.ParentTraceContext) {
-					assert.Equal(t, "trace", taskScheduled.ParentTraceContext.TraceID)
-					assert.Equal(t, "span", taskScheduled.ParentTraceContext.SpanID)
+					assert.Equal(t, "trace", taskScheduled.ParentTraceContext.TraceParent)
 					assert.Equal(t, "state", taskScheduled.ParentTraceContext.TraceState.GetValue())
 				}
 			}
@@ -276,8 +275,7 @@ func Test_ScheduleTask(t *testing.T) {
 				assert.Equal(t, expectedName, taskScheduled.Name)
 				assert.Equal(t, expectedInput, taskScheduled.Input.GetValue())
 				if assert.NotNil(t, taskScheduled.ParentTraceContext) {
-					assert.Equal(t, "trace", taskScheduled.ParentTraceContext.TraceID)
-					assert.Equal(t, "span", taskScheduled.ParentTraceContext.SpanID)
+					assert.Equal(t, "trace", taskScheduled.ParentTraceContext.TraceParent)
 					assert.Equal(t, "state", taskScheduled.ParentTraceContext.TraceState.GetValue())
 				}
 			}
@@ -291,8 +289,7 @@ func Test_CreateSubOrchestration(t *testing.T) {
 	expectedInstanceID := "xyz"
 	expectedName := "MySubOrchestration"
 	expectedInput := wrapperspb.String("{\"Foo\":5}")
-	expectedTraceID := "trace"
-	expectedSpanID := "span"
+	expectedTraceParent := "trace"
 	expectedTraceState := "trace_state"
 
 	state := backend.NewOrchestrationRuntimeState(api.InstanceID(iid), []*protos.HistoryEvent{
@@ -304,9 +301,8 @@ func Test_CreateSubOrchestration(t *testing.T) {
 	}
 
 	tc := &protos.TraceContext{
-		TraceID:    expectedTraceID,
-		SpanID:     expectedSpanID,
-		TraceState: wrapperspb.String(expectedTraceState),
+		TraceParent: expectedTraceParent,
+		TraceState:  wrapperspb.String(expectedTraceState),
 	}
 	continuedAsNew, err := state.ApplyActions(actions, tc)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
@@ -318,8 +314,7 @@ func Test_CreateSubOrchestration(t *testing.T) {
 				assert.Equal(t, expectedName, orchCreated.Name)
 				assert.Equal(t, expectedInput.GetValue(), orchCreated.Input.GetValue())
 				if assert.NotNil(t, orchCreated.ParentTraceContext) {
-					assert.Equal(t, expectedTraceID, orchCreated.ParentTraceContext.TraceID)
-					assert.Equal(t, expectedSpanID, orchCreated.ParentTraceContext.SpanID)
+					assert.Equal(t, expectedTraceParent, orchCreated.ParentTraceContext.TraceParent)
 					assert.Equal(t, expectedTraceState, orchCreated.ParentTraceContext.TraceState.GetValue())
 				}
 			}
@@ -340,8 +335,7 @@ func Test_CreateSubOrchestration(t *testing.T) {
 					}
 				}
 				if assert.NotNil(t, executionStarted.ParentTraceContext) {
-					assert.Equal(t, expectedTraceID, executionStarted.ParentTraceContext.TraceID)
-					assert.Equal(t, expectedSpanID, executionStarted.ParentTraceContext.SpanID)
+					assert.Equal(t, expectedTraceParent, executionStarted.ParentTraceContext.TraceParent)
 					assert.Equal(t, expectedTraceState, executionStarted.ParentTraceContext.TraceState.GetValue())
 				}
 			}

@@ -48,10 +48,19 @@ type TaskHubSidecarServiceClient interface {
 	GetWorkItems(ctx context.Context, in *GetWorkItemsRequest, opts ...grpc.CallOption) (TaskHubSidecarService_GetWorkItemsClient, error)
 	CompleteActivityTask(ctx context.Context, in *ActivityResponse, opts ...grpc.CallOption) (*CompleteTaskResponse, error)
 	CompleteOrchestratorTask(ctx context.Context, in *OrchestratorResponse, opts ...grpc.CallOption) (*CompleteTaskResponse, error)
+	CompleteEntityTask(ctx context.Context, in *EntityBatchResult, opts ...grpc.CallOption) (*CompleteTaskResponse, error)
 	// Deletes and Creates the necessary resources for the orchestration service and the instance store
 	CreateTaskHub(ctx context.Context, in *CreateTaskHubRequest, opts ...grpc.CallOption) (*CreateTaskHubResponse, error)
 	// Deletes the resources for the orchestration service and optionally the instance store
 	DeleteTaskHub(ctx context.Context, in *DeleteTaskHubRequest, opts ...grpc.CallOption) (*DeleteTaskHubResponse, error)
+	// sends a signal to an entity
+	SignalEntity(ctx context.Context, in *SignalEntityRequest, opts ...grpc.CallOption) (*SignalEntityResponse, error)
+	// get information about a specific entity
+	GetEntity(ctx context.Context, in *GetEntityRequest, opts ...grpc.CallOption) (*GetEntityResponse, error)
+	// query entities
+	QueryEntities(ctx context.Context, in *QueryEntitiesRequest, opts ...grpc.CallOption) (*QueryEntitiesResponse, error)
+	// clean entity storage
+	CleanEntityStorage(ctx context.Context, in *CleanEntityStorageRequest, opts ...grpc.CallOption) (*CleanEntityStorageResponse, error)
 }
 
 type taskHubSidecarServiceClient struct {
@@ -220,6 +229,15 @@ func (c *taskHubSidecarServiceClient) CompleteOrchestratorTask(ctx context.Conte
 	return out, nil
 }
 
+func (c *taskHubSidecarServiceClient) CompleteEntityTask(ctx context.Context, in *EntityBatchResult, opts ...grpc.CallOption) (*CompleteTaskResponse, error) {
+	out := new(CompleteTaskResponse)
+	err := c.cc.Invoke(ctx, "/TaskHubSidecarService/CompleteEntityTask", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *taskHubSidecarServiceClient) CreateTaskHub(ctx context.Context, in *CreateTaskHubRequest, opts ...grpc.CallOption) (*CreateTaskHubResponse, error) {
 	out := new(CreateTaskHubResponse)
 	err := c.cc.Invoke(ctx, "/TaskHubSidecarService/CreateTaskHub", in, out, opts...)
@@ -232,6 +250,42 @@ func (c *taskHubSidecarServiceClient) CreateTaskHub(ctx context.Context, in *Cre
 func (c *taskHubSidecarServiceClient) DeleteTaskHub(ctx context.Context, in *DeleteTaskHubRequest, opts ...grpc.CallOption) (*DeleteTaskHubResponse, error) {
 	out := new(DeleteTaskHubResponse)
 	err := c.cc.Invoke(ctx, "/TaskHubSidecarService/DeleteTaskHub", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskHubSidecarServiceClient) SignalEntity(ctx context.Context, in *SignalEntityRequest, opts ...grpc.CallOption) (*SignalEntityResponse, error) {
+	out := new(SignalEntityResponse)
+	err := c.cc.Invoke(ctx, "/TaskHubSidecarService/SignalEntity", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskHubSidecarServiceClient) GetEntity(ctx context.Context, in *GetEntityRequest, opts ...grpc.CallOption) (*GetEntityResponse, error) {
+	out := new(GetEntityResponse)
+	err := c.cc.Invoke(ctx, "/TaskHubSidecarService/GetEntity", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskHubSidecarServiceClient) QueryEntities(ctx context.Context, in *QueryEntitiesRequest, opts ...grpc.CallOption) (*QueryEntitiesResponse, error) {
+	out := new(QueryEntitiesResponse)
+	err := c.cc.Invoke(ctx, "/TaskHubSidecarService/QueryEntities", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskHubSidecarServiceClient) CleanEntityStorage(ctx context.Context, in *CleanEntityStorageRequest, opts ...grpc.CallOption) (*CleanEntityStorageResponse, error) {
+	out := new(CleanEntityStorageResponse)
+	err := c.cc.Invoke(ctx, "/TaskHubSidecarService/CleanEntityStorage", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -267,10 +321,19 @@ type TaskHubSidecarServiceServer interface {
 	GetWorkItems(*GetWorkItemsRequest, TaskHubSidecarService_GetWorkItemsServer) error
 	CompleteActivityTask(context.Context, *ActivityResponse) (*CompleteTaskResponse, error)
 	CompleteOrchestratorTask(context.Context, *OrchestratorResponse) (*CompleteTaskResponse, error)
+	CompleteEntityTask(context.Context, *EntityBatchResult) (*CompleteTaskResponse, error)
 	// Deletes and Creates the necessary resources for the orchestration service and the instance store
 	CreateTaskHub(context.Context, *CreateTaskHubRequest) (*CreateTaskHubResponse, error)
 	// Deletes the resources for the orchestration service and optionally the instance store
 	DeleteTaskHub(context.Context, *DeleteTaskHubRequest) (*DeleteTaskHubResponse, error)
+	// sends a signal to an entity
+	SignalEntity(context.Context, *SignalEntityRequest) (*SignalEntityResponse, error)
+	// get information about a specific entity
+	GetEntity(context.Context, *GetEntityRequest) (*GetEntityResponse, error)
+	// query entities
+	QueryEntities(context.Context, *QueryEntitiesRequest) (*QueryEntitiesResponse, error)
+	// clean entity storage
+	CleanEntityStorage(context.Context, *CleanEntityStorageRequest) (*CleanEntityStorageResponse, error)
 	mustEmbedUnimplementedTaskHubSidecarServiceServer()
 }
 
@@ -323,11 +386,26 @@ func (UnimplementedTaskHubSidecarServiceServer) CompleteActivityTask(context.Con
 func (UnimplementedTaskHubSidecarServiceServer) CompleteOrchestratorTask(context.Context, *OrchestratorResponse) (*CompleteTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CompleteOrchestratorTask not implemented")
 }
+func (UnimplementedTaskHubSidecarServiceServer) CompleteEntityTask(context.Context, *EntityBatchResult) (*CompleteTaskResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CompleteEntityTask not implemented")
+}
 func (UnimplementedTaskHubSidecarServiceServer) CreateTaskHub(context.Context, *CreateTaskHubRequest) (*CreateTaskHubResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateTaskHub not implemented")
 }
 func (UnimplementedTaskHubSidecarServiceServer) DeleteTaskHub(context.Context, *DeleteTaskHubRequest) (*DeleteTaskHubResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteTaskHub not implemented")
+}
+func (UnimplementedTaskHubSidecarServiceServer) SignalEntity(context.Context, *SignalEntityRequest) (*SignalEntityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SignalEntity not implemented")
+}
+func (UnimplementedTaskHubSidecarServiceServer) GetEntity(context.Context, *GetEntityRequest) (*GetEntityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetEntity not implemented")
+}
+func (UnimplementedTaskHubSidecarServiceServer) QueryEntities(context.Context, *QueryEntitiesRequest) (*QueryEntitiesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryEntities not implemented")
+}
+func (UnimplementedTaskHubSidecarServiceServer) CleanEntityStorage(context.Context, *CleanEntityStorageRequest) (*CleanEntityStorageResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CleanEntityStorage not implemented")
 }
 func (UnimplementedTaskHubSidecarServiceServer) mustEmbedUnimplementedTaskHubSidecarServiceServer() {}
 
@@ -615,6 +693,24 @@ func _TaskHubSidecarService_CompleteOrchestratorTask_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskHubSidecarService_CompleteEntityTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EntityBatchResult)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskHubSidecarServiceServer).CompleteEntityTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/TaskHubSidecarService/CompleteEntityTask",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskHubSidecarServiceServer).CompleteEntityTask(ctx, req.(*EntityBatchResult))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TaskHubSidecarService_CreateTaskHub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateTaskHubRequest)
 	if err := dec(in); err != nil {
@@ -647,6 +743,78 @@ func _TaskHubSidecarService_DeleteTaskHub_Handler(srv interface{}, ctx context.C
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TaskHubSidecarServiceServer).DeleteTaskHub(ctx, req.(*DeleteTaskHubRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskHubSidecarService_SignalEntity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignalEntityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskHubSidecarServiceServer).SignalEntity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/TaskHubSidecarService/SignalEntity",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskHubSidecarServiceServer).SignalEntity(ctx, req.(*SignalEntityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskHubSidecarService_GetEntity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEntityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskHubSidecarServiceServer).GetEntity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/TaskHubSidecarService/GetEntity",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskHubSidecarServiceServer).GetEntity(ctx, req.(*GetEntityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskHubSidecarService_QueryEntities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryEntitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskHubSidecarServiceServer).QueryEntities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/TaskHubSidecarService/QueryEntities",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskHubSidecarServiceServer).QueryEntities(ctx, req.(*QueryEntitiesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskHubSidecarService_CleanEntityStorage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CleanEntityStorageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskHubSidecarServiceServer).CleanEntityStorage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/TaskHubSidecarService/CleanEntityStorage",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskHubSidecarServiceServer).CleanEntityStorage(ctx, req.(*CleanEntityStorageRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -715,12 +883,32 @@ var TaskHubSidecarService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TaskHubSidecarService_CompleteOrchestratorTask_Handler,
 		},
 		{
+			MethodName: "CompleteEntityTask",
+			Handler:    _TaskHubSidecarService_CompleteEntityTask_Handler,
+		},
+		{
 			MethodName: "CreateTaskHub",
 			Handler:    _TaskHubSidecarService_CreateTaskHub_Handler,
 		},
 		{
 			MethodName: "DeleteTaskHub",
 			Handler:    _TaskHubSidecarService_DeleteTaskHub_Handler,
+		},
+		{
+			MethodName: "SignalEntity",
+			Handler:    _TaskHubSidecarService_SignalEntity_Handler,
+		},
+		{
+			MethodName: "GetEntity",
+			Handler:    _TaskHubSidecarService_GetEntity_Handler,
+		},
+		{
+			MethodName: "QueryEntities",
+			Handler:    _TaskHubSidecarService_QueryEntities_Handler,
+		},
+		{
+			MethodName: "CleanEntityStorage",
+			Handler:    _TaskHubSidecarService_CleanEntityStorage_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

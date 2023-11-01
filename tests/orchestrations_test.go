@@ -33,12 +33,10 @@ func Test_EmptyOrchestration(t *testing.T) {
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "EmptyOrchestrator")
-	if assert.NoError(t, err) {
-		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
-		if assert.NoError(t, err) {
-			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-		}
-	}
+	require.NoError(t, err)
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
@@ -768,6 +766,64 @@ func Test_PurgeCompletedOrchestration(t *testing.T) {
 	if err = client.PurgeOrchestrationState(ctx, id); !assert.ErrorIs(t, err, api.ErrInstanceNotFound) {
 		return
 	}
+}
+
+func Test_RecreateCompletedOrchestration(t *testing.T) {
+	t.Skip("Not yet supported. Needs https://github.com/microsoft/durabletask-go/issues/42")
+
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("HelloOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output string
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		var name string
+		if err := ctx.GetInput(&name); err != nil {
+			return nil, err
+		}
+		return fmt.Sprintf("Hello, %s!", name), nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the first orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "HelloOrchestration", api.WithInput("世界"))
+	require.NoError(t, err)
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+
+	// Run the second orchestration with the same ID as the first
+	var newID api.InstanceID
+	newID, err = client.ScheduleNewOrchestration(ctx, "HelloOrchestration", api.WithInstanceID(id), api.WithInput("World"))
+	require.NoError(t, err)
+	require.Equal(t, id, newID)
+	metadata, err = client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	assert.Equal(t, `"Hello, World!"`, metadata.SerializedOutput)
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("SingleActivity", id),
+		assertActivity("SayHello", id, 0),
+		assertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+		assertOrchestratorCreated("SingleActivity", id),
+		assertActivity("SayHello", id, 0),
+		assertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+	)
 }
 
 func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {

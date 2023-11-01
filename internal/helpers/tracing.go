@@ -2,7 +2,9 @@ package helpers
 
 import (
 	"context"
+	"encoding/hex"
 	"reflect"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -54,20 +56,11 @@ func StartNewActivitySpan(
 }
 
 func StartAndEndNewTimerSpan(ctx context.Context, tf *protos.TimerFiredEvent, createdTime time.Time, instanceID string) error {
-	if tf.ParentTraceContext == nil {
-		return nil
-	}
-
 	attributes := []attribute.KeyValue{
 		{Key: "durabletask.type", Value: attribute.StringValue("timer")},
 		{Key: "durabletask.fire_at", Value: attribute.StringValue(tf.FireAt.AsTime().Format(time.RFC3339))}, // time.RFC3339 most closely maps to ISO 8601
 		{Key: "durabletask.task.task_id", Value: attribute.Int64Value(int64(tf.TimerId))},
 		{Key: "durabletask.task.instance_id", Value: attribute.StringValue(instanceID)},
-	}
-
-	ctx, err := ContextFromTraceContext(ctx, tf.ParentTraceContext)
-	if err != nil {
-		return err
 	}
 
 	_, span := startNewSpan(ctx, "timer", "", "", attributes, trace.SpanKindInternal, createdTime)
@@ -142,27 +135,45 @@ func ContextFromTraceContext(ctx context.Context, tc *protos.TraceContext) (cont
 }
 
 func SpanContextFromTraceContext(tc *protos.TraceContext) (trace.SpanContext, error) {
-	var traceID trace.TraceID
+	var decodedTraceID trace.TraceID
 	var err error
-	traceID, err = trace.TraceIDFromHex(tc.TraceID)
+	var traceID string
+	var spanID string
+	var traceFlags string
+
+	parts := strings.Split(tc.TraceParent, "-")
+	if len(parts) == 4 {
+		traceID = parts[1]
+		spanID = parts[2]
+		traceFlags = parts[3]
+	} else {
+		// backwards compatibility with older versions of the protobuf
+		traceID = tc.GetTraceParent()
+		spanID = tc.GetSpanID()
+		traceFlags = "01" // sampled
+	}
+
+	decodedTraceID, err = trace.TraceIDFromHex(traceID)
 	if err != nil {
 		return trace.SpanContext{}, err
 	}
 
-	var spanID trace.SpanID
-	spanID, err = trace.SpanIDFromHex(tc.SpanID)
+	var decodedSpanID trace.SpanID
+	decodedSpanID, err = trace.SpanIDFromHex(spanID)
 	if err != nil {
 		return trace.SpanContext{}, err
 	}
 
-	// Note that we assume that trace context objects are created only for sampled spans.
-	// This assumption allows us to set TraceFlags to trace.FlagsSampled. Without this
-	// assumption, we'd need to add a property to the trace context indicating whether
-	// the span is being sampled.
+	var decodedTraceFlags []byte
+	decodedTraceFlags, err = hex.DecodeString(traceFlags)
+	if err != nil {
+		return trace.SpanContext{}, err
+	}
+
 	spanContextConfig := trace.SpanContextConfig{
-		TraceID:    traceID,
-		SpanID:     spanID,
-		TraceFlags: trace.FlagsSampled,
+		TraceID:    decodedTraceID,
+		SpanID:     decodedSpanID,
+		TraceFlags: trace.TraceFlags(decodedTraceFlags[0]),
 	}
 
 	// Trace state is optional
@@ -192,8 +203,7 @@ func TraceContextFromSpan(span trace.Span) *protos.TraceContext {
 	spanContext := span.SpanContext()
 	if spanContext.IsValid() {
 		tc = &protos.TraceContext{
-			TraceID: spanContext.TraceID().String(),
-			SpanID:  spanContext.SpanID().String(),
+			TraceParent: "00-" + spanContext.TraceID().String() + "-" + spanContext.SpanID().String() + "-" + spanContext.TraceFlags().String(),
 		}
 		if ts := spanContext.TraceState().String(); ts != "" {
 			tc.TraceState = wrapperspb.String(ts)
