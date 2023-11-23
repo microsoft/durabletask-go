@@ -227,3 +227,79 @@ func Test_Grpc_Terminate_Recursive(t *testing.T) {
 		})
 	}
 }
+
+func Test_Grpc_ReuseInstanceIDSkipOrTerminate(t *testing.T) {
+	delayTime := 4 * time.Second
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output string
+		ctx.CreateTimer(delayTime).Await(nil)
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		var name string
+		if err := ctx.GetInput(&name); err != nil {
+			return nil, err
+		}
+		return fmt.Sprintf("Hello, %s!", name), nil
+	})
+
+	cancelListener := startGrpcListener(t, r)
+	defer cancelListener()
+	instanceIDs := []api.InstanceID{"SKIP_IF_EXIST", "TERMINATE_IF_EXIST"}
+	options := []api.InstanceExistsOption{api.SKIP_IF_EXIST, api.TERMINATE_IF_EXIST}
+
+	for i, option := range options {
+		id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceIDs[i]))
+		require.NoError(t, err)
+		id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(id), api.WithInstanceExistsOption(option))
+		require.NoError(t, err)
+		timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
+		defer cancelTimeout()
+		metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
+		require.NoError(t, err)
+		assert.Equal(t, true, metadata.IsComplete())
+		assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func Test_Grpc_ReuseInstanceIDThrowIfExists(t *testing.T) {
+	delayTime := 4 * time.Second
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output string
+		ctx.CreateTimer(delayTime).Await(nil)
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		var name string
+		if err := ctx.GetInput(&name); err != nil {
+			return nil, err
+		}
+		return fmt.Sprintf("Hello, %s!", name), nil
+	})
+
+	cancelListener := startGrpcListener(t, r)
+	defer cancelListener()
+	
+	instanceID := api.InstanceID("123")
+	option := api.THROW_IF_EXIST
+
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
+	require.NoError(t, err)
+	_, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(id), api.WithInstanceExistsOption(option))
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "duplicate event")
+	}
+}

@@ -311,10 +311,32 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 	defer span.End()
 
 	e := helpers.NewExecutionStartedEvent(req.Name, instanceID, req.Input, nil, helpers.TraceContextFromSpan(span))
-	if err := g.backend.CreateOrchestrationInstance(ctx, e); err != nil {
-		return nil, err
-	}
 
+	// Question: from customer side SKIP_IF_EXIST and TERMINATE_IF_EXIST have the same behavior if success. 
+	// Do customers need to know the difference between them? SKIP_IF_EXIST use the old instance, whereas
+	// TERMINATE_IF_EXIST terminates old instance and create a new instance with the same instance id. 
+
+	// Terminate existing instance if requested
+	if req.InstanceExistOption == protos.InstanceExistOption_TERMINATE_IF_EXIST {
+		if err := g.backend.CleanupOrchestration(ctx, api.InstanceID(instanceID)); err != nil && !errors.Is(err, api.ErrInstanceNotFound) {
+			return nil, err
+		}
+	}
+	// Create or update orchestration instance
+	err := g.backend.CreateOrchestrationInstance(ctx, e)
+
+	if err != nil {
+		if errors.Is(err, ErrDuplicateEvent) {
+			// Throw if instance already exists
+			if req.InstanceExistOption == protos.InstanceExistOption_THROW_IF_EXIST {
+				return nil, err
+			}
+			// Log a warning and skip if instance already exists
+			g.logger.Warnf("An instance with ID '%s' already exists; dropping duplicate create request", instanceID)
+		} else {
+			return nil, err
+		}
+	}
 	return &protos.CreateInstanceResponse{InstanceId: instanceID}, nil
 }
 

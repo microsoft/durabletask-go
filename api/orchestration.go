@@ -12,6 +12,14 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+type InstanceExistsOption int
+
+const (
+	THROW_IF_EXIST InstanceExistsOption = iota
+	SKIP_IF_EXIST
+	TERMINATE_IF_EXIST
+)
+
 var (
 	ErrInstanceNotFound = errors.New("no such instance exists")
 	ErrNotStarted       = errors.New("orchestration has not started")
@@ -83,6 +91,22 @@ func WithRawInput(rawInput string) NewOrchestrationOptions {
 func WithStartTime(startTime time.Time) NewOrchestrationOptions {
 	return func(req *protos.CreateInstanceRequest) error {
 		req.ScheduledStartTimestamp = timestamppb.New(startTime)
+		return nil
+	}
+}
+
+// WithInstanceExistsOption configures an option when orchestartion with same instance id already exists. 
+// If not specified, InstanceExistOption_THROW_IF_EXIST be used.
+func WithInstanceExistsOption(option InstanceExistsOption) NewOrchestrationOptions {
+	return func(req *protos.CreateInstanceRequest) error {
+		switch option {
+		case SKIP_IF_EXIST: 
+			req.InstanceExistOption = protos.InstanceExistOption_SKIP_IF_EXIST
+		case TERMINATE_IF_EXIST:
+			req.InstanceExistOption = protos.InstanceExistOption_TERMINATE_IF_EXIST
+		default:
+			req.InstanceExistOption = protos.InstanceExistOption_THROW_IF_EXIST
+		}
 		return nil
 	}
 }

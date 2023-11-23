@@ -873,6 +873,57 @@ func (be *sqliteBackend) PurgeOrchestrationState(ctx context.Context, id api.Ins
 	return nil
 }
 
+func (be *sqliteBackend) CleanupOrchestration(ctx context.Context, id api.InstanceID) error {
+	if err := be.ensureDB(); err != nil {
+		return err
+	}
+
+	tx, err := be.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRowContext(ctx, "SELECT 1 FROM Instances WHERE [InstanceID] = ?", string(id))
+	if err := row.Err(); err != nil {
+		return fmt.Errorf("failed to query for instance existence: %w", err)
+	}
+
+	var unused int
+	if err := row.Scan(&unused); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return api.ErrInstanceNotFound
+		} else {
+			return fmt.Errorf("failed to scan instance existence: %w", err)
+		}
+	}
+
+	_, err = tx.ExecContext(ctx, "DELETE FROM Instances WHERE [InstanceID] = ?", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from the Instances table: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, "DELETE FROM History WHERE [InstanceID] = ?", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from History table: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, "DELETE FROM NewEvents WHERE [InstanceID] = ?", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from NewEvents table: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, "DELETE FROM NewTasks WHERE [InstanceID] = ?", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from NewTasks table: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
 // Start implements backend.Backend
 func (*sqliteBackend) Start(context.Context) error {
 	return nil
