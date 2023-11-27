@@ -37,9 +37,11 @@ jobs:
       - name: Install dependencies
         run: go get .
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v2
-        
+      - name: Installing protoc-gen-go
+        run: |
+          go get github.com/golang/protobuf/protoc-gen-go@v1.28
+          go get google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2
+
       - name: Generate grpc code
         run: protoc --go_out=. --go-grpc_out=. -I submodules/durabletask-protobuf/protos orchestrator_service.proto
         
