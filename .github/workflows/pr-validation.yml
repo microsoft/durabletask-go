@@ -36,6 +36,12 @@ jobs:
           
       - name: Install dependencies
         run: go get .
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v2
+        
+      - name: Generate grpc code
+        run: protoc --go_out=. --go-grpc_out=. -I submodules/durabletask-protobuf/protos orchestrator_service.proto
         
       - name: Run integration tests
         run: go test ./tests/... -coverpkg ./api,./task,./client,./backend/...,./internal/helpers
