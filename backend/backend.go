@@ -91,6 +91,11 @@ type Backend interface {
 	// [api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
 	// [api.ErrNotCompleted] is returned if the specified orchestration instance is still running.
 	PurgeOrchestrationState(context.Context, api.InstanceID) error
+
+	// CleanupOrchestration clean up all records for the specified orchestration instance in the entire task hub.
+	//
+	// [api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
+	CleanupOrchestration(context.Context, api.InstanceID) error
 }
 
 // MarshalHistoryEvent serializes the [HistoryEvent] into a protobuf byte array.

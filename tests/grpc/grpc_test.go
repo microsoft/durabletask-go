@@ -227,3 +227,49 @@ func Test_Grpc_Terminate_Recursive(t *testing.T) {
 		})
 	}
 }
+
+func Test_Grpc_ReuseInstanceIDSkipOrTerminate(t *testing.T) {
+	delayTime := 4 * time.Second
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output string
+		ctx.CreateTimer(delayTime).Await(nil)
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		var name string
+		if err := ctx.GetInput(&name); err != nil {
+			return nil, err
+		}
+		return fmt.Sprintf("Hello, %s!", name), nil
+	})
+
+	cancelListener := startGrpcListener(t, r)
+	defer cancelListener()
+	instanceIDs := api.InstanceID("SKIP_IF_RUNNING_OR_COMPLETED")
+	ReuseIdOption := &api.OrchestrationIDReuseOption{
+		CreateOrchestrationAction: api.SKIP,
+		OrchestrationStatuses: []api.OrchestrationStatus{
+			api.RUNNING,
+			api.COMPLETED,
+			api.PENDING,
+		},
+	}
+
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceIDs))
+	require.NoError(t, err)
+	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(id), api.WithOrchestrationReuseOption(ReuseIdOption))
+	require.NoError(t, err)
+	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelTimeout()
+	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
+	require.NoError(t, err)
+	assert.Equal(t, true, metadata.IsComplete())
+	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+	time.Sleep(1 * time.Second)
+}

@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	ErrInstanceNotFound = errors.New("no such instance exists")
-	ErrNotStarted       = errors.New("orchestration has not started")
-	ErrNotCompleted     = errors.New("orchestration has not yet completed")
-	ErrNoFailures       = errors.New("orchestration did not report failure details")
+	ErrInstanceNotFound  = errors.New("no such instance exists")
+	ErrNotStarted        = errors.New("orchestration has not started")
+	ErrNotCompleted      = errors.New("orchestration has not yet completed")
+	ErrNoFailures        = errors.New("orchestration did not report failure details")
+	ErrDuplicateInstance = errors.New("orchestration instance already exists")
 
 	EmptyInstanceID = InstanceID("")
 )
@@ -36,6 +37,32 @@ type OrchestrationMetadata struct {
 	FailureDetails         *protos.TaskFailureDetails
 }
 
+type CreateOrchestrationAction int
+
+const (
+	THROW 		CreateOrchestrationAction = iota
+	SKIP
+	TERMINATE
+)
+
+type OrchestrationStatus int 
+
+const (
+	RUNNING          OrchestrationStatus = iota
+	COMPLETED        
+	// CONTINUED_AS_NEW 
+	FAILED           
+	// CANCELED         
+	TERMINATED       
+	PENDING          
+	// SUSPENDED        
+)
+
+type OrchestrationIDReuseOption struct {
+	CreateOrchestrationAction CreateOrchestrationAction
+	OrchestrationStatuses 	  []OrchestrationStatus
+}
+
 // NewOrchestrationOptions configures options for starting a new orchestration.
 type NewOrchestrationOptions func(*protos.CreateInstanceRequest) error
 
@@ -53,6 +80,45 @@ type TerminateOptions func(*protos.TerminateRequest) error
 func WithInstanceID(id InstanceID) NewOrchestrationOptions {
 	return func(req *protos.CreateInstanceRequest) error {
 		req.InstanceId = string(id)
+		return nil
+	}
+}
+
+// WithOrchestrationReuseOption configures Orchestration ID reuse policy.
+func WithOrchestrationReuseOption(option *OrchestrationIDReuseOption) NewOrchestrationOptions {
+	return func(req *protos.CreateInstanceRequest) error {
+		req.CreateInstanceOption = &protos.CreateInstanceOption{}
+		// set action
+		switch option.CreateOrchestrationAction {
+		case SKIP: 
+			req.CreateInstanceOption.Action = protos.CreateOrchestrationAction_SKIP
+		case TERMINATE:
+			req.CreateInstanceOption.Action = protos.CreateOrchestrationAction_TERMINATE
+		case THROW:
+			req.CreateInstanceOption.Action = protos.CreateOrchestrationAction_THROW
+		}
+
+		// set status
+		for _, status := range option.OrchestrationStatuses {
+			switch status {
+			case RUNNING:
+				req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING)
+			case COMPLETED:
+				req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED)
+			// case CONTINUED_AS_NEW:
+			// 	req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW)
+			case FAILED:
+				req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED)
+			// case CANCELED:
+			// 	req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED)
+			case TERMINATED:
+				req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED)
+			case PENDING:
+				req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING)
+			// case SUSPENDED:
+			// 	req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED)
+			}
+		}
 		return nil
 	}
 }
