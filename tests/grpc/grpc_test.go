@@ -304,7 +304,7 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
-	instanceIDs := api.InstanceID("SKIP_IF_RUNNING_OR_COMPLETED")
+	instanceIDs := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
 	ReuseIdOption := &api.OrchestrationIDReuseOption{
 		CreateOrchestrationAction: api.TERMINATE,
 		OrchestrationStatuses: []api.OrchestrationStatus{
@@ -356,7 +356,7 @@ func Test_Grpc_ReuseInstanceIDThrow(t *testing.T) {
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
-	instanceIDs := api.InstanceID("SKIP_IF_RUNNING_OR_COMPLETED")
+	instanceIDs := api.InstanceID("THROW_IF_RUNNING_OR_COMPLETED")
 	ReuseIdOption := &api.OrchestrationIDReuseOption{
 		CreateOrchestrationAction: api.THROW,
 		OrchestrationStatuses: []api.OrchestrationStatus{
