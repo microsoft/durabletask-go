@@ -397,6 +397,11 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 		return err
 	}
 
+	// if user not set this option, it will be nil, initialize it here to set default value
+	if option == nil {
+		option = &protos.CreateInstanceOption{}
+	}
+
 	tx, err := be.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
@@ -414,11 +419,12 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 			if _, ok := statusSet[helpers.FromRuntimeStatusString(runtimeStatus)]; !ok {
 				return api.ErrDuplicateInstance
 			} else {
-				if option.Action == protos.CreateOrchestrationAction_SKIP {
+				switch option.Action {
+				case protos.CreateOrchestrationAction_SKIP:
 					// Log an warning message and skip cerating new instance
 					be.logger.Warnf("An instance with ID '%s' already exists; dropping duplicate create request", instanceID)
 					return nil
-				} else if option.Action == protos.CreateOrchestrationAction_TERMINATE {
+				case protos.CreateOrchestrationAction_TERMINATE:
 					// terminate existing instance
 					if err := be.cleanupOrchestrationStateInternal(ctx, tx, api.InstanceID(instanceID)); err != nil {
 						return err
@@ -427,8 +433,8 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 					if _, _, err := be.createOrchestrationInstanceInternal(ctx, e, tx); err != nil {
 						return err
 					}
-				} else {
-					// CreateInstanceAction_THROW
+				case protos.CreateOrchestrationAction_ERROR:
+					// CreateInstanceAction_ERROR
 					return api.ErrDuplicateInstance
 				}
 			}
