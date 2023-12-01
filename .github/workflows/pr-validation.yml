@@ -15,9 +15,9 @@ on:
 
 env:
   # Configure protoc and go grpc plugin
-  PROTOC: "25.x"
-  PROTOC-GEN-GO: "v1.28"
-  PROTOC-GEN-GO-GRPC: "v1.2"
+  PROTOC_VERSION: "25.x"
+  PROTOC_GEN_GO: "v1.28"
+  PROTOC_GEN_GO_GRPC: "v1.2"
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
@@ -46,12 +46,12 @@ jobs:
       - name: Install Protoc
         uses: arduino/setup-protoc@v2
         with:
-          version: ${{ env.PROTOC }}
+          version: ${{ env.PROTOC_VERSION }}
 
       - name: Installing protoc-gen-go
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@$PROTOC-GEN-GO
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$PROTOC-GEN-GO-GRPC
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@$PROTOC_GEN_GO
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$PROTOC_GEN_GO_GRPC
 
       - name: Generate grpc code
         run: protoc --go_out=. --go-grpc_out=. -I ./submodules/durabletask-protobuf/protos orchestrator_service.proto
