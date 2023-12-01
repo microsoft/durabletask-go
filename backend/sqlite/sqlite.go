@@ -418,25 +418,27 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 			// if current status is not one of the target status, return error
 			if _, ok := statusSet[helpers.FromRuntimeStatusString(runtimeStatus)]; !ok {
 				return api.ErrDuplicateInstance
-			} else {
-				switch option.Action {
-				case protos.CreateOrchestrationAction_SKIP:
-					// Log an warning message and skip cerating new instance
-					be.logger.Warnf("An instance with ID '%s' already exists; dropping duplicate create request", instanceID)
-					return nil
-				case protos.CreateOrchestrationAction_TERMINATE:
-					// terminate existing instance
-					if err := be.cleanupOrchestrationStateInternal(ctx, tx, api.InstanceID(instanceID)); err != nil {
-						return err
-					}
-					// create a new instance
-					if _, _, err := be.createOrchestrationInstanceInternal(ctx, e, tx); err != nil {
-						return err
-					}
-				case protos.CreateOrchestrationAction_ERROR:
-					// CreateInstanceAction_ERROR
-					return api.ErrDuplicateInstance
+			}
+
+			// if status match
+			switch option.Action {
+			case protos.CreateOrchestrationAction_SKIP:
+				// Log an warning message and skip cerating new instance
+				be.logger.Warnf("An instance with ID '%s' already exists; dropping duplicate create request", instanceID)
+				return nil
+			case protos.CreateOrchestrationAction_TERMINATE:
+				// terminate existing instance
+				if err := be.cleanupOrchestrationStateInternal(ctx, tx, api.InstanceID(instanceID)); err != nil {
+					return err
 				}
+				// create a new instance
+				if _, _, err := be.createOrchestrationInstanceInternal(ctx, e, tx); err != nil {
+					return err
+				}
+				// Do not return here - let this fall through
+			case protos.CreateOrchestrationAction_ERROR:
+				// CreateInstanceAction_ERROR
+				return api.ErrDuplicateInstance
 			}
 		} else {
 			return err
