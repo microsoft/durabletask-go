@@ -79,6 +79,9 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 		be.dsn = opts.FilePath
 	}
 
+	// used for local debug
+	// be.dsn = "file:file.sqlite"
+
 	return be
 }
 
@@ -334,7 +337,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 			if es := msg.HistoryEvent.GetExecutionStarted(); es != nil {
 				// Need to insert a new row into the DB
 				var instanceID string
-				if err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, &instanceID); err != nil {
+				if _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, &instanceID); err != nil {
 					if err == backend.ErrDuplicateEvent {
 						be.logger.Warnf(
 							"%v: dropping sub-orchestration creation event because an instance with the target ID (%v) already exists.",
@@ -390,7 +393,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 }
 
 // CreateOrchestrationInstance implements backend.Backend
-func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *backend.HistoryEvent) error {
+func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *backend.HistoryEvent, option *protos.CreateInstanceOption) error {
 	if err := be.ensureDB(); err != nil {
 		return err
 	}
@@ -402,8 +405,38 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 	defer tx.Rollback()
 
 	var instanceID string
-	if err := be.createOrchestrationInstanceInternal(ctx, e, tx, &instanceID); err != nil {
-		return err
+	runtimeStatus, err := be.createOrchestrationInstanceInternal(ctx, e, tx, &instanceID)
+	if err != nil {
+		// instance alredy exists
+		if errors.Is(err, backend.ErrDuplicateEvent) {
+			// build target status set
+			fmt.Println("@@", option)
+			statusSet := convertStatusToSet(option.OperationStatus)
+			// if current status is not one of the target status, return error
+			if !statusSet[helpers.FromRuntimeStatusString(runtimeStatus)] {
+				return api.ErrDuplicateInstance
+			} else {
+				if option.Action == protos.CreateOrchestrationAction_SKIP {
+					// Log an warning message and skip cerating new instance
+					be.logger.Warnf("An instance with ID '%s' already exists; dropping duplicate create request", instanceID)
+					return nil
+				} else if option.Action == protos.CreateOrchestrationAction_TERMINATE {
+					// terminate existing instance
+					if err := be.cleanupOrchestrationStateInternal(ctx, tx, api.InstanceID(instanceID)); err != nil {
+						return err
+					}
+					// create a new instance
+					if _, err := be.createOrchestrationInstanceInternal(ctx, e, tx, &instanceID); err != nil {
+						return err
+					}
+				} else {
+					// CreateInstanceAction_THROW
+					return api.ErrDuplicateInstance
+				}
+			}
+		} else {
+			return err
+		}
 	}
 
 	eventPayload, err := backend.MarshalHistoryEvent(e)
@@ -429,17 +462,26 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 	return nil
 }
 
-func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx, instanceID *string) error {
+func convertStatusToSet(statuses []protos.OrchestrationStatus) map[protos.OrchestrationStatus]bool {
+	statusSet := make(map[protos.OrchestrationStatus]bool)
+	for _, status := range statuses {
+		statusSet[status] = true
+	}
+	return statusSet
+}
+
+func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx, instanceID *string) (string, error) {
 	if e == nil {
-		return errors.New("HistoryEvent must be non-nil")
+		return "", errors.New("HistoryEvent must be non-nil")
 	} else if e.Timestamp == nil {
-		return errors.New("HistoryEvent must have a non-nil timestamp")
+		return "", errors.New("HistoryEvent must have a non-nil timestamp")
 	}
 
 	startEvent := e.GetExecutionStarted()
 	if startEvent == nil {
-		return errors.New("HistoryEvent must be an ExecutionStartedEvent")
+		return "", errors.New("HistoryEvent must be an ExecutionStartedEvent")
 	}
+	*instanceID = startEvent.OrchestrationInstance.InstanceId
 
 	// TODO: Support for re-using orchestration instance IDs
 	res, err := tx.ExecContext(
@@ -462,19 +504,69 @@ func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context
 		e.Timestamp.AsTime(),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to insert into [Instances] table: %w", err)
+		return "", fmt.Errorf("failed to insert into [Instances] table: %w", err)
 	}
 
 	rows, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to count the rows affected: %w", err)
+		return "", fmt.Errorf("failed to count the rows affected: %w", err)
 	}
 
 	if rows <= 0 {
-		return backend.ErrDuplicateEvent
+		// query RuntimeStatus for the existing instance
+		queryRows, err := tx.QueryContext(
+			ctx,
+			`SELECT [RuntimeStatus] FROM Instances WHERE [InstanceID] = ?`,
+			startEvent.OrchestrationInstance.InstanceId,
+		)
+		var runtimeStatus *string
+		if queryRows.Next() {
+			err = queryRows.Scan(&runtimeStatus)
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", api.ErrInstanceNotFound
+			} else if err != nil {
+				return "", fmt.Errorf("failed to scan the Instances table result: %w", err)
+			}
+		}
+		return *runtimeStatus, backend.ErrDuplicateEvent
+	}
+	return "", nil
+}
+
+func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, tx *sql.Tx, id api.InstanceID) error {
+	row := tx.QueryRowContext(ctx, "SELECT 1 FROM Instances WHERE [InstanceID] = ?", string(id))
+	if err := row.Err(); err != nil {
+		return fmt.Errorf("failed to query for instance existence: %w", err)
 	}
 
-	*instanceID = startEvent.OrchestrationInstance.InstanceId
+	var unused int
+	if err := row.Scan(&unused); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return api.ErrInstanceNotFound
+		} else {
+			return fmt.Errorf("failed to scan instance existence: %w", err)
+		}
+	}
+
+	_, err := tx.ExecContext(ctx, "DELETE FROM Instances WHERE [InstanceID] = ?", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from the Instances table: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, "DELETE FROM History WHERE [InstanceID] = ?", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from History table: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, "DELETE FROM NewEvents WHERE [InstanceID] = ?", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from NewEvents table: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, "DELETE FROM NewTasks WHERE [InstanceID] = ?", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from NewTasks table: %w", err)
+	}
 	return nil
 }
 
@@ -860,47 +952,6 @@ func (be *sqliteBackend) PurgeOrchestrationState(ctx context.Context, id api.Ins
 	}
 	if rowsAffected == 0 {
 		return api.ErrNotCompleted
-	}
-
-	_, err = tx.ExecContext(ctx, "DELETE FROM History WHERE [InstanceID] = ?", string(id))
-	if err != nil {
-		return fmt.Errorf("failed to delete from History table: %w", err)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	return nil
-}
-
-func (be *sqliteBackend) CleanupOrchestration(ctx context.Context, id api.InstanceID) error {
-	if err := be.ensureDB(); err != nil {
-		return err
-	}
-
-	tx, err := be.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	row := tx.QueryRowContext(ctx, "SELECT 1 FROM Instances WHERE [InstanceID] = ?", string(id))
-	if err := row.Err(); err != nil {
-		return fmt.Errorf("failed to query for instance existence: %w", err)
-	}
-
-	var unused int
-	if err := row.Scan(&unused); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return api.ErrInstanceNotFound
-		} else {
-			return fmt.Errorf("failed to scan instance existence: %w", err)
-		}
-	}
-
-	_, err = tx.ExecContext(ctx, "DELETE FROM Instances WHERE [InstanceID] = ?", string(id))
-	if err != nil {
-		return fmt.Errorf("failed to delete from the Instances table: %w", err)
 	}
 
 	_, err = tx.ExecContext(ctx, "DELETE FROM History WHERE [InstanceID] = ?", string(id))

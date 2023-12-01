@@ -31,7 +31,10 @@ func NewTaskHubGrpcClient(cc grpc.ClientConnInterface, logger backend.Logger) *T
 
 // ScheduleNewOrchestration schedules a new orchestration instance with a specified set of options for execution.
 func (c *TaskHubGrpcClient) ScheduleNewOrchestration(ctx context.Context, orchestrator string, opts ...api.NewOrchestrationOptions) (api.InstanceID, error) {
-	req := &protos.CreateInstanceRequest{Name: orchestrator}
+	req := &protos.CreateInstanceRequest{
+		Name: orchestrator,
+		CreateInstanceOption: &protos.CreateInstanceOption{},
+	}
 	for _, configure := range opts {
 		configure(req)
 	}

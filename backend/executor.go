@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -311,47 +310,11 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 	ctx, span := helpers.StartNewCreateOrchestrationSpan(ctx, req.Name, req.Version.GetValue(), instanceID)
 	defer span.End()
 
-	// retreive instance with instanceID
-	metadata, err := g.backend.GetOrchestrationMetadata(ctx, api.InstanceID(instanceID))
-	if err != nil {
-		// if the instance doesn't exist, create instance directly. 
-		if errors.Is(err, api.ErrInstanceNotFound) {
-			return createInstance(ctx, g.backend, instanceID, req, span)
-		} else {
-			return nil, err
-		}
-	}
-
-	// build target status set
-	statusSet := convertStatusToSet(req.CreateInstanceOption.OperationStatus)
-
-	// if current status is not one of the target status, create instance directly
-	if !statusSet[metadata.RuntimeStatus] {
-		return createInstance(ctx, g.backend, instanceID, req, span)
-	} else {
-		if req.CreateInstanceOption.Action == protos.CreateOrchestrationAction_THROW {
-			// throw ErrDuplicateEvent since instance already exists and the status is in target status set
-			return nil, api.ErrDuplicateInstance
-		} else if req.CreateInstanceOption.Action == protos.CreateOrchestrationAction_SKIP {
-			// skip creating new instance
-			g.logger.Warnf("An instance with ID '%s' already exists; dropping duplicate create request", instanceID)
-			return &protos.CreateInstanceResponse{InstanceId: instanceID}, nil
-		} else {
-			// CreateInstanceAction_TERMINATE
-			// terminate existing instance and create a new one
-			if err := g.backend.CleanupOrchestration(ctx, api.InstanceID(instanceID)); err != nil {
-				return nil, err
-			}
-			return createInstance(ctx, g.backend, instanceID, req, span)
-		}
-	}
-}
-
-func createInstance(ctx context.Context, be Backend, instanceID string, req *protos.CreateInstanceRequest, span trace.Span) (*protos.CreateInstanceResponse, error) {
 	e := helpers.NewExecutionStartedEvent(req.Name, instanceID, req.Input, nil, helpers.TraceContextFromSpan(span))
-	if err := be.CreateOrchestrationInstance(ctx, e); err != nil {
+	if err := g.backend.CreateOrchestrationInstance(ctx, e, req.CreateInstanceOption); err != nil {
 		return nil, err
 	}
+
 	return &protos.CreateInstanceResponse{InstanceId: instanceID}, nil
 }
 

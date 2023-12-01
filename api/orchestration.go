@@ -37,30 +37,29 @@ type OrchestrationMetadata struct {
 	FailureDetails         *protos.TaskFailureDetails
 }
 
-type CreateOrchestrationAction int
+type CreateOrchestrationAction protos.CreateOrchestrationAction
 
 const (
-	THROW 		CreateOrchestrationAction = iota
-	SKIP
-	TERMINATE
+	SKIP		= protos.CreateOrchestrationAction_SKIP
+	TERMINATE	= protos.CreateOrchestrationAction_TERMINATE
 )
 
-type OrchestrationStatus int 
+type OrchestrationStatus protos.OrchestrationStatus
 
 const (
-	RUNNING          OrchestrationStatus = iota
-	COMPLETED        
-	// CONTINUED_AS_NEW 
-	FAILED           
-	// CANCELED         
-	TERMINATED       
-	PENDING          
-	// SUSPENDED        
+	RUNNING          =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING         
+	COMPLETED        =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED       
+	// CONTINUED_AS_NEW =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW
+	FAILED           =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED          
+	// CANCELED         =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED        
+	TERMINATED       =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED      
+	PENDING          =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING         
+	// SUSPENDED        =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED       
 )
 
 type OrchestrationIDReuseOption struct {
-	CreateOrchestrationAction CreateOrchestrationAction
-	OrchestrationStatuses 	  []OrchestrationStatus
+	CreateOrchestrationAction protos.CreateOrchestrationAction
+	OrchestrationStatuses 	  []protos.OrchestrationStatus
 }
 
 // NewOrchestrationOptions configures options for starting a new orchestration.
@@ -87,38 +86,10 @@ func WithInstanceID(id InstanceID) NewOrchestrationOptions {
 // WithOrchestrationReuseOption configures Orchestration ID reuse policy.
 func WithOrchestrationReuseOption(option *OrchestrationIDReuseOption) NewOrchestrationOptions {
 	return func(req *protos.CreateInstanceRequest) error {
+		// initialize CreateInstanceOption
 		req.CreateInstanceOption = &protos.CreateInstanceOption{}
-		// set action
-		switch option.CreateOrchestrationAction {
-		case SKIP: 
-			req.CreateInstanceOption.Action = protos.CreateOrchestrationAction_SKIP
-		case TERMINATE:
-			req.CreateInstanceOption.Action = protos.CreateOrchestrationAction_TERMINATE
-		case THROW:
-			req.CreateInstanceOption.Action = protos.CreateOrchestrationAction_THROW
-		}
-
-		// set status
-		for _, status := range option.OrchestrationStatuses {
-			switch status {
-			case RUNNING:
-				req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING)
-			case COMPLETED:
-				req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED)
-			// case CONTINUED_AS_NEW:
-			// 	req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW)
-			case FAILED:
-				req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED)
-			// case CANCELED:
-			// 	req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED)
-			case TERMINATED:
-				req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED)
-			case PENDING:
-				req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING)
-			// case SUSPENDED:
-			// 	req.CreateInstanceOption.OperationStatus = append(req.CreateInstanceOption.OperationStatus, protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED)
-			}
-		}
+		req.CreateInstanceOption.Action = option.CreateOrchestrationAction
+		req.CreateInstanceOption.OperationStatus = option.OrchestrationStatuses
 		return nil
 	}
 }

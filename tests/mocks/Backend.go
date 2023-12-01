@@ -168,53 +168,6 @@ func (_c *Backend_AddNewOrchestrationEvent_Call) RunAndReturn(run func(context.C
 	return _c
 }
 
-// CleanupOrchestration provides a mock function with given fields: _a0, _a1
-func (_m *Backend) CleanupOrchestration(_a0 context.Context, _a1 api.InstanceID) error {
-	ret := _m.Called(_a0, _a1)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CleanupOrchestration")
-	}
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID) error); ok {
-		r0 = rf(_a0, _a1)
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
-// Backend_CleanupOrchestration_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CleanupOrchestration'
-type Backend_CleanupOrchestration_Call struct {
-	*mock.Call
-}
-
-// CleanupOrchestration is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 api.InstanceID
-func (_e *Backend_Expecter) CleanupOrchestration(_a0 interface{}, _a1 interface{}) *Backend_CleanupOrchestration_Call {
-	return &Backend_CleanupOrchestration_Call{Call: _e.mock.On("CleanupOrchestration", _a0, _a1)}
-}
-
-func (_c *Backend_CleanupOrchestration_Call) Run(run func(_a0 context.Context, _a1 api.InstanceID)) *Backend_CleanupOrchestration_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(api.InstanceID))
-	})
-	return _c
-}
-
-func (_c *Backend_CleanupOrchestration_Call) Return(_a0 error) *Backend_CleanupOrchestration_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *Backend_CleanupOrchestration_Call) RunAndReturn(run func(context.Context, api.InstanceID) error) *Backend_CleanupOrchestration_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // CompleteActivityWorkItem provides a mock function with given fields: _a0, _a1
 func (_m *Backend) CompleteActivityWorkItem(_a0 context.Context, _a1 *backend.ActivityWorkItem) error {
 	ret := _m.Called(_a0, _a1)
@@ -309,17 +262,17 @@ func (_c *Backend_CompleteOrchestrationWorkItem_Call) RunAndReturn(run func(cont
 	return _c
 }
 
-// CreateOrchestrationInstance provides a mock function with given fields: _a0, _a1
-func (_m *Backend) CreateOrchestrationInstance(_a0 context.Context, _a1 *protos.HistoryEvent) error {
-	ret := _m.Called(_a0, _a1)
+// CreateOrchestrationInstance provides a mock function with given fields: _a0, _a1, _a2
+func (_m *Backend) CreateOrchestrationInstance(_a0 context.Context, _a1 *protos.HistoryEvent, _a2 *protos.CreateInstanceOption) error {
+	ret := _m.Called(_a0, _a1, _a2)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateOrchestrationInstance")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *protos.HistoryEvent) error); ok {
-		r0 = rf(_a0, _a1)
+	if rf, ok := ret.Get(0).(func(context.Context, *protos.HistoryEvent, *protos.CreateInstanceOption) error); ok {
+		r0 = rf(_a0, _a1, _a2)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -335,13 +288,14 @@ type Backend_CreateOrchestrationInstance_Call struct {
 // CreateOrchestrationInstance is a helper method to define mock.On call
 //   - _a0 context.Context
 //   - _a1 *protos.HistoryEvent
-func (_e *Backend_Expecter) CreateOrchestrationInstance(_a0 interface{}, _a1 interface{}) *Backend_CreateOrchestrationInstance_Call {
-	return &Backend_CreateOrchestrationInstance_Call{Call: _e.mock.On("CreateOrchestrationInstance", _a0, _a1)}
+//   - _a2 *protos.CreateInstanceOption
+func (_e *Backend_Expecter) CreateOrchestrationInstance(_a0 interface{}, _a1 interface{}, _a2 interface{}) *Backend_CreateOrchestrationInstance_Call {
+	return &Backend_CreateOrchestrationInstance_Call{Call: _e.mock.On("CreateOrchestrationInstance", _a0, _a1, _a2)}
 }
 
-func (_c *Backend_CreateOrchestrationInstance_Call) Run(run func(_a0 context.Context, _a1 *protos.HistoryEvent)) *Backend_CreateOrchestrationInstance_Call {
+func (_c *Backend_CreateOrchestrationInstance_Call) Run(run func(_a0 context.Context, _a1 *protos.HistoryEvent, _a2 *protos.CreateInstanceOption)) *Backend_CreateOrchestrationInstance_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*protos.HistoryEvent))
+		run(args[0].(context.Context), args[1].(*protos.HistoryEvent), args[2].(*protos.CreateInstanceOption))
 	})
 	return _c
 }
@@ -351,7 +305,7 @@ func (_c *Backend_CreateOrchestrationInstance_Call) Return(_a0 error) *Backend_C
 	return _c
 }
 
-func (_c *Backend_CreateOrchestrationInstance_Call) RunAndReturn(run func(context.Context, *protos.HistoryEvent) error) *Backend_CreateOrchestrationInstance_Call {
+func (_c *Backend_CreateOrchestrationInstance_Call) RunAndReturn(run func(context.Context, *protos.HistoryEvent, *protos.CreateInstanceOption) error) *Backend_CreateOrchestrationInstance_Call {
 	_c.Call.Return(run)
 	return _c
 }

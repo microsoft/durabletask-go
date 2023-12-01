@@ -43,7 +43,7 @@ type Backend interface {
 
 	// CreateOrchestrationInstance creates a new orchestration instance with a history event that
 	// wraps a ExecutionStarted event.
-	CreateOrchestrationInstance(context.Context, *HistoryEvent) error
+	CreateOrchestrationInstance(context.Context, *HistoryEvent, *protos.CreateInstanceOption) error
 
 	// AddNewEvent adds a new orchestration event to the specified orchestration instance.
 	AddNewOrchestrationEvent(context.Context, api.InstanceID, *HistoryEvent) error
@@ -91,11 +91,6 @@ type Backend interface {
 	// [api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
 	// [api.ErrNotCompleted] is returned if the specified orchestration instance is still running.
 	PurgeOrchestrationState(context.Context, api.InstanceID) error
-
-	// CleanupOrchestration clean up all records for the specified orchestration instance in the entire task hub.
-	//
-	// [api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
-	CleanupOrchestration(context.Context, api.InstanceID) error
 }
 
 // MarshalHistoryEvent serializes the [HistoryEvent] into a protobuf byte array.
