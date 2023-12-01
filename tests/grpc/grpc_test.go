@@ -253,21 +253,19 @@ func Test_Grpc_ReuseInstanceIDSkip(t *testing.T) {
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
 	instanceIDs := api.InstanceID("SKIP_IF_RUNNING_OR_COMPLETED")
-	ReuseIdOption := &api.OrchestrationIDReuseOption{
-		CreateOrchestrationAction: api.SKIP,
+	ReuseIdOption := api.OrchestrationIDReuseOption{
+		CreateOrchestrationAction: protos.CreateOrchestrationAction_SKIP,
 		OrchestrationStatuses: []protos.OrchestrationStatus{
-			api.RUNNING,
-			api.COMPLETED,
-			api.PENDING,
+			protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING,
+			protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
+			protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING,
 		},
 	}
 
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceIDs))
 	require.NoError(t, err)
 	// random sleep a time from 0 to 5 seconds, to allow previous orchestration instance to set in different status
-	source := rand.NewSource(time.Now().UnixNano())
-	random := rand.New(source)
-	randomeDuration := time.Duration(random.Intn(6)) * time.Second
+	randomeDuration := time.Duration(rand.Intn(6)) * time.Second
 	time.Sleep(randomeDuration)
 	// schedule again
 	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(id), api.WithOrchestrationReuseOption(ReuseIdOption))
@@ -305,21 +303,19 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
 	instanceIDs := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
-	ReuseIdOption := &api.OrchestrationIDReuseOption{
-		CreateOrchestrationAction: api.TERMINATE,
+	ReuseIdOption := api.OrchestrationIDReuseOption{
+		CreateOrchestrationAction: protos.CreateOrchestrationAction_TERMINATE,
 		OrchestrationStatuses: []protos.OrchestrationStatus{
-			api.RUNNING,
-			api.COMPLETED,
-			api.PENDING,
+			protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING,
+			protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
+			protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING,
 		},
 	}
 
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceIDs))
 	require.NoError(t, err)
 	// random sleep a time from 0 to 5 seconds, to allow previous orchestration instance to set in different status
-	source := rand.NewSource(time.Now().UnixNano())
-	random := rand.New(source)
-	randomeDuration := time.Duration(random.Intn(6)) * time.Second
+	randomeDuration := time.Duration(rand.Intn(6)) * time.Second
 	time.Sleep(randomeDuration)
 	// schedule again
 	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(id), api.WithOrchestrationReuseOption(ReuseIdOption))

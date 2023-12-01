@@ -336,8 +336,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 		for _, msg := range wi.State.PendingMessages() {
 			if es := msg.HistoryEvent.GetExecutionStarted(); es != nil {
 				// Need to insert a new row into the DB
-				var instanceID string
-				if _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, &instanceID); err != nil {
+				if _, _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx); err != nil {
 					if err == backend.ErrDuplicateEvent {
 						be.logger.Warnf(
 							"%v: dropping sub-orchestration creation event because an instance with the target ID (%v) already exists.",
@@ -405,15 +404,14 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 	defer tx.Rollback()
 
 	var instanceID string
-	runtimeStatus, err := be.createOrchestrationInstanceInternal(ctx, e, tx, &instanceID)
+	runtimeStatus, instanceID, err := be.createOrchestrationInstanceInternal(ctx, e, tx)
 	if err != nil {
 		// instance alredy exists
 		if errors.Is(err, backend.ErrDuplicateEvent) {
 			// build target status set
-			fmt.Println("@@", option)
 			statusSet := buildStatusSet(option.OperationStatus)
 			// if current status is not one of the target status, return error
-			if !statusSet[helpers.FromRuntimeStatusString(runtimeStatus)] {
+			if _, ok := statusSet[helpers.FromRuntimeStatusString(runtimeStatus)]; !ok {
 				return api.ErrDuplicateInstance
 			} else {
 				if option.Action == protos.CreateOrchestrationAction_SKIP {
@@ -426,7 +424,7 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 						return err
 					}
 					// create a new instance
-					if _, err := be.createOrchestrationInstanceInternal(ctx, e, tx, &instanceID); err != nil {
+					if _, _, err := be.createOrchestrationInstanceInternal(ctx, e, tx); err != nil {
 						return err
 					}
 				} else {
@@ -462,26 +460,28 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 	return nil
 }
 
-func buildStatusSet(statuses []protos.OrchestrationStatus) map[protos.OrchestrationStatus]bool {
-	statusSet := make(map[protos.OrchestrationStatus]bool)
+func buildStatusSet(statuses []protos.OrchestrationStatus) map[protos.OrchestrationStatus]struct{} {
+	statusSet := make(map[protos.OrchestrationStatus]struct{})
 	for _, status := range statuses {
-		statusSet[status] = true
+		statusSet[status] = struct{}{}
 	}
 	return statusSet
 }
 
-func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx, instanceID *string) (string, error) {
+// First return value: If instance with same instance ID already exists return it's RuntimeStatus, else return ""
+// Second return value: instance ID
+func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx) (string, string, error) {
 	if e == nil {
-		return "", errors.New("HistoryEvent must be non-nil")
+		return "", "", errors.New("HistoryEvent must be non-nil")
 	} else if e.Timestamp == nil {
-		return "", errors.New("HistoryEvent must have a non-nil timestamp")
+		return "", "", errors.New("HistoryEvent must have a non-nil timestamp")
 	}
 
 	startEvent := e.GetExecutionStarted()
 	if startEvent == nil {
-		return "", errors.New("HistoryEvent must be an ExecutionStartedEvent")
+		return "", "", errors.New("HistoryEvent must be an ExecutionStartedEvent")
 	}
-	*instanceID = startEvent.OrchestrationInstance.InstanceId
+	instanceID := startEvent.OrchestrationInstance.InstanceId
 
 	// TODO: Support for re-using orchestration instance IDs
 	res, err := tx.ExecContext(
@@ -497,40 +497,38 @@ func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context
 		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		startEvent.Name,
 		startEvent.Version.GetValue(),
-		startEvent.OrchestrationInstance.InstanceId,
+		instanceID,
 		startEvent.OrchestrationInstance.ExecutionId.GetValue(),
 		startEvent.Input.GetValue(),
 		"PENDING",
 		e.Timestamp.AsTime(),
 	)
 	if err != nil {
-		return "", fmt.Errorf("failed to insert into [Instances] table: %w", err)
+		return "", "", fmt.Errorf("failed to insert into [Instances] table: %w", err)
 	}
 
 	rows, err := res.RowsAffected()
 	if err != nil {
-		return "", fmt.Errorf("failed to count the rows affected: %w", err)
+		return "", "", fmt.Errorf("failed to count the rows affected: %w", err)
 	}
 
 	if rows <= 0 {
 		// query RuntimeStatus for the existing instance
-		queryRows, err := tx.QueryContext(
+		queryRow := tx.QueryRowContext(
 			ctx,
 			`SELECT [RuntimeStatus] FROM Instances WHERE [InstanceID] = ?`,
 			startEvent.OrchestrationInstance.InstanceId,
 		)
 		var runtimeStatus *string
-		if queryRows.Next() {
-			err = queryRows.Scan(&runtimeStatus)
-			if errors.Is(err, sql.ErrNoRows) {
-				return "", api.ErrInstanceNotFound
-			} else if err != nil {
-				return "", fmt.Errorf("failed to scan the Instances table result: %w", err)
-			}
+		err = queryRow.Scan(&runtimeStatus)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", api.ErrInstanceNotFound
+		} else if err != nil {
+			return "", "", fmt.Errorf("failed to scan the Instances table result: %w", err)
 		}
-		return *runtimeStatus, backend.ErrDuplicateEvent
+		return *runtimeStatus, instanceID, backend.ErrDuplicateEvent
 	}
-	return "", nil
+	return "", instanceID, nil
 }
 
 func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, tx *sql.Tx, id api.InstanceID) error {

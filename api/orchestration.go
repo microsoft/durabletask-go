@@ -37,26 +37,6 @@ type OrchestrationMetadata struct {
 	FailureDetails         *protos.TaskFailureDetails
 }
 
-type CreateOrchestrationAction protos.CreateOrchestrationAction
-
-const (
-	SKIP		= protos.CreateOrchestrationAction_SKIP
-	TERMINATE	= protos.CreateOrchestrationAction_TERMINATE
-)
-
-type OrchestrationStatus protos.OrchestrationStatus
-
-const (
-	RUNNING          =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING         
-	COMPLETED        =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED       
-	// CONTINUED_AS_NEW =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW
-	FAILED           =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED          
-	// CANCELED         =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED        
-	TERMINATED       =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED      
-	PENDING          =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING         
-	// SUSPENDED        =	protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED       
-)
-
 type OrchestrationIDReuseOption struct {
 	CreateOrchestrationAction protos.CreateOrchestrationAction
 	OrchestrationStatuses 	  []protos.OrchestrationStatus
@@ -84,7 +64,7 @@ func WithInstanceID(id InstanceID) NewOrchestrationOptions {
 }
 
 // WithOrchestrationReuseOption configures Orchestration ID reuse policy.
-func WithOrchestrationReuseOption(option *OrchestrationIDReuseOption) NewOrchestrationOptions {
+func WithOrchestrationReuseOption(option OrchestrationIDReuseOption) NewOrchestrationOptions {
 	return func(req *protos.CreateInstanceRequest) error {
 		// initialize CreateInstanceOption
 		req.CreateInstanceOption = &protos.CreateInstanceOption{}
