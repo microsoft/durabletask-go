@@ -251,7 +251,7 @@ func Test_Grpc_ReuseInstanceIDSkip(t *testing.T) {
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
-	instanceIDs := api.InstanceID("SKIP_IF_RUNNING_OR_COMPLETED")
+	instanceID := api.InstanceID("SKIP_IF_RUNNING_OR_COMPLETED")
 	reuseIdOption := api.OrchestrationIDReuseOption{
 		CreateOrchestrationAction: protos.CreateOrchestrationAction_SKIP,
 		OrchestrationStatuses: []protos.OrchestrationStatus{
@@ -261,7 +261,7 @@ func Test_Grpc_ReuseInstanceIDSkip(t *testing.T) {
 		},
 	}
 
-	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceIDs))
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
 	// wait orchestration to start
 	grpcClient.WaitForOrchestrationStart(ctx, id)
@@ -303,7 +303,7 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
-	instanceIDs := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
+	instanceID := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
 	reuseIdOption := api.OrchestrationIDReuseOption{
 		CreateOrchestrationAction: protos.CreateOrchestrationAction_TERMINATE,
 		OrchestrationStatuses: []protos.OrchestrationStatus{
@@ -313,7 +313,7 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 		},
 	}
 
-	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceIDs))
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
 	// wait orchestration to start
 	grpcClient.WaitForOrchestrationStart(ctx, id)
@@ -355,9 +355,9 @@ func Test_Grpc_ReuseInstanceIDThrow(t *testing.T) {
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
-	instanceIDs := api.InstanceID("THROW_IF_RUNNING_OR_COMPLETED")
+	instanceID := api.InstanceID("THROW_IF_RUNNING_OR_COMPLETED")
 
-	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceIDs))
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
 	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(id))
 	if assert.Error(t, err) {
