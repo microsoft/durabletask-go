@@ -411,7 +411,7 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 		if errors.Is(err, backend.ErrDuplicateEvent) {
 			// build target status set
 			fmt.Println("@@", option)
-			statusSet := convertStatusToSet(option.OperationStatus)
+			statusSet := buildStatusSet(option.OperationStatus)
 			// if current status is not one of the target status, return error
 			if !statusSet[helpers.FromRuntimeStatusString(runtimeStatus)] {
 				return api.ErrDuplicateInstance
@@ -462,7 +462,7 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 	return nil
 }
 
-func convertStatusToSet(statuses []protos.OrchestrationStatus) map[protos.OrchestrationStatus]bool {
+func buildStatusSet(statuses []protos.OrchestrationStatus) map[protos.OrchestrationStatus]bool {
 	statusSet := make(map[protos.OrchestrationStatus]bool)
 	for _, status := range statuses {
 		statusSet[status] = true

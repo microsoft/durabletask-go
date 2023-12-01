@@ -318,14 +318,6 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 	return &protos.CreateInstanceResponse{InstanceId: instanceID}, nil
 }
 
-func convertStatusToSet(statuses []protos.OrchestrationStatus) map[protos.OrchestrationStatus]bool {
-	statusSet := make(map[protos.OrchestrationStatus]bool)
-	for _, status := range statuses {
-		statusSet[status] = true
-	}
-	return statusSet
-}
-
 // TerminateInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
