@@ -23,6 +23,21 @@ type (
 	TaskFailureDetails = protos.TaskFailureDetails
 )
 
+type OrchestrationIdReusePolicyWrapper struct {
+	Policy *protos.OrchestrationIdReusePolicy
+}
+
+type OrchestrationIdReusePolicyOptions func(*OrchestrationIdReusePolicyWrapper) error
+
+func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) OrchestrationIdReusePolicyOptions {
+	return func(policyWrapper *OrchestrationIdReusePolicyWrapper) error {
+		if policy != nil {
+			policyWrapper.Policy = policy
+		}
+		return nil
+	}
+}
+
 type Backend interface {
 	// CreateTaskHub creates a new task hub for the current backend. Task hub creation must be idempotent.
 	//
@@ -43,7 +58,7 @@ type Backend interface {
 
 	// CreateOrchestrationInstance creates a new orchestration instance with a history event that
 	// wraps a ExecutionStarted event.
-	CreateOrchestrationInstance(context.Context, *HistoryEvent, *protos.CreateInstanceOption) error
+	CreateOrchestrationInstance(context.Context, *HistoryEvent, ...OrchestrationIdReusePolicyOptions) error
 
 	// AddNewEvent adds a new orchestration event to the specified orchestration instance.
 	AddNewOrchestrationEvent(context.Context, api.InstanceID, *HistoryEvent) error

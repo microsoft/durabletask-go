@@ -337,8 +337,8 @@ func Test_UninitializedBackend(t *testing.T) {
 		assert.Equal(t, err, backend.ErrNotInitialized)
 		err = be.CompleteOrchestrationWorkItem(ctx, nil)
 		assert.Equal(t, err, backend.ErrNotInitialized)
-		option := &protos.CreateInstanceOption{}
-		err = be.CreateOrchestrationInstance(ctx, nil, option)
+		policy := &protos.OrchestrationIdReusePolicy{}
+		err = be.CreateOrchestrationInstance(ctx, nil, backend.WithOrchestrationIdReusePolicy(policy))
 		assert.Equal(t, err, backend.ErrNotInitialized)
 		_, err = be.GetOrchestrationMetadata(ctx, api.InstanceID(""))
 		assert.Equal(t, err, backend.ErrNotInitialized)
@@ -488,8 +488,8 @@ func createOrchestrationInstance(t assert.TestingT, be backend.Backend, instance
 			},
 		},
 	}
-	option := &protos.CreateInstanceOption{}
-	err := be.CreateOrchestrationInstance(ctx, e, option)
+	policy := &protos.OrchestrationIdReusePolicy{}
+	err := be.CreateOrchestrationInstance(ctx, e, backend.WithOrchestrationIdReusePolicy(policy))
 	return assert.NoError(t, err)
 }
 

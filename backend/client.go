@@ -59,8 +59,8 @@ func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrat
 
 	tc := helpers.TraceContextFromSpan(span)
 	e := helpers.NewExecutionStartedEvent(req.Name, req.InstanceId, req.Input, nil, tc)
-	option := &protos.CreateInstanceOption{}
-	if err := c.be.CreateOrchestrationInstance(ctx, e, option); err != nil {
+	policy := &protos.OrchestrationIdReusePolicy{}
+	if err := c.be.CreateOrchestrationInstance(ctx, e, WithOrchestrationIdReusePolicy(policy)); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return api.EmptyInstanceID, fmt.Errorf("failed to start orchestration: %w", err)

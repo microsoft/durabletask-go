@@ -252,7 +252,7 @@ func Test_Grpc_ReuseInstanceIDSkip(t *testing.T) {
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
 	instanceID := api.InstanceID("SKIP_IF_RUNNING_OR_COMPLETED")
-	reuseIdOption := api.OrchestrationIDReuseOption{
+	reuseIdPolicy := api.OrchestrationIdReusePolicy{
 		CreateOrchestrationAction: protos.CreateOrchestrationAction_SKIP,
 		OrchestrationStatuses: []protos.OrchestrationStatus{
 			protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING,
@@ -267,7 +267,7 @@ func Test_Grpc_ReuseInstanceIDSkip(t *testing.T) {
 	grpcClient.WaitForOrchestrationStart(ctx, id)
 	pivotTime := time.Now()
 	// schedule again, it should skip creating the new orchestration
-	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationReuseOption(reuseIdOption))
+	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIDReusePolicy(reuseIdPolicy))
 	require.NoError(t, err)
 	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelTimeout()
@@ -304,7 +304,7 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
 	instanceID := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
-	reuseIdOption := api.OrchestrationIDReuseOption{
+	reuseIdPolicy := api.OrchestrationIdReusePolicy{
 		CreateOrchestrationAction: protos.CreateOrchestrationAction_TERMINATE,
 		OrchestrationStatuses: []protos.OrchestrationStatus{
 			protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING,
@@ -319,7 +319,7 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 	grpcClient.WaitForOrchestrationStart(ctx, id)
 	pivotTime := time.Now()
 	// schedule again, it should terminate the first orchestration and start a new one
-	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationReuseOption(reuseIdOption))
+	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIDReusePolicy(reuseIdPolicy))
 	require.NoError(t, err)
 	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelTimeout()
@@ -359,7 +359,7 @@ func Test_Grpc_ReuseInstanceIDThrow(t *testing.T) {
 
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
-	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(id))
+	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}
