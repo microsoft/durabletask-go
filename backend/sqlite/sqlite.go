@@ -404,11 +404,10 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 	defer tx.Rollback()
 
 	var instanceID string
-	if instanceID, err = be.createOrchestrationInstanceInternal(ctx, e, tx, opts...); err != nil {
+	if instanceID, err = be.createOrchestrationInstanceInternal(ctx, e, tx, opts...); errors.Is(err, api.ErrSkipInstance) {
 		// choose to skip, do nothing
-		if errors.Is(err, api.ErrSkipInstance) {
-			return nil
-		}
+		return nil
+	} else if err != nil {
 		return err
 	}
 
@@ -966,7 +965,14 @@ func (be *sqliteBackend) PurgeOrchestrationState(ctx context.Context, id api.Ins
 	}
 	defer tx.Rollback()
 
-	return be.cleanupOrchestrationStateInternal(ctx, tx, id, true);
+	if err := be.cleanupOrchestrationStateInternal(ctx, tx, id, true); err != nil {
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
 }
 
 // Start implements backend.Backend
