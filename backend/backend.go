@@ -23,16 +23,12 @@ type (
 	TaskFailureDetails = protos.TaskFailureDetails
 )
 
-type OrchestrationIdReusePolicyWrapper struct {
-	Policy *protos.OrchestrationIdReusePolicy
-}
-
-type OrchestrationIdReusePolicyOptions func(*OrchestrationIdReusePolicyWrapper) error
-
+type OrchestrationIdReusePolicyOptions func(*protos.OrchestrationIdReusePolicy) error
 func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) OrchestrationIdReusePolicyOptions {
-	return func(policyWrapper *OrchestrationIdReusePolicyWrapper) error {
-		if policy != nil {
-			policyWrapper.Policy = policy
+	return func(po *protos.OrchestrationIdReusePolicy) error {
+		if (policy != nil) {
+			po.Action = policy.Action
+			po.OperationStatus = policy.OperationStatus
 		}
 		return nil
 	}

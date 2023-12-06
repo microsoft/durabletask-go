@@ -38,11 +38,6 @@ type OrchestrationMetadata struct {
 	FailureDetails         *protos.TaskFailureDetails
 }
 
-type OrchestrationIdReusePolicy struct {
-	CreateOrchestrationAction protos.CreateOrchestrationAction
-	OrchestrationStatuses 	  []protos.OrchestrationStatus
-}
-
 // NewOrchestrationOptions configures options for starting a new orchestration.
 type NewOrchestrationOptions func(*protos.CreateInstanceRequest) error
 
@@ -65,12 +60,12 @@ func WithInstanceID(id InstanceID) NewOrchestrationOptions {
 }
 
 // WithOrchestrationReuseOption configures Orchestration ID reuse policy.
-func WithOrchestrationIDReusePolicy(policy OrchestrationIdReusePolicy) NewOrchestrationOptions {
+func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) NewOrchestrationOptions {
 	return func(req *protos.CreateInstanceRequest) error {
 		// initialize CreateInstanceOption
 		req.OrchestrationIdReusePolicy = &protos.OrchestrationIdReusePolicy{
-			Action: policy.CreateOrchestrationAction,
-			OperationStatus: policy.OrchestrationStatuses,
+			Action: policy.Action,
+			OperationStatus: policy.OperationStatus,
 		}
 		return nil
 	}

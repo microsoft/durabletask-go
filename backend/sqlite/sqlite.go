@@ -455,12 +455,10 @@ func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context
 	}
 	instanceID := startEvent.OrchestrationInstance.InstanceId
 
-	policyWrapper := &backend.OrchestrationIdReusePolicyWrapper{
-		Policy: &protos.OrchestrationIdReusePolicy{},
-	}
+	policy := &protos.OrchestrationIdReusePolicy{}
 
 	for _, opt := range opts {
-		opt(policyWrapper)
+		opt(policy)
 	}
 
 	rows, err := insertOrIgnoreInstanceTableInternal(ctx, tx, e, startEvent)
@@ -469,7 +467,7 @@ func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context
 	}
 
 	if rows <= 0 {
-		return instanceID, be.handleInstanceExists(ctx, tx, startEvent, policyWrapper.Policy, e)
+		return instanceID, be.handleInstanceExists(ctx, tx, startEvent, policy, e)
 	}
 	return instanceID, nil
 }
