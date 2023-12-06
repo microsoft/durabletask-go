@@ -320,11 +320,20 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 
 // TerminateInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
-	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
-	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
-		return nil, err
+	instancesToTerminate := []api.InstanceID{api.InstanceID(req.InstanceId)}
+	if req.Recursive {
+		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, g.backend, api.InstanceID(req.InstanceId))
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
+		}
+		instancesToTerminate = append(instancesToTerminate, subOrchestrationInstances...)
 	}
-
+	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
+	for _, iid := range instancesToTerminate {
+		if err := g.backend.AddNewOrchestrationEvent(ctx, iid, e); err != nil {
+			return nil, fmt.Errorf("failed to add terminate event to workflow with instanceId %s: %w", iid, err)
+		}
+	}
 	return &protos.TerminateResponse{}, nil
 }
 

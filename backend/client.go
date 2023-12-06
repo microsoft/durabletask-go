@@ -141,8 +141,18 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 	}
 
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
-	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
-		return fmt.Errorf("failed to add terminate event: %w", err)
+	instancesToTerminate := []api.InstanceID{id}
+	if req.Recursive {
+		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, c.be, id)
+		if err != nil {
+			return fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
+		}
+		instancesToTerminate = append(instancesToTerminate, subOrchestrationInstances...)
+	}
+	for _, iid := range instancesToTerminate {
+		if err := c.be.AddNewOrchestrationEvent(ctx, iid, e); err != nil {
+			return fmt.Errorf("failed to add terminate event to workflow with instanceId %s: %w", iid, err)
+		}
 	}
 	return nil
 }
