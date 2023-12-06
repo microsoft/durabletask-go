@@ -111,7 +111,7 @@ func UnmarshalHistoryEvent(bytes []byte) (*HistoryEvent, error) {
 	return e, nil
 }
 
-func GetSubOrchestrationInstances(ctx context.Context, be Backend, iid api.InstanceID) ([]api.InstanceID, error) {
+func GetSubOrchestrationInstances(ctx context.Context, be Backend, iid api.InstanceID, includeAll bool) ([]api.InstanceID, error) {
 	owi := &OrchestrationWorkItem{
 		InstanceID: iid,
 	}
@@ -126,7 +126,7 @@ func GetSubOrchestrationInstances(ctx context.Context, be Backend, iid api.Insta
 	subOrchestrationMap := make(map[int32]api.InstanceID)
 	for _, e := range oldEvents {
 		if created := e.GetSubOrchestrationInstanceCreated(); created != nil {
-			childSubOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, be, api.InstanceID(created.InstanceId))
+			childSubOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, be, api.InstanceID(created.InstanceId), includeAll)
 			if err != nil {
 				return nil, fmt.Errorf("failed to fetch sub-orchestration instances for '%s': %w", created.InstanceId, err)
 			}
@@ -140,16 +140,20 @@ func GetSubOrchestrationInstances(ctx context.Context, be Backend, iid api.Insta
 	}
 	for _, e := range newEvents {
 		if created := e.GetSubOrchestrationInstanceCreated(); created != nil {
-			childSubOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, be, api.InstanceID(created.InstanceId))
+			childSubOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, be, api.InstanceID(created.InstanceId), includeAll)
 			if err != nil {
 				return nil, fmt.Errorf("failed to fetch sub-orchestration instances for '%s': %w", created.InstanceId, err)
 			}
 			subOrchestrationInstancesTotal = append(subOrchestrationInstancesTotal, childSubOrchestrationInstances...)
 			subOrchestrationMap[e.EventId] = api.InstanceID(created.InstanceId)
 		} else if completed := e.GetSubOrchestrationInstanceCompleted(); completed != nil {
-			delete(subOrchestrationMap, completed.TaskScheduledId)
+			if !includeAll {
+				delete(subOrchestrationMap, completed.TaskScheduledId)
+			}
 		} else if failed := e.GetSubOrchestrationInstanceFailed(); failed != nil {
-			delete(subOrchestrationMap, failed.TaskScheduledId)
+			if !includeAll {
+				delete(subOrchestrationMap, failed.TaskScheduledId)
+			}
 		}
 	}
 	for _, iid := range subOrchestrationMap {

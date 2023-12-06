@@ -24,7 +24,7 @@ type TaskHubClient interface {
 	RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, opts ...api.RaiseEventOptions) error
 	SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	ResumeOrchestration(ctx context.Context, id api.InstanceID, reason string) error
-	PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error
+	PurgeOrchestrationState(ctx context.Context, id api.InstanceID, opts ...api.PurgeOptions) error
 }
 
 type backendClient struct {
@@ -143,7 +143,7 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
 	instancesToTerminate := []api.InstanceID{id}
 	if req.Recursive {
-		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, c.be, id)
+		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, c.be, id, false)
 		if err != nil {
 			return fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
 		}
@@ -204,9 +204,25 @@ func (c *backendClient) ResumeOrchestration(ctx context.Context, id api.Instance
 //
 // [api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
 // [api.ErrNotCompleted] is returned if the specified orchestration instance is still running.
-func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error {
-	if err := c.be.PurgeOrchestrationState(ctx, id); err != nil {
-		return fmt.Errorf("failed to purge orchestration state: %w", err)
+func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.InstanceID, opts ...api.PurgeOptions) error {
+	req := &protos.PurgeInstancesRequest{Request: &protos.PurgeInstancesRequest_InstanceId{InstanceId: string(id)}, Recursive: true}
+	for _, configure := range opts {
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure purge request: %w", err)
+		}
+	}
+	instancesToPurge := []api.InstanceID{id}
+	if req.Recursive {
+		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, c.be, id, true)
+		if err != nil {
+			return fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
+		}
+		instancesToPurge = append(instancesToPurge, subOrchestrationInstances...)
+	}
+	for _, iid := range instancesToPurge {
+		if err := c.be.PurgeOrchestrationState(ctx, iid); err != nil {
+			return fmt.Errorf("failed to purge orchestration state for workflow with instanceId %s: %w", iid, err)
+		}
 	}
 	return nil
 }

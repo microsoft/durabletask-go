@@ -48,6 +48,9 @@ type RaiseEventOptions func(*protos.RaiseEventRequest) error
 // TerminateOptions is a set of options for terminating an orchestration.
 type TerminateOptions func(*protos.TerminateRequest) error
 
+// PurgeOptions is a set of options for purging an orchestration.
+type PurgeOptions func(*protos.PurgeInstancesRequest) error
+
 // WithInstanceID configures an explicit orchestration instance ID. If not specified,
 // a random UUID value will be used for the orchestration instance ID.
 func WithInstanceID(id InstanceID) NewOrchestrationOptions {
@@ -137,6 +140,14 @@ func WithRawOutput(data string) TerminateOptions {
 // WithRecursive configures whether to terminate all sub-orchestrations created by the target orchestration.
 func WithRecursive(recursive bool) TerminateOptions {
 	return func(req *protos.TerminateRequest) error {
+		req.Recursive = recursive
+		return nil
+	}
+}
+
+// WithRecursivePurge configures whether to purge all sub-orchestrations created by the target orchestration.
+func WithRecursivePurge(recursive bool) PurgeOptions {
+	return func(req *protos.PurgeInstancesRequest) error {
 		req.Recursive = recursive
 		return nil
 	}

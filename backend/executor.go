@@ -283,10 +283,20 @@ func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInst
 		return nil, errors.New("multi-instance purge is not unimplemented")
 	}
 
-	if err := g.backend.PurgeOrchestrationState(ctx, api.InstanceID(req.GetInstanceId())); err != nil {
-		return nil, err
+	instancesToPurge := []api.InstanceID{api.InstanceID(req.GetInstanceId())}
+	if req.Recursive {
+		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, g.backend, api.InstanceID(req.GetInstanceId()), true)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
+		}
+		instancesToPurge = append(instancesToPurge, subOrchestrationInstances...)
 	}
-	return &protos.PurgeInstancesResponse{DeletedInstanceCount: 1}, nil
+	for _, iid := range instancesToPurge {
+		if err := g.backend.PurgeOrchestrationState(ctx, iid); err != nil {
+			return nil, fmt.Errorf("failed to purge workflow with instanceId %s: %w", iid, err)
+		}
+	}
+	return &protos.PurgeInstancesResponse{DeletedInstanceCount: int32(len(instancesToPurge))}, nil
 }
 
 // QueryInstances implements protos.TaskHubSidecarServiceServer
@@ -322,7 +332,7 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
 	instancesToTerminate := []api.InstanceID{api.InstanceID(req.InstanceId)}
 	if req.Recursive {
-		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, g.backend, api.InstanceID(req.InstanceId))
+		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, g.backend, api.InstanceID(req.InstanceId), false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
 		}
