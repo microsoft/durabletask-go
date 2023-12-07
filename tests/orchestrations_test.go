@@ -904,6 +904,68 @@ func Test_PurgeCompletedOrchestration(t *testing.T) {
 	}
 }
 
+func Test_PurgeOrchestration_Recursive(t *testing.T) {
+	delayTime := 4 * time.Second
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CallSubOrchestrator("L1", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L1")).Await(nil)
+		return nil, nil
+	})
+	r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CallSubOrchestrator("L2", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L2")).Await(nil)
+		return nil, nil
+	})
+	r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CreateTimer(delayTime).Await(nil)
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Test terminating with and without recursion
+	for _, recurse := range []bool{true} {
+		t.Run(fmt.Sprintf("Recurse = %v", recurse), func(t *testing.T) {
+			// Run the orchestration, which will block waiting for external events
+			id, err := client.ScheduleNewOrchestration(ctx, "Root")
+			require.NoError(t, err)
+
+			metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+			require.NoError(t, err)
+			require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+
+			// Purge the root orchestration
+			opts := []api.PurgeOptions{api.WithRecursivePurge(recurse)}
+			err = client.PurgeOrchestrationState(ctx, id, opts...)
+			assert.NoError(t, err)
+
+			// Verify that root Orchestration has been purged
+			_, err = client.FetchOrchestrationMetadata(ctx, id)
+			assert.ErrorIs(t, err, api.ErrInstanceNotFound)
+
+			if recurse {
+				// Verify that L1 and L2 orchestrations have been purged
+				_, err = client.FetchOrchestrationMetadata(ctx, id+"_L1")
+				assert.ErrorIs(t, err, api.ErrInstanceNotFound)
+
+				_, err = client.FetchOrchestrationMetadata(ctx, id+"_L1_L2")
+				assert.ErrorIs(t, err, api.ErrInstanceNotFound)
+			} else {
+				// Verify that L1 and L2 orchestrations are not purged
+				metadata, err = client.FetchOrchestrationMetadata(ctx, id+"_L1")
+				assert.NoError(t, err)
+				assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+
+				_, err = client.FetchOrchestrationMetadata(ctx, id+"_L1_L2")
+				assert.NoError(t, err)
+				assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+			}
+		})
+	}
+}
+
 func Test_RecreateCompletedOrchestration(t *testing.T) {
 	t.Skip("Not yet supported. Needs https://github.com/microsoft/durabletask-go/issues/42")
 
