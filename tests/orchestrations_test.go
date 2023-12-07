@@ -715,6 +715,142 @@ func Test_TerminateOrchestration(t *testing.T) {
 	)
 }
 
+func Test_TerminateOrchestration_Recursive(t *testing.T) {
+	delayTime := 4 * time.Second
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CallSubOrchestrator("L1", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L1")).Await(nil)
+		return nil, nil
+	})
+	r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CallSubOrchestrator("L2", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L2")).Await(nil)
+		return nil, nil
+	})
+	r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CreateTimer(delayTime).Await(nil)
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Test terminating with and without recursion
+	for _, recurse := range []bool{false} {
+		t.Run(fmt.Sprintf("Recurse = %v", recurse), func(t *testing.T) {
+			// Run the orchestration, which will block waiting for external events
+			id, err := client.ScheduleNewOrchestration(ctx, "Root")
+			require.NoError(t, err)
+
+			// Wait long enough to ensure all orchestrations have started (but not longer than the timer delay)
+			time.Sleep(3 * time.Second)
+
+			// Terminate the root orchestration and mark whether a recursive termination
+			output := fmt.Sprintf("Recursive termination = %v", recurse)
+			opts := []api.TerminateOptions{api.WithOutput(output), api.WithRecursive(recurse)}
+			require.NoError(t, client.TerminateOrchestration(ctx, id, opts...))
+
+			// Wait for the root orchestration to complete and verify its terminated status
+			metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+			require.NoError(t, err)
+			require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, metadata.RuntimeStatus)
+			require.Equal(t, fmt.Sprintf("\"%s\"", output), metadata.SerializedOutput)
+
+			// Verify that the L1 and L2 orchestrations have completed with the appropriate status
+			L1_OrchestrationStatus := protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
+			L2_OrchestrationStatus := protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
+			L1_L2_Output := ""
+			if recurse {
+				L1_OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED
+				L2_OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED
+				L1_L2_Output = fmt.Sprintf("\"%s\"", output)
+			}
+
+			// In recursive case, L1 is terminated because it was still running when the root orchestration was terminated
+			metadata, err = client.WaitForOrchestrationCompletion(ctx, id+"_L1")
+			require.NoError(t, err)
+			require.Equal(t, L1_OrchestrationStatus, metadata.RuntimeStatus)
+			require.Equal(t, L1_L2_Output, metadata.SerializedOutput)
+
+			// In recursive case, L2 is terminated because it was still running when the root orchestration was terminated
+			metadata, err = client.WaitForOrchestrationCompletion(ctx, id+"_L1_L2")
+			require.NoError(t, err)
+			require.Equal(t, L2_OrchestrationStatus, metadata.RuntimeStatus)
+			require.Equal(t, L1_L2_Output, metadata.SerializedOutput)
+
+		})
+	}
+}
+
+func Test_TerminateOrchestration_Recursive2(t *testing.T) {
+	delayTime := 4 * time.Second
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CallSubOrchestrator("L1", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L1")).Await(nil)
+		ctx.CreateTimer(delayTime).Await(nil)
+		return nil, nil
+	})
+	r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
+		// Not waiting for L2 to complete
+		ctx.CallSubOrchestrator("L2", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L2"))
+		return nil, nil
+	})
+	r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
+		ctx.CreateTimer(delayTime).Await(nil)
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Test terminating with and without recursion
+	for _, recurse := range []bool{true, false} {
+		t.Run(fmt.Sprintf("Recurse = %v", recurse), func(t *testing.T) {
+			// Run the orchestration, which will block waiting for external events
+			id, err := client.ScheduleNewOrchestration(ctx, "Root")
+			require.NoError(t, err)
+
+			// Wait long enough to ensure that all L1 orchestrations have completed but Root and L2 are still running
+			time.Sleep(2 * time.Second)
+
+			// Terminate the root orchestration and mark whether a recursive termination
+			output := fmt.Sprintf("Recursive termination = %v", recurse)
+			opts := []api.TerminateOptions{api.WithOutput(output), api.WithRecursive(recurse)}
+			require.NoError(t, client.TerminateOrchestration(ctx, id, opts...))
+
+			// Wait for the root orchestration to complete and verify its terminated status
+			metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+			require.NoError(t, err)
+			require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, metadata.RuntimeStatus)
+			require.Equal(t, fmt.Sprintf("\"%s\"", output), metadata.SerializedOutput)
+
+			// Verify that the L1 and L2 orchestrations have completed with the appropriate status
+			L1_OrchestrationStatus := protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
+			L2_OrchestrationStatus := protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
+			L2_Output := ""
+			L1_Output := ""
+			if recurse {
+				L2_OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED
+				L2_Output = fmt.Sprintf("\"%s\"", output)
+			}
+			// In recursive case, L1 is not terminated because it was already completed when the root orchestration was terminated
+			metadata, err = client.WaitForOrchestrationCompletion(ctx, id+"_L1")
+			require.NoError(t, err)
+			require.Equal(t, L1_OrchestrationStatus, metadata.RuntimeStatus)
+			require.Equal(t, L1_Output, metadata.SerializedOutput)
+
+			// In recursive case, L2 is terminated because it was still running when the root orchestration was terminated
+			metadata, err = client.WaitForOrchestrationCompletion(ctx, id+"_L1_L2")
+			require.NoError(t, err)
+			require.Equal(t, L2_OrchestrationStatus, metadata.RuntimeStatus)
+			require.Equal(t, L2_Output, metadata.SerializedOutput)
+		})
+	}
+}
+
 func Test_PurgeCompletedOrchestration(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
