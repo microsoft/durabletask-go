@@ -133,9 +133,13 @@ func GetSubOrchestrationInstances(ctx context.Context, be Backend, iid api.Insta
 			subOrchestrationMap[e.EventId] = api.InstanceID(created.InstanceId)
 			subOrchestrationInstancesTotal = append(subOrchestrationInstancesTotal, childSubOrchestrationInstances...)
 		} else if completed := e.GetSubOrchestrationInstanceCompleted(); completed != nil {
-			delete(subOrchestrationMap, completed.TaskScheduledId)
+			if !includeAll {
+				delete(subOrchestrationMap, completed.TaskScheduledId)
+			}
 		} else if failed := e.GetSubOrchestrationInstanceFailed(); failed != nil {
-			delete(subOrchestrationMap, failed.TaskScheduledId)
+			if !includeAll {
+				delete(subOrchestrationMap, failed.TaskScheduledId)
+			}
 		}
 	}
 	for _, e := range newEvents {
