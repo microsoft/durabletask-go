@@ -283,7 +283,7 @@ func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInst
 		return nil, errors.New("multi-instance purge is not unimplemented")
 	}
 
-	instancesToPurge := []api.InstanceID{api.InstanceID(req.GetInstanceId())}
+	instancesToPurge := []api.InstanceID{}
 	if req.Recursive {
 		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, g.backend, api.InstanceID(req.GetInstanceId()), true)
 		if err != nil {
@@ -291,6 +291,7 @@ func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInst
 		}
 		instancesToPurge = append(instancesToPurge, subOrchestrationInstances...)
 	}
+	instancesToPurge = append(instancesToPurge, api.InstanceID(req.GetInstanceId()))
 	for _, iid := range instancesToPurge {
 		if err := g.backend.PurgeOrchestrationState(ctx, iid); err != nil {
 			return nil, fmt.Errorf("failed to purge workflow with instanceId %s: %w", iid, err)
@@ -330,7 +331,7 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 
 // TerminateInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
-	instancesToTerminate := []api.InstanceID{api.InstanceID(req.InstanceId)}
+	instancesToTerminate := []api.InstanceID{}
 	if req.Recursive {
 		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, g.backend, api.InstanceID(req.InstanceId), false)
 		if err != nil {
@@ -338,6 +339,7 @@ func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.Termin
 		}
 		instancesToTerminate = append(instancesToTerminate, subOrchestrationInstances...)
 	}
+	instancesToTerminate = append(instancesToTerminate, api.InstanceID(req.InstanceId))
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
 	for _, iid := range instancesToTerminate {
 		if err := g.backend.AddNewOrchestrationEvent(ctx, iid, e); err != nil {

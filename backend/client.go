@@ -141,7 +141,7 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 	}
 
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
-	instancesToTerminate := []api.InstanceID{id}
+	instancesToTerminate := []api.InstanceID{}
 	if req.Recursive {
 		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, c.be, id, false)
 		if err != nil {
@@ -149,6 +149,7 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 		}
 		instancesToTerminate = append(instancesToTerminate, subOrchestrationInstances...)
 	}
+	instancesToTerminate = append(instancesToTerminate, id)
 	for _, iid := range instancesToTerminate {
 		if err := c.be.AddNewOrchestrationEvent(ctx, iid, e); err != nil {
 			return fmt.Errorf("failed to add terminate event to workflow with instanceId %s: %w", iid, err)
@@ -211,7 +212,7 @@ func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.Inst
 			return fmt.Errorf("failed to configure purge request: %w", err)
 		}
 	}
-	instancesToPurge := []api.InstanceID{id}
+	instancesToPurge := []api.InstanceID{}
 	if req.Recursive {
 		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, c.be, id, true)
 		if err != nil {
@@ -219,6 +220,7 @@ func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.Inst
 		}
 		instancesToPurge = append(instancesToPurge, subOrchestrationInstances...)
 	}
+	instancesToPurge = append(instancesToPurge, id)
 	for _, iid := range instancesToPurge {
 		if err := c.be.PurgeOrchestrationState(ctx, iid); err != nil {
 			return fmt.Errorf("failed to purge orchestration state for workflow with instanceId %s: %w", iid, err)
