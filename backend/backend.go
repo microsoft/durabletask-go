@@ -24,9 +24,10 @@ type (
 )
 
 type OrchestrationIdReusePolicyOptions func(*protos.OrchestrationIdReusePolicy) error
+
 func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) OrchestrationIdReusePolicyOptions {
 	return func(po *protos.OrchestrationIdReusePolicy) error {
-		if (policy != nil) {
+		if policy != nil {
 			po.Action = policy.Action
 			po.OperationStatus = policy.OperationStatus
 		}

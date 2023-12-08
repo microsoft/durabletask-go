@@ -404,8 +404,8 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 	defer tx.Rollback()
 
 	var instanceID string
-	if instanceID, err = be.createOrchestrationInstanceInternal(ctx, e, tx, opts...); errors.Is(err, api.ErrSkipInstance) {
-		// choose to skip, do nothing
+	if instanceID, err = be.createOrchestrationInstanceInternal(ctx, e, tx, opts...); errors.Is(err, api.ErrIgnoreInstance) {
+		// choose to ignore, do nothing
 		return nil
 	} else if err != nil {
 		return err
@@ -519,18 +519,18 @@ func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, s
 	}
 
 	// instance already exists
-	statusSet := buildStatusSet(policy.OperationStatus)
+	targetStatusValues := buildStatusSet(policy.OperationStatus)
 	// status not match, return instance duplicate error
-	if _, ok := statusSet[helpers.FromRuntimeStatusString(*runtimeStatus)]; !ok {
+	if _, ok := targetStatusValues[helpers.FromRuntimeStatusString(*runtimeStatus)]; !ok {
 		return api.ErrDuplicateInstance
 	}
 
 	// status match
 	switch policy.Action {
-	case protos.CreateOrchestrationAction_SKIP:
-		// Log an warning message and skip cerating new instance
+	case protos.CreateOrchestrationAction_IGNORE:
+		// Log an warning message and ignore creating new instance
 		be.logger.Warnf("An instance with ID '%s' already exists; dropping duplicate create request", startEvent.OrchestrationInstance.InstanceId)
-		return api.ErrSkipInstance
+		return api.ErrIgnoreInstance
 	case protos.CreateOrchestrationAction_TERMINATE:
 		// terminate existing instance
 		if err := be.cleanupOrchestrationStateInternal(ctx, tx, api.InstanceID(startEvent.OrchestrationInstance.InstanceId),false); err != nil {
@@ -552,7 +552,7 @@ func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, s
 	return api.ErrDuplicateInstance
 }
 
-func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, tx *sql.Tx, id api.InstanceID, purgeState bool) error {
+func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, tx *sql.Tx, id api.InstanceID, onlyIfCompleted bool) error {
 	row := tx.QueryRowContext(ctx, "SELECT 1 FROM Instances WHERE [InstanceID] = ?", string(id))
 	if err := row.Err(); err != nil {
 		return fmt.Errorf("failed to query for instance existence: %w", err)
@@ -565,7 +565,7 @@ func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, 
 		return fmt.Errorf("failed to scan instance existence: %w", err)
 	}
 
-	if purgeState {
+	if onlyIfCompleted {
 		// purge orchestration in ['COMPLETED', 'FAILED', 'TERMINATED']
 		dbResult, err := tx.ExecContext(ctx, "DELETE FROM Instances WHERE [InstanceID] = ? AND [RuntimeStatus] IN ('COMPLETED', 'FAILED', 'TERMINATED')", string(id))
 		if err != nil {

@@ -253,7 +253,7 @@ func Test_Grpc_ReuseInstanceIDSkip(t *testing.T) {
 	defer cancelListener()
 	instanceID := api.InstanceID("SKIP_IF_RUNNING_OR_COMPLETED")
 	reuseIdPolicy := &protos.OrchestrationIdReusePolicy{
-		Action: protos.CreateOrchestrationAction_SKIP,
+		Action: protos.CreateOrchestrationAction_IGNORE,
 		OperationStatus: []protos.OrchestrationStatus{
 			protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING,
 			protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
@@ -261,13 +261,12 @@ func Test_Grpc_ReuseInstanceIDSkip(t *testing.T) {
 		},
 	}
 
-
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
 	// wait orchestration to start
 	grpcClient.WaitForOrchestrationStart(ctx, id)
 	pivotTime := time.Now()
-	// schedule again, it should skip creating the new orchestration
+	// schedule again, it should ignore creating the new orchestration
 	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
 	require.NoError(t, err)
 	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
@@ -275,7 +274,7 @@ func Test_Grpc_ReuseInstanceIDSkip(t *testing.T) {
 	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
 	require.NoError(t, err)
 	assert.Equal(t, true, metadata.IsComplete())
-	// the first orchestration should complete as the second one is skipped 
+	// the first orchestration should complete as the second one is ignored
 	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
 	// assert the orchestration created timestamp
 	assert.True(t, pivotTime.After(metadata.CreatedAt))

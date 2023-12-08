@@ -18,7 +18,7 @@ var (
 	ErrNotCompleted      = errors.New("orchestration has not yet completed")
 	ErrNoFailures        = errors.New("orchestration did not report failure details")
 	ErrDuplicateInstance = errors.New("orchestration instance already exists")
-	ErrSkipInstance = errors.New("skip creating orchestration instance")
+	ErrIgnoreInstance      = errors.New("ignore creating orchestration instance")
 
 	EmptyInstanceID = InstanceID("")
 )
@@ -59,12 +59,12 @@ func WithInstanceID(id InstanceID) NewOrchestrationOptions {
 	}
 }
 
-// WithOrchestrationReuseOption configures Orchestration ID reuse policy.
+// WithOrchestrationIdReusePolicy configures Orchestration ID reuse policy.
 func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) NewOrchestrationOptions {
 	return func(req *protos.CreateInstanceRequest) error {
 		// initialize CreateInstanceOption
 		req.OrchestrationIdReusePolicy = &protos.OrchestrationIdReusePolicy{
-			Action: policy.Action,
+			Action:          policy.Action,
 			OperationStatus: policy.OperationStatus,
 		}
 		return nil
