@@ -18,7 +18,7 @@ var (
 	ErrNotCompleted      = errors.New("orchestration has not yet completed")
 	ErrNoFailures        = errors.New("orchestration did not report failure details")
 	ErrDuplicateInstance = errors.New("orchestration instance already exists")
-	ErrIgnoreInstance      = errors.New("ignore creating orchestration instance")
+	ErrIgnoreInstance    = errors.New("ignore creating orchestration instance")
 
 	EmptyInstanceID = InstanceID("")
 )
