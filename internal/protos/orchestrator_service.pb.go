@@ -91,6 +91,55 @@ func (OrchestrationStatus) EnumDescriptor() ([]byte, []int) {
 	return file_orchestrator_service_proto_rawDescGZIP(), []int{0}
 }
 
+type CreateOrchestrationAction int32
+
+const (
+	CreateOrchestrationAction_ERROR     CreateOrchestrationAction = 0
+	CreateOrchestrationAction_IGNORE    CreateOrchestrationAction = 1
+	CreateOrchestrationAction_TERMINATE CreateOrchestrationAction = 2
+)
+
+// Enum value maps for CreateOrchestrationAction.
+var (
+	CreateOrchestrationAction_name = map[int32]string{
+		0: "ERROR",
+		1: "IGNORE",
+		2: "TERMINATE",
+	}
+	CreateOrchestrationAction_value = map[string]int32{
+		"ERROR":     0,
+		"IGNORE":    1,
+		"TERMINATE": 2,
+	}
+)
+
+func (x CreateOrchestrationAction) Enum() *CreateOrchestrationAction {
+	p := new(CreateOrchestrationAction)
+	*p = x
+	return p
+}
+
+func (x CreateOrchestrationAction) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CreateOrchestrationAction) Descriptor() protoreflect.EnumDescriptor {
+	return file_orchestrator_service_proto_enumTypes[1].Descriptor()
+}
+
+func (CreateOrchestrationAction) Type() protoreflect.EnumType {
+	return &file_orchestrator_service_proto_enumTypes[1]
+}
+
+func (x CreateOrchestrationAction) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CreateOrchestrationAction.Descriptor instead.
+func (CreateOrchestrationAction) EnumDescriptor() ([]byte, []int) {
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{1}
+}
+
 type OrchestrationInstance struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -2668,11 +2717,12 @@ type CreateInstanceRequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	InstanceId              string                `protobuf:"bytes,1,opt,name=instanceId,proto3" json:"instanceId,omitempty"`
-	Name                    string                `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Version                 *wrappers.StringValue `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	Input                   *wrappers.StringValue `protobuf:"bytes,4,opt,name=input,proto3" json:"input,omitempty"`
-	ScheduledStartTimestamp *timestamp.Timestamp  `protobuf:"bytes,5,opt,name=scheduledStartTimestamp,proto3" json:"scheduledStartTimestamp,omitempty"`
+	InstanceId                 string                      `protobuf:"bytes,1,opt,name=instanceId,proto3" json:"instanceId,omitempty"`
+	Name                       string                      `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Version                    *wrappers.StringValue       `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	Input                      *wrappers.StringValue       `protobuf:"bytes,4,opt,name=input,proto3" json:"input,omitempty"`
+	ScheduledStartTimestamp    *timestamp.Timestamp        `protobuf:"bytes,5,opt,name=scheduledStartTimestamp,proto3" json:"scheduledStartTimestamp,omitempty"`
+	OrchestrationIdReusePolicy *OrchestrationIdReusePolicy `protobuf:"bytes,6,opt,name=orchestrationIdReusePolicy,proto3" json:"orchestrationIdReusePolicy,omitempty"`
 }
 
 func (x *CreateInstanceRequest) Reset() {
@@ -2742,6 +2792,68 @@ func (x *CreateInstanceRequest) GetScheduledStartTimestamp() *timestamp.Timestam
 	return nil
 }
 
+func (x *CreateInstanceRequest) GetOrchestrationIdReusePolicy() *OrchestrationIdReusePolicy {
+	if x != nil {
+		return x.OrchestrationIdReusePolicy
+	}
+	return nil
+}
+
+type OrchestrationIdReusePolicy struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	OperationStatus []OrchestrationStatus     `protobuf:"varint,1,rep,packed,name=operationStatus,proto3,enum=OrchestrationStatus" json:"operationStatus,omitempty"`
+	Action          CreateOrchestrationAction `protobuf:"varint,2,opt,name=action,proto3,enum=CreateOrchestrationAction" json:"action,omitempty"`
+}
+
+func (x *OrchestrationIdReusePolicy) Reset() {
+	*x = OrchestrationIdReusePolicy{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_orchestrator_service_proto_msgTypes[37]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *OrchestrationIdReusePolicy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrchestrationIdReusePolicy) ProtoMessage() {}
+
+func (x *OrchestrationIdReusePolicy) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_service_proto_msgTypes[37]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrchestrationIdReusePolicy.ProtoReflect.Descriptor instead.
+func (*OrchestrationIdReusePolicy) Descriptor() ([]byte, []int) {
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *OrchestrationIdReusePolicy) GetOperationStatus() []OrchestrationStatus {
+	if x != nil {
+		return x.OperationStatus
+	}
+	return nil
+}
+
+func (x *OrchestrationIdReusePolicy) GetAction() CreateOrchestrationAction {
+	if x != nil {
+		return x.Action
+	}
+	return CreateOrchestrationAction_ERROR
+}
+
 type CreateInstanceResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -2753,7 +2865,7 @@ type CreateInstanceResponse struct {
 func (x *CreateInstanceResponse) Reset() {
 	*x = CreateInstanceResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[37]
+		mi := &file_orchestrator_service_proto_msgTypes[38]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2766,7 +2878,7 @@ func (x *CreateInstanceResponse) String() string {
 func (*CreateInstanceResponse) ProtoMessage() {}
 
 func (x *CreateInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[37]
+	mi := &file_orchestrator_service_proto_msgTypes[38]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2779,7 +2891,7 @@ func (x *CreateInstanceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateInstanceResponse.ProtoReflect.Descriptor instead.
 func (*CreateInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{37}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *CreateInstanceResponse) GetInstanceId() string {
@@ -2801,7 +2913,7 @@ type GetInstanceRequest struct {
 func (x *GetInstanceRequest) Reset() {
 	*x = GetInstanceRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[38]
+		mi := &file_orchestrator_service_proto_msgTypes[39]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2814,7 +2926,7 @@ func (x *GetInstanceRequest) String() string {
 func (*GetInstanceRequest) ProtoMessage() {}
 
 func (x *GetInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[38]
+	mi := &file_orchestrator_service_proto_msgTypes[39]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2827,7 +2939,7 @@ func (x *GetInstanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInstanceRequest.ProtoReflect.Descriptor instead.
 func (*GetInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{38}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *GetInstanceRequest) GetInstanceId() string {
@@ -2856,7 +2968,7 @@ type GetInstanceResponse struct {
 func (x *GetInstanceResponse) Reset() {
 	*x = GetInstanceResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[39]
+		mi := &file_orchestrator_service_proto_msgTypes[40]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2869,7 +2981,7 @@ func (x *GetInstanceResponse) String() string {
 func (*GetInstanceResponse) ProtoMessage() {}
 
 func (x *GetInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[39]
+	mi := &file_orchestrator_service_proto_msgTypes[40]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2882,7 +2994,7 @@ func (x *GetInstanceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInstanceResponse.ProtoReflect.Descriptor instead.
 func (*GetInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{39}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GetInstanceResponse) GetExists() bool {
@@ -2911,7 +3023,7 @@ type RewindInstanceRequest struct {
 func (x *RewindInstanceRequest) Reset() {
 	*x = RewindInstanceRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[40]
+		mi := &file_orchestrator_service_proto_msgTypes[41]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2924,7 +3036,7 @@ func (x *RewindInstanceRequest) String() string {
 func (*RewindInstanceRequest) ProtoMessage() {}
 
 func (x *RewindInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[40]
+	mi := &file_orchestrator_service_proto_msgTypes[41]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2937,7 +3049,7 @@ func (x *RewindInstanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RewindInstanceRequest.ProtoReflect.Descriptor instead.
 func (*RewindInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{40}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *RewindInstanceRequest) GetInstanceId() string {
@@ -2963,7 +3075,7 @@ type RewindInstanceResponse struct {
 func (x *RewindInstanceResponse) Reset() {
 	*x = RewindInstanceResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[41]
+		mi := &file_orchestrator_service_proto_msgTypes[42]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2976,7 +3088,7 @@ func (x *RewindInstanceResponse) String() string {
 func (*RewindInstanceResponse) ProtoMessage() {}
 
 func (x *RewindInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[41]
+	mi := &file_orchestrator_service_proto_msgTypes[42]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2989,7 +3101,7 @@ func (x *RewindInstanceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RewindInstanceResponse.ProtoReflect.Descriptor instead.
 func (*RewindInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{41}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{42}
 }
 
 type OrchestrationState struct {
@@ -3013,7 +3125,7 @@ type OrchestrationState struct {
 func (x *OrchestrationState) Reset() {
 	*x = OrchestrationState{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[42]
+		mi := &file_orchestrator_service_proto_msgTypes[43]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3026,7 +3138,7 @@ func (x *OrchestrationState) String() string {
 func (*OrchestrationState) ProtoMessage() {}
 
 func (x *OrchestrationState) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[42]
+	mi := &file_orchestrator_service_proto_msgTypes[43]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3039,7 +3151,7 @@ func (x *OrchestrationState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestrationState.ProtoReflect.Descriptor instead.
 func (*OrchestrationState) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{42}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *OrchestrationState) GetInstanceId() string {
@@ -3132,7 +3244,7 @@ type RaiseEventRequest struct {
 func (x *RaiseEventRequest) Reset() {
 	*x = RaiseEventRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[43]
+		mi := &file_orchestrator_service_proto_msgTypes[44]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3145,7 +3257,7 @@ func (x *RaiseEventRequest) String() string {
 func (*RaiseEventRequest) ProtoMessage() {}
 
 func (x *RaiseEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[43]
+	mi := &file_orchestrator_service_proto_msgTypes[44]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3158,7 +3270,7 @@ func (x *RaiseEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RaiseEventRequest.ProtoReflect.Descriptor instead.
 func (*RaiseEventRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{43}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *RaiseEventRequest) GetInstanceId() string {
@@ -3191,7 +3303,7 @@ type RaiseEventResponse struct {
 func (x *RaiseEventResponse) Reset() {
 	*x = RaiseEventResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[44]
+		mi := &file_orchestrator_service_proto_msgTypes[45]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3204,7 +3316,7 @@ func (x *RaiseEventResponse) String() string {
 func (*RaiseEventResponse) ProtoMessage() {}
 
 func (x *RaiseEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[44]
+	mi := &file_orchestrator_service_proto_msgTypes[45]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3217,7 +3329,7 @@ func (x *RaiseEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RaiseEventResponse.ProtoReflect.Descriptor instead.
 func (*RaiseEventResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{44}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{45}
 }
 
 type TerminateRequest struct {
@@ -3233,7 +3345,7 @@ type TerminateRequest struct {
 func (x *TerminateRequest) Reset() {
 	*x = TerminateRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[45]
+		mi := &file_orchestrator_service_proto_msgTypes[46]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3246,7 +3358,7 @@ func (x *TerminateRequest) String() string {
 func (*TerminateRequest) ProtoMessage() {}
 
 func (x *TerminateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[45]
+	mi := &file_orchestrator_service_proto_msgTypes[46]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3259,7 +3371,7 @@ func (x *TerminateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateRequest.ProtoReflect.Descriptor instead.
 func (*TerminateRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{45}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *TerminateRequest) GetInstanceId() string {
@@ -3292,7 +3404,7 @@ type TerminateResponse struct {
 func (x *TerminateResponse) Reset() {
 	*x = TerminateResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[46]
+		mi := &file_orchestrator_service_proto_msgTypes[47]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3305,7 +3417,7 @@ func (x *TerminateResponse) String() string {
 func (*TerminateResponse) ProtoMessage() {}
 
 func (x *TerminateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[46]
+	mi := &file_orchestrator_service_proto_msgTypes[47]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3318,7 +3430,7 @@ func (x *TerminateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateResponse.ProtoReflect.Descriptor instead.
 func (*TerminateResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{46}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{47}
 }
 
 type SuspendRequest struct {
@@ -3333,7 +3445,7 @@ type SuspendRequest struct {
 func (x *SuspendRequest) Reset() {
 	*x = SuspendRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[47]
+		mi := &file_orchestrator_service_proto_msgTypes[48]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3346,7 +3458,7 @@ func (x *SuspendRequest) String() string {
 func (*SuspendRequest) ProtoMessage() {}
 
 func (x *SuspendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[47]
+	mi := &file_orchestrator_service_proto_msgTypes[48]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3359,7 +3471,7 @@ func (x *SuspendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendRequest.ProtoReflect.Descriptor instead.
 func (*SuspendRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{47}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *SuspendRequest) GetInstanceId() string {
@@ -3385,7 +3497,7 @@ type SuspendResponse struct {
 func (x *SuspendResponse) Reset() {
 	*x = SuspendResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[48]
+		mi := &file_orchestrator_service_proto_msgTypes[49]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3398,7 +3510,7 @@ func (x *SuspendResponse) String() string {
 func (*SuspendResponse) ProtoMessage() {}
 
 func (x *SuspendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[48]
+	mi := &file_orchestrator_service_proto_msgTypes[49]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3411,7 +3523,7 @@ func (x *SuspendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendResponse.ProtoReflect.Descriptor instead.
 func (*SuspendResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{48}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{49}
 }
 
 type ResumeRequest struct {
@@ -3426,7 +3538,7 @@ type ResumeRequest struct {
 func (x *ResumeRequest) Reset() {
 	*x = ResumeRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[49]
+		mi := &file_orchestrator_service_proto_msgTypes[50]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3439,7 +3551,7 @@ func (x *ResumeRequest) String() string {
 func (*ResumeRequest) ProtoMessage() {}
 
 func (x *ResumeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[49]
+	mi := &file_orchestrator_service_proto_msgTypes[50]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3452,7 +3564,7 @@ func (x *ResumeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeRequest.ProtoReflect.Descriptor instead.
 func (*ResumeRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{49}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ResumeRequest) GetInstanceId() string {
@@ -3478,7 +3590,7 @@ type ResumeResponse struct {
 func (x *ResumeResponse) Reset() {
 	*x = ResumeResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[50]
+		mi := &file_orchestrator_service_proto_msgTypes[51]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3491,7 +3603,7 @@ func (x *ResumeResponse) String() string {
 func (*ResumeResponse) ProtoMessage() {}
 
 func (x *ResumeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[50]
+	mi := &file_orchestrator_service_proto_msgTypes[51]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3504,7 +3616,7 @@ func (x *ResumeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeResponse.ProtoReflect.Descriptor instead.
 func (*ResumeResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{50}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{51}
 }
 
 type QueryInstancesRequest struct {
@@ -3518,7 +3630,7 @@ type QueryInstancesRequest struct {
 func (x *QueryInstancesRequest) Reset() {
 	*x = QueryInstancesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[51]
+		mi := &file_orchestrator_service_proto_msgTypes[52]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3531,7 +3643,7 @@ func (x *QueryInstancesRequest) String() string {
 func (*QueryInstancesRequest) ProtoMessage() {}
 
 func (x *QueryInstancesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[51]
+	mi := &file_orchestrator_service_proto_msgTypes[52]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3544,7 +3656,7 @@ func (x *QueryInstancesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryInstancesRequest.ProtoReflect.Descriptor instead.
 func (*QueryInstancesRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{51}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *QueryInstancesRequest) GetQuery() *InstanceQuery {
@@ -3572,7 +3684,7 @@ type InstanceQuery struct {
 func (x *InstanceQuery) Reset() {
 	*x = InstanceQuery{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[52]
+		mi := &file_orchestrator_service_proto_msgTypes[53]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3585,7 +3697,7 @@ func (x *InstanceQuery) String() string {
 func (*InstanceQuery) ProtoMessage() {}
 
 func (x *InstanceQuery) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[52]
+	mi := &file_orchestrator_service_proto_msgTypes[53]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3598,7 +3710,7 @@ func (x *InstanceQuery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceQuery.ProtoReflect.Descriptor instead.
 func (*InstanceQuery) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{52}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *InstanceQuery) GetRuntimeStatus() []OrchestrationStatus {
@@ -3669,7 +3781,7 @@ type QueryInstancesResponse struct {
 func (x *QueryInstancesResponse) Reset() {
 	*x = QueryInstancesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[53]
+		mi := &file_orchestrator_service_proto_msgTypes[54]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3682,7 +3794,7 @@ func (x *QueryInstancesResponse) String() string {
 func (*QueryInstancesResponse) ProtoMessage() {}
 
 func (x *QueryInstancesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[53]
+	mi := &file_orchestrator_service_proto_msgTypes[54]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3695,7 +3807,7 @@ func (x *QueryInstancesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryInstancesResponse.ProtoReflect.Descriptor instead.
 func (*QueryInstancesResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{53}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *QueryInstancesResponse) GetOrchestrationState() []*OrchestrationState {
@@ -3728,7 +3840,7 @@ type PurgeInstancesRequest struct {
 func (x *PurgeInstancesRequest) Reset() {
 	*x = PurgeInstancesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[54]
+		mi := &file_orchestrator_service_proto_msgTypes[55]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3741,7 +3853,7 @@ func (x *PurgeInstancesRequest) String() string {
 func (*PurgeInstancesRequest) ProtoMessage() {}
 
 func (x *PurgeInstancesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[54]
+	mi := &file_orchestrator_service_proto_msgTypes[55]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3754,7 +3866,7 @@ func (x *PurgeInstancesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeInstancesRequest.ProtoReflect.Descriptor instead.
 func (*PurgeInstancesRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{54}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{55}
 }
 
 func (m *PurgeInstancesRequest) GetRequest() isPurgeInstancesRequest_Request {
@@ -3814,7 +3926,7 @@ type PurgeInstanceFilter struct {
 func (x *PurgeInstanceFilter) Reset() {
 	*x = PurgeInstanceFilter{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[55]
+		mi := &file_orchestrator_service_proto_msgTypes[56]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3827,7 +3939,7 @@ func (x *PurgeInstanceFilter) String() string {
 func (*PurgeInstanceFilter) ProtoMessage() {}
 
 func (x *PurgeInstanceFilter) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[55]
+	mi := &file_orchestrator_service_proto_msgTypes[56]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3840,7 +3952,7 @@ func (x *PurgeInstanceFilter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeInstanceFilter.ProtoReflect.Descriptor instead.
 func (*PurgeInstanceFilter) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{55}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *PurgeInstanceFilter) GetCreatedTimeFrom() *timestamp.Timestamp {
@@ -3875,7 +3987,7 @@ type PurgeInstancesResponse struct {
 func (x *PurgeInstancesResponse) Reset() {
 	*x = PurgeInstancesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[56]
+		mi := &file_orchestrator_service_proto_msgTypes[57]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3888,7 +4000,7 @@ func (x *PurgeInstancesResponse) String() string {
 func (*PurgeInstancesResponse) ProtoMessage() {}
 
 func (x *PurgeInstancesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[56]
+	mi := &file_orchestrator_service_proto_msgTypes[57]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3901,7 +4013,7 @@ func (x *PurgeInstancesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeInstancesResponse.ProtoReflect.Descriptor instead.
 func (*PurgeInstancesResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{56}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *PurgeInstancesResponse) GetDeletedInstanceCount() int32 {
@@ -3922,7 +4034,7 @@ type CreateTaskHubRequest struct {
 func (x *CreateTaskHubRequest) Reset() {
 	*x = CreateTaskHubRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[57]
+		mi := &file_orchestrator_service_proto_msgTypes[58]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3935,7 +4047,7 @@ func (x *CreateTaskHubRequest) String() string {
 func (*CreateTaskHubRequest) ProtoMessage() {}
 
 func (x *CreateTaskHubRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[57]
+	mi := &file_orchestrator_service_proto_msgTypes[58]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3948,7 +4060,7 @@ func (x *CreateTaskHubRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTaskHubRequest.ProtoReflect.Descriptor instead.
 func (*CreateTaskHubRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{57}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *CreateTaskHubRequest) GetRecreateIfExists() bool {
@@ -3967,7 +4079,7 @@ type CreateTaskHubResponse struct {
 func (x *CreateTaskHubResponse) Reset() {
 	*x = CreateTaskHubResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[58]
+		mi := &file_orchestrator_service_proto_msgTypes[59]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3980,7 +4092,7 @@ func (x *CreateTaskHubResponse) String() string {
 func (*CreateTaskHubResponse) ProtoMessage() {}
 
 func (x *CreateTaskHubResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[58]
+	mi := &file_orchestrator_service_proto_msgTypes[59]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3993,7 +4105,7 @@ func (x *CreateTaskHubResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTaskHubResponse.ProtoReflect.Descriptor instead.
 func (*CreateTaskHubResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{58}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{59}
 }
 
 type DeleteTaskHubRequest struct {
@@ -4005,7 +4117,7 @@ type DeleteTaskHubRequest struct {
 func (x *DeleteTaskHubRequest) Reset() {
 	*x = DeleteTaskHubRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[59]
+		mi := &file_orchestrator_service_proto_msgTypes[60]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4018,7 +4130,7 @@ func (x *DeleteTaskHubRequest) String() string {
 func (*DeleteTaskHubRequest) ProtoMessage() {}
 
 func (x *DeleteTaskHubRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[59]
+	mi := &file_orchestrator_service_proto_msgTypes[60]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4031,7 +4143,7 @@ func (x *DeleteTaskHubRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTaskHubRequest.ProtoReflect.Descriptor instead.
 func (*DeleteTaskHubRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{59}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{60}
 }
 
 type DeleteTaskHubResponse struct {
@@ -4043,7 +4155,7 @@ type DeleteTaskHubResponse struct {
 func (x *DeleteTaskHubResponse) Reset() {
 	*x = DeleteTaskHubResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[60]
+		mi := &file_orchestrator_service_proto_msgTypes[61]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4056,7 +4168,7 @@ func (x *DeleteTaskHubResponse) String() string {
 func (*DeleteTaskHubResponse) ProtoMessage() {}
 
 func (x *DeleteTaskHubResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[60]
+	mi := &file_orchestrator_service_proto_msgTypes[61]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4069,7 +4181,7 @@ func (x *DeleteTaskHubResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTaskHubResponse.ProtoReflect.Descriptor instead.
 func (*DeleteTaskHubResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{60}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{61}
 }
 
 type SignalEntityRequest struct {
@@ -4087,7 +4199,7 @@ type SignalEntityRequest struct {
 func (x *SignalEntityRequest) Reset() {
 	*x = SignalEntityRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[61]
+		mi := &file_orchestrator_service_proto_msgTypes[62]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4100,7 +4212,7 @@ func (x *SignalEntityRequest) String() string {
 func (*SignalEntityRequest) ProtoMessage() {}
 
 func (x *SignalEntityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[61]
+	mi := &file_orchestrator_service_proto_msgTypes[62]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4113,7 +4225,7 @@ func (x *SignalEntityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalEntityRequest.ProtoReflect.Descriptor instead.
 func (*SignalEntityRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{61}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *SignalEntityRequest) GetInstanceId() string {
@@ -4160,7 +4272,7 @@ type SignalEntityResponse struct {
 func (x *SignalEntityResponse) Reset() {
 	*x = SignalEntityResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[62]
+		mi := &file_orchestrator_service_proto_msgTypes[63]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4173,7 +4285,7 @@ func (x *SignalEntityResponse) String() string {
 func (*SignalEntityResponse) ProtoMessage() {}
 
 func (x *SignalEntityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[62]
+	mi := &file_orchestrator_service_proto_msgTypes[63]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4186,7 +4298,7 @@ func (x *SignalEntityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalEntityResponse.ProtoReflect.Descriptor instead.
 func (*SignalEntityResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{62}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{63}
 }
 
 type GetEntityRequest struct {
@@ -4201,7 +4313,7 @@ type GetEntityRequest struct {
 func (x *GetEntityRequest) Reset() {
 	*x = GetEntityRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[63]
+		mi := &file_orchestrator_service_proto_msgTypes[64]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4214,7 +4326,7 @@ func (x *GetEntityRequest) String() string {
 func (*GetEntityRequest) ProtoMessage() {}
 
 func (x *GetEntityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[63]
+	mi := &file_orchestrator_service_proto_msgTypes[64]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4227,7 +4339,7 @@ func (x *GetEntityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEntityRequest.ProtoReflect.Descriptor instead.
 func (*GetEntityRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{63}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *GetEntityRequest) GetInstanceId() string {
@@ -4256,7 +4368,7 @@ type GetEntityResponse struct {
 func (x *GetEntityResponse) Reset() {
 	*x = GetEntityResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[64]
+		mi := &file_orchestrator_service_proto_msgTypes[65]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4269,7 +4381,7 @@ func (x *GetEntityResponse) String() string {
 func (*GetEntityResponse) ProtoMessage() {}
 
 func (x *GetEntityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[64]
+	mi := &file_orchestrator_service_proto_msgTypes[65]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4282,7 +4394,7 @@ func (x *GetEntityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEntityResponse.ProtoReflect.Descriptor instead.
 func (*GetEntityResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{64}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *GetEntityResponse) GetExists() bool {
@@ -4316,7 +4428,7 @@ type EntityQuery struct {
 func (x *EntityQuery) Reset() {
 	*x = EntityQuery{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[65]
+		mi := &file_orchestrator_service_proto_msgTypes[66]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4329,7 +4441,7 @@ func (x *EntityQuery) String() string {
 func (*EntityQuery) ProtoMessage() {}
 
 func (x *EntityQuery) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[65]
+	mi := &file_orchestrator_service_proto_msgTypes[66]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4342,7 +4454,7 @@ func (x *EntityQuery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntityQuery.ProtoReflect.Descriptor instead.
 func (*EntityQuery) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{65}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *EntityQuery) GetInstanceIdStartsWith() *wrappers.StringValue {
@@ -4405,7 +4517,7 @@ type QueryEntitiesRequest struct {
 func (x *QueryEntitiesRequest) Reset() {
 	*x = QueryEntitiesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[66]
+		mi := &file_orchestrator_service_proto_msgTypes[67]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4418,7 +4530,7 @@ func (x *QueryEntitiesRequest) String() string {
 func (*QueryEntitiesRequest) ProtoMessage() {}
 
 func (x *QueryEntitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[66]
+	mi := &file_orchestrator_service_proto_msgTypes[67]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4431,7 +4543,7 @@ func (x *QueryEntitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryEntitiesRequest.ProtoReflect.Descriptor instead.
 func (*QueryEntitiesRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{66}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *QueryEntitiesRequest) GetQuery() *EntityQuery {
@@ -4453,7 +4565,7 @@ type QueryEntitiesResponse struct {
 func (x *QueryEntitiesResponse) Reset() {
 	*x = QueryEntitiesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[67]
+		mi := &file_orchestrator_service_proto_msgTypes[68]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4466,7 +4578,7 @@ func (x *QueryEntitiesResponse) String() string {
 func (*QueryEntitiesResponse) ProtoMessage() {}
 
 func (x *QueryEntitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[67]
+	mi := &file_orchestrator_service_proto_msgTypes[68]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4479,7 +4591,7 @@ func (x *QueryEntitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryEntitiesResponse.ProtoReflect.Descriptor instead.
 func (*QueryEntitiesResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{67}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *QueryEntitiesResponse) GetEntities() []*EntityMetadata {
@@ -4511,7 +4623,7 @@ type EntityMetadata struct {
 func (x *EntityMetadata) Reset() {
 	*x = EntityMetadata{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[68]
+		mi := &file_orchestrator_service_proto_msgTypes[69]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4524,7 +4636,7 @@ func (x *EntityMetadata) String() string {
 func (*EntityMetadata) ProtoMessage() {}
 
 func (x *EntityMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[68]
+	mi := &file_orchestrator_service_proto_msgTypes[69]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4537,7 +4649,7 @@ func (x *EntityMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntityMetadata.ProtoReflect.Descriptor instead.
 func (*EntityMetadata) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{68}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *EntityMetadata) GetInstanceId() string {
@@ -4588,7 +4700,7 @@ type CleanEntityStorageRequest struct {
 func (x *CleanEntityStorageRequest) Reset() {
 	*x = CleanEntityStorageRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[69]
+		mi := &file_orchestrator_service_proto_msgTypes[70]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4601,7 +4713,7 @@ func (x *CleanEntityStorageRequest) String() string {
 func (*CleanEntityStorageRequest) ProtoMessage() {}
 
 func (x *CleanEntityStorageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[69]
+	mi := &file_orchestrator_service_proto_msgTypes[70]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4614,7 +4726,7 @@ func (x *CleanEntityStorageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CleanEntityStorageRequest.ProtoReflect.Descriptor instead.
 func (*CleanEntityStorageRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{69}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *CleanEntityStorageRequest) GetContinuationToken() *wrappers.StringValue {
@@ -4651,7 +4763,7 @@ type CleanEntityStorageResponse struct {
 func (x *CleanEntityStorageResponse) Reset() {
 	*x = CleanEntityStorageResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[70]
+		mi := &file_orchestrator_service_proto_msgTypes[71]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4664,7 +4776,7 @@ func (x *CleanEntityStorageResponse) String() string {
 func (*CleanEntityStorageResponse) ProtoMessage() {}
 
 func (x *CleanEntityStorageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[70]
+	mi := &file_orchestrator_service_proto_msgTypes[71]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4677,7 +4789,7 @@ func (x *CleanEntityStorageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CleanEntityStorageResponse.ProtoReflect.Descriptor instead.
 func (*CleanEntityStorageResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{70}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *CleanEntityStorageResponse) GetContinuationToken() *wrappers.StringValue {
@@ -4712,7 +4824,7 @@ type OrchestratorEntityParameters struct {
 func (x *OrchestratorEntityParameters) Reset() {
 	*x = OrchestratorEntityParameters{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[71]
+		mi := &file_orchestrator_service_proto_msgTypes[72]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4725,7 +4837,7 @@ func (x *OrchestratorEntityParameters) String() string {
 func (*OrchestratorEntityParameters) ProtoMessage() {}
 
 func (x *OrchestratorEntityParameters) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[71]
+	mi := &file_orchestrator_service_proto_msgTypes[72]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4738,7 +4850,7 @@ func (x *OrchestratorEntityParameters) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorEntityParameters.ProtoReflect.Descriptor instead.
 func (*OrchestratorEntityParameters) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{71}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *OrchestratorEntityParameters) GetEntityMessageReorderWindow() *duration.Duration {
@@ -4761,7 +4873,7 @@ type EntityBatchRequest struct {
 func (x *EntityBatchRequest) Reset() {
 	*x = EntityBatchRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[72]
+		mi := &file_orchestrator_service_proto_msgTypes[73]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4774,7 +4886,7 @@ func (x *EntityBatchRequest) String() string {
 func (*EntityBatchRequest) ProtoMessage() {}
 
 func (x *EntityBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[72]
+	mi := &file_orchestrator_service_proto_msgTypes[73]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4787,7 +4899,7 @@ func (x *EntityBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntityBatchRequest.ProtoReflect.Descriptor instead.
 func (*EntityBatchRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{72}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *EntityBatchRequest) GetInstanceId() string {
@@ -4825,7 +4937,7 @@ type EntityBatchResult struct {
 func (x *EntityBatchResult) Reset() {
 	*x = EntityBatchResult{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[73]
+		mi := &file_orchestrator_service_proto_msgTypes[74]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4838,7 +4950,7 @@ func (x *EntityBatchResult) String() string {
 func (*EntityBatchResult) ProtoMessage() {}
 
 func (x *EntityBatchResult) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[73]
+	mi := &file_orchestrator_service_proto_msgTypes[74]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4851,7 +4963,7 @@ func (x *EntityBatchResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntityBatchResult.ProtoReflect.Descriptor instead.
 func (*EntityBatchResult) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{73}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *EntityBatchResult) GetResults() []*OperationResult {
@@ -4895,7 +5007,7 @@ type OperationRequest struct {
 func (x *OperationRequest) Reset() {
 	*x = OperationRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[74]
+		mi := &file_orchestrator_service_proto_msgTypes[75]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4908,7 +5020,7 @@ func (x *OperationRequest) String() string {
 func (*OperationRequest) ProtoMessage() {}
 
 func (x *OperationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[74]
+	mi := &file_orchestrator_service_proto_msgTypes[75]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4921,7 +5033,7 @@ func (x *OperationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationRequest.ProtoReflect.Descriptor instead.
 func (*OperationRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{74}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *OperationRequest) GetOperation() string {
@@ -4960,7 +5072,7 @@ type OperationResult struct {
 func (x *OperationResult) Reset() {
 	*x = OperationResult{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[75]
+		mi := &file_orchestrator_service_proto_msgTypes[76]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4973,7 +5085,7 @@ func (x *OperationResult) String() string {
 func (*OperationResult) ProtoMessage() {}
 
 func (x *OperationResult) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[75]
+	mi := &file_orchestrator_service_proto_msgTypes[76]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4986,7 +5098,7 @@ func (x *OperationResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationResult.ProtoReflect.Descriptor instead.
 func (*OperationResult) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{75}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{76}
 }
 
 func (m *OperationResult) GetResultType() isOperationResult_ResultType {
@@ -5037,7 +5149,7 @@ type OperationResultSuccess struct {
 func (x *OperationResultSuccess) Reset() {
 	*x = OperationResultSuccess{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[76]
+		mi := &file_orchestrator_service_proto_msgTypes[77]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5050,7 +5162,7 @@ func (x *OperationResultSuccess) String() string {
 func (*OperationResultSuccess) ProtoMessage() {}
 
 func (x *OperationResultSuccess) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[76]
+	mi := &file_orchestrator_service_proto_msgTypes[77]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5063,7 +5175,7 @@ func (x *OperationResultSuccess) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationResultSuccess.ProtoReflect.Descriptor instead.
 func (*OperationResultSuccess) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{76}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *OperationResultSuccess) GetResult() *wrappers.StringValue {
@@ -5084,7 +5196,7 @@ type OperationResultFailure struct {
 func (x *OperationResultFailure) Reset() {
 	*x = OperationResultFailure{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[77]
+		mi := &file_orchestrator_service_proto_msgTypes[78]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5097,7 +5209,7 @@ func (x *OperationResultFailure) String() string {
 func (*OperationResultFailure) ProtoMessage() {}
 
 func (x *OperationResultFailure) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[77]
+	mi := &file_orchestrator_service_proto_msgTypes[78]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5110,7 +5222,7 @@ func (x *OperationResultFailure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationResultFailure.ProtoReflect.Descriptor instead.
 func (*OperationResultFailure) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{77}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *OperationResultFailure) GetFailureDetails() *TaskFailureDetails {
@@ -5136,7 +5248,7 @@ type OperationAction struct {
 func (x *OperationAction) Reset() {
 	*x = OperationAction{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[78]
+		mi := &file_orchestrator_service_proto_msgTypes[79]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5149,7 +5261,7 @@ func (x *OperationAction) String() string {
 func (*OperationAction) ProtoMessage() {}
 
 func (x *OperationAction) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[78]
+	mi := &file_orchestrator_service_proto_msgTypes[79]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5162,7 +5274,7 @@ func (x *OperationAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationAction.ProtoReflect.Descriptor instead.
 func (*OperationAction) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{78}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *OperationAction) GetId() int32 {
@@ -5223,7 +5335,7 @@ type SendSignalAction struct {
 func (x *SendSignalAction) Reset() {
 	*x = SendSignalAction{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[79]
+		mi := &file_orchestrator_service_proto_msgTypes[80]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5236,7 +5348,7 @@ func (x *SendSignalAction) String() string {
 func (*SendSignalAction) ProtoMessage() {}
 
 func (x *SendSignalAction) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[79]
+	mi := &file_orchestrator_service_proto_msgTypes[80]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5249,7 +5361,7 @@ func (x *SendSignalAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendSignalAction.ProtoReflect.Descriptor instead.
 func (*SendSignalAction) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{79}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *SendSignalAction) GetInstanceId() string {
@@ -5295,7 +5407,7 @@ type StartNewOrchestrationAction struct {
 func (x *StartNewOrchestrationAction) Reset() {
 	*x = StartNewOrchestrationAction{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[80]
+		mi := &file_orchestrator_service_proto_msgTypes[81]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5308,7 +5420,7 @@ func (x *StartNewOrchestrationAction) String() string {
 func (*StartNewOrchestrationAction) ProtoMessage() {}
 
 func (x *StartNewOrchestrationAction) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[80]
+	mi := &file_orchestrator_service_proto_msgTypes[81]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5321,7 +5433,7 @@ func (x *StartNewOrchestrationAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartNewOrchestrationAction.ProtoReflect.Descriptor instead.
 func (*StartNewOrchestrationAction) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{80}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *StartNewOrchestrationAction) GetInstanceId() string {
@@ -5368,7 +5480,7 @@ type GetWorkItemsRequest struct {
 func (x *GetWorkItemsRequest) Reset() {
 	*x = GetWorkItemsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[81]
+		mi := &file_orchestrator_service_proto_msgTypes[82]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5381,7 +5493,7 @@ func (x *GetWorkItemsRequest) String() string {
 func (*GetWorkItemsRequest) ProtoMessage() {}
 
 func (x *GetWorkItemsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[81]
+	mi := &file_orchestrator_service_proto_msgTypes[82]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5394,7 +5506,7 @@ func (x *GetWorkItemsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWorkItemsRequest.ProtoReflect.Descriptor instead.
 func (*GetWorkItemsRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{81}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{82}
 }
 
 type WorkItem struct {
@@ -5413,7 +5525,7 @@ type WorkItem struct {
 func (x *WorkItem) Reset() {
 	*x = WorkItem{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[82]
+		mi := &file_orchestrator_service_proto_msgTypes[83]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5426,7 +5538,7 @@ func (x *WorkItem) String() string {
 func (*WorkItem) ProtoMessage() {}
 
 func (x *WorkItem) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[82]
+	mi := &file_orchestrator_service_proto_msgTypes[83]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5439,7 +5551,7 @@ func (x *WorkItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkItem.ProtoReflect.Descriptor instead.
 func (*WorkItem) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{82}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{83}
 }
 
 func (m *WorkItem) GetRequest() isWorkItem_Request {
@@ -5501,7 +5613,7 @@ type CompleteTaskResponse struct {
 func (x *CompleteTaskResponse) Reset() {
 	*x = CompleteTaskResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_orchestrator_service_proto_msgTypes[83]
+		mi := &file_orchestrator_service_proto_msgTypes[84]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5514,7 +5626,7 @@ func (x *CompleteTaskResponse) String() string {
 func (*CompleteTaskResponse) ProtoMessage() {}
 
 func (x *CompleteTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_service_proto_msgTypes[83]
+	mi := &file_orchestrator_service_proto_msgTypes[84]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5527,7 +5639,7 @@ func (x *CompleteTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteTaskResponse.ProtoReflect.Descriptor instead.
 func (*CompleteTaskResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_service_proto_rawDescGZIP(), []int{83}
+	return file_orchestrator_service_proto_rawDescGZIP(), []int{84}
 }
 
 var File_orchestrator_service_proto protoreflect.FileDescriptor
@@ -6010,7 +6122,7 @@ var file_orchestrator_service_proto_rawDesc = []byte{
 	0x20, 0x01, 0x28, 0x0b, 0x32, 0x1c, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72,
 	0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x53, 0x74, 0x72, 0x69, 0x6e, 0x67, 0x56, 0x61, 0x6c,
 	0x75, 0x65, 0x52, 0x0c, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73,
-	0x22, 0x8d, 0x02, 0x0a, 0x15, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61,
+	0x22, 0xea, 0x02, 0x0a, 0x15, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61,
 	0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1e, 0x0a, 0x0a, 0x69, 0x6e,
 	0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x49, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a,
 	0x69, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x49, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61,
@@ -6027,6 +6139,21 @@ var file_orchestrator_service_proto_rawDesc = []byte{
 	0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69,
 	0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x52, 0x17, 0x73, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c,
 	0x65, 0x64, 0x53, 0x74, 0x61, 0x72, 0x74, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70,
+	0x12, 0x5b, 0x0a, 0x1a, 0x6f, 0x72, 0x63, 0x68, 0x65, 0x73, 0x74, 0x72, 0x61, 0x74, 0x69, 0x6f,
+	0x6e, 0x49, 0x64, 0x52, 0x65, 0x75, 0x73, 0x65, 0x50, 0x6f, 0x6c, 0x69, 0x63, 0x79, 0x18, 0x06,
+	0x20, 0x01, 0x28, 0x0b, 0x32, 0x1b, 0x2e, 0x4f, 0x72, 0x63, 0x68, 0x65, 0x73, 0x74, 0x72, 0x61,
+	0x74, 0x69, 0x6f, 0x6e, 0x49, 0x64, 0x52, 0x65, 0x75, 0x73, 0x65, 0x50, 0x6f, 0x6c, 0x69, 0x63,
+	0x79, 0x52, 0x1a, 0x6f, 0x72, 0x63, 0x68, 0x65, 0x73, 0x74, 0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e,
+	0x49, 0x64, 0x52, 0x65, 0x75, 0x73, 0x65, 0x50, 0x6f, 0x6c, 0x69, 0x63, 0x79, 0x22, 0x90, 0x01,
+	0x0a, 0x1a, 0x4f, 0x72, 0x63, 0x68, 0x65, 0x73, 0x74, 0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x49,
+	0x64, 0x52, 0x65, 0x75, 0x73, 0x65, 0x50, 0x6f, 0x6c, 0x69, 0x63, 0x79, 0x12, 0x3e, 0x0a, 0x0f,
+	0x6f, 0x70, 0x65, 0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18,
+	0x01, 0x20, 0x03, 0x28, 0x0e, 0x32, 0x14, 0x2e, 0x4f, 0x72, 0x63, 0x68, 0x65, 0x73, 0x74, 0x72,
+	0x61, 0x74, 0x69, 0x6f, 0x6e, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x0f, 0x6f, 0x70, 0x65,
+	0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x32, 0x0a, 0x06,
+	0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x1a, 0x2e, 0x43,
+	0x72, 0x65, 0x61, 0x74, 0x65, 0x4f, 0x72, 0x63, 0x68, 0x65, 0x73, 0x74, 0x72, 0x61, 0x74, 0x69,
+	0x6f, 0x6e, 0x41, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x52, 0x06, 0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e,
 	0x22, 0x38, 0x0a, 0x16, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e,
 	0x63, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x1e, 0x0a, 0x0a, 0x69, 0x6e,
 	0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x49, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a,
@@ -6465,101 +6592,106 @@ var file_orchestrator_service_proto_rawDesc = []byte{
 	0x54, 0x55, 0x53, 0x5f, 0x50, 0x45, 0x4e, 0x44, 0x49, 0x4e, 0x47, 0x10, 0x06, 0x12, 0x22, 0x0a,
 	0x1e, 0x4f, 0x52, 0x43, 0x48, 0x45, 0x53, 0x54, 0x52, 0x41, 0x54, 0x49, 0x4f, 0x4e, 0x5f, 0x53,
 	0x54, 0x41, 0x54, 0x55, 0x53, 0x5f, 0x53, 0x55, 0x53, 0x50, 0x45, 0x4e, 0x44, 0x45, 0x44, 0x10,
-	0x07, 0x32, 0xfc, 0x0a, 0x0a, 0x15, 0x54, 0x61, 0x73, 0x6b, 0x48, 0x75, 0x62, 0x53, 0x69, 0x64,
-	0x65, 0x63, 0x61, 0x72, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x37, 0x0a, 0x05, 0x48,
-	0x65, 0x6c, 0x6c, 0x6f, 0x12, 0x16, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72,
-	0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x45, 0x6d, 0x70, 0x74, 0x79, 0x1a, 0x16, 0x2e, 0x67,
-	0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x45,
-	0x6d, 0x70, 0x74, 0x79, 0x12, 0x40, 0x0a, 0x0d, 0x53, 0x74, 0x61, 0x72, 0x74, 0x49, 0x6e, 0x73,
-	0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x16, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x49, 0x6e,
+	0x07, 0x2a, 0x41, 0x0a, 0x19, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x4f, 0x72, 0x63, 0x68, 0x65,
+	0x73, 0x74, 0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x41, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x09,
+	0x0a, 0x05, 0x45, 0x52, 0x52, 0x4f, 0x52, 0x10, 0x00, 0x12, 0x0a, 0x0a, 0x06, 0x49, 0x47, 0x4e,
+	0x4f, 0x52, 0x45, 0x10, 0x01, 0x12, 0x0d, 0x0a, 0x09, 0x54, 0x45, 0x52, 0x4d, 0x49, 0x4e, 0x41,
+	0x54, 0x45, 0x10, 0x02, 0x32, 0xfc, 0x0a, 0x0a, 0x15, 0x54, 0x61, 0x73, 0x6b, 0x48, 0x75, 0x62,
+	0x53, 0x69, 0x64, 0x65, 0x63, 0x61, 0x72, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x37,
+	0x0a, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x12, 0x16, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65,
+	0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x45, 0x6d, 0x70, 0x74, 0x79, 0x1a,
+	0x16, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75,
+	0x66, 0x2e, 0x45, 0x6d, 0x70, 0x74, 0x79, 0x12, 0x40, 0x0a, 0x0d, 0x53, 0x74, 0x61, 0x72, 0x74,
+	0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x16, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74,
+	0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x1a, 0x17, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63,
+	0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x38, 0x0a, 0x0b, 0x47, 0x65, 0x74,
+	0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x13, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e,
+	0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x14, 0x2e,
+	0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x41, 0x0a, 0x0e, 0x52, 0x65, 0x77, 0x69, 0x6e, 0x64, 0x49, 0x6e, 0x73,
+	0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x16, 0x2e, 0x52, 0x65, 0x77, 0x69, 0x6e, 0x64, 0x49, 0x6e,
 	0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x17, 0x2e,
-	0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65,
-	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x38, 0x0a, 0x0b, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73,
-	0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x13, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61,
-	0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x14, 0x2e, 0x47, 0x65, 0x74,
-	0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x12, 0x41, 0x0a, 0x0e, 0x52, 0x65, 0x77, 0x69, 0x6e, 0x64, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e,
-	0x63, 0x65, 0x12, 0x16, 0x2e, 0x52, 0x65, 0x77, 0x69, 0x6e, 0x64, 0x49, 0x6e, 0x73, 0x74, 0x61,
-	0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x17, 0x2e, 0x52, 0x65, 0x77,
-	0x69, 0x6e, 0x64, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f,
-	0x6e, 0x73, 0x65, 0x12, 0x41, 0x0a, 0x14, 0x57, 0x61, 0x69, 0x74, 0x46, 0x6f, 0x72, 0x49, 0x6e,
-	0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x53, 0x74, 0x61, 0x72, 0x74, 0x12, 0x13, 0x2e, 0x47, 0x65,
-	0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
-	0x1a, 0x14, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65,
-	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x46, 0x0a, 0x19, 0x57, 0x61, 0x69, 0x74, 0x46, 0x6f,
-	0x72, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74,
-	0x69, 0x6f, 0x6e, 0x12, 0x13, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63,
-	0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x14, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e,
-	0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x35,
-	0x0a, 0x0a, 0x52, 0x61, 0x69, 0x73, 0x65, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x12, 0x12, 0x2e, 0x52,
-	0x61, 0x69, 0x73, 0x65, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
-	0x1a, 0x13, 0x2e, 0x52, 0x61, 0x69, 0x73, 0x65, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x3a, 0x0a, 0x11, 0x54, 0x65, 0x72, 0x6d, 0x69, 0x6e, 0x61,
-	0x74, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x11, 0x2e, 0x54, 0x65, 0x72,
-	0x6d, 0x69, 0x6e, 0x61, 0x74, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x12, 0x2e,
-	0x54, 0x65, 0x72, 0x6d, 0x69, 0x6e, 0x61, 0x74, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x12, 0x34, 0x0a, 0x0f, 0x53, 0x75, 0x73, 0x70, 0x65, 0x6e, 0x64, 0x49, 0x6e, 0x73, 0x74,
-	0x61, 0x6e, 0x63, 0x65, 0x12, 0x0f, 0x2e, 0x53, 0x75, 0x73, 0x70, 0x65, 0x6e, 0x64, 0x52, 0x65,
-	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x10, 0x2e, 0x53, 0x75, 0x73, 0x70, 0x65, 0x6e, 0x64, 0x52,
-	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x31, 0x0a, 0x0e, 0x52, 0x65, 0x73, 0x75, 0x6d,
-	0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x0e, 0x2e, 0x52, 0x65, 0x73, 0x75,
-	0x6d, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x0f, 0x2e, 0x52, 0x65, 0x73, 0x75,
-	0x6d, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x41, 0x0a, 0x0e, 0x51, 0x75,
-	0x65, 0x72, 0x79, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x73, 0x12, 0x16, 0x2e, 0x51,
-	0x75, 0x65, 0x72, 0x79, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x73, 0x52, 0x65, 0x71,
-	0x75, 0x65, 0x73, 0x74, 0x1a, 0x17, 0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x49, 0x6e, 0x73, 0x74,
-	0x61, 0x6e, 0x63, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x41, 0x0a,
-	0x0e, 0x50, 0x75, 0x72, 0x67, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x73, 0x12,
-	0x16, 0x2e, 0x50, 0x75, 0x72, 0x67, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x73,
-	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x17, 0x2e, 0x50, 0x75, 0x72, 0x67, 0x65, 0x49,
+	0x52, 0x65, 0x77, 0x69, 0x6e, 0x64, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65,
+	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x41, 0x0a, 0x14, 0x57, 0x61, 0x69, 0x74, 0x46, 0x6f,
+	0x72, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x53, 0x74, 0x61, 0x72, 0x74, 0x12, 0x13,
+	0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x1a, 0x14, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63,
+	0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x46, 0x0a, 0x19, 0x57, 0x61, 0x69,
+	0x74, 0x46, 0x6f, 0x72, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x43, 0x6f, 0x6d, 0x70,
+	0x6c, 0x65, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x13, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74,
+	0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x14, 0x2e, 0x47, 0x65,
+	0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x12, 0x35, 0x0a, 0x0a, 0x52, 0x61, 0x69, 0x73, 0x65, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x12,
+	0x12, 0x2e, 0x52, 0x61, 0x69, 0x73, 0x65, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x1a, 0x13, 0x2e, 0x52, 0x61, 0x69, 0x73, 0x65, 0x45, 0x76, 0x65, 0x6e, 0x74,
+	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x3a, 0x0a, 0x11, 0x54, 0x65, 0x72, 0x6d,
+	0x69, 0x6e, 0x61, 0x74, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x11, 0x2e,
+	0x54, 0x65, 0x72, 0x6d, 0x69, 0x6e, 0x61, 0x74, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x1a, 0x12, 0x2e, 0x54, 0x65, 0x72, 0x6d, 0x69, 0x6e, 0x61, 0x74, 0x65, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x34, 0x0a, 0x0f, 0x53, 0x75, 0x73, 0x70, 0x65, 0x6e, 0x64, 0x49,
+	0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x0f, 0x2e, 0x53, 0x75, 0x73, 0x70, 0x65, 0x6e,
+	0x64, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x10, 0x2e, 0x53, 0x75, 0x73, 0x70, 0x65,
+	0x6e, 0x64, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x31, 0x0a, 0x0e, 0x52, 0x65,
+	0x73, 0x75, 0x6d, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x0e, 0x2e, 0x52,
+	0x65, 0x73, 0x75, 0x6d, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x0f, 0x2e, 0x52,
+	0x65, 0x73, 0x75, 0x6d, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x41, 0x0a,
+	0x0e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x73, 0x12,
+	0x16, 0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x73,
+	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x17, 0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x49,
 	0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x12, 0x31, 0x0a, 0x0c, 0x47, 0x65, 0x74, 0x57, 0x6f, 0x72, 0x6b, 0x49, 0x74, 0x65, 0x6d, 0x73,
-	0x12, 0x14, 0x2e, 0x47, 0x65, 0x74, 0x57, 0x6f, 0x72, 0x6b, 0x49, 0x74, 0x65, 0x6d, 0x73, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x09, 0x2e, 0x57, 0x6f, 0x72, 0x6b, 0x49, 0x74, 0x65,
-	0x6d, 0x30, 0x01, 0x12, 0x40, 0x0a, 0x14, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x41,
-	0x63, 0x74, 0x69, 0x76, 0x69, 0x74, 0x79, 0x54, 0x61, 0x73, 0x6b, 0x12, 0x11, 0x2e, 0x41, 0x63,
-	0x74, 0x69, 0x76, 0x69, 0x74, 0x79, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x1a, 0x15,
-	0x2e, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x48, 0x0a, 0x18, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74,
-	0x65, 0x4f, 0x72, 0x63, 0x68, 0x65, 0x73, 0x74, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x54, 0x61, 0x73,
-	0x6b, 0x12, 0x15, 0x2e, 0x4f, 0x72, 0x63, 0x68, 0x65, 0x73, 0x74, 0x72, 0x61, 0x74, 0x6f, 0x72,
-	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x1a, 0x15, 0x2e, 0x43, 0x6f, 0x6d, 0x70, 0x6c,
-	0x65, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
-	0x3f, 0x0a, 0x12, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x45, 0x6e, 0x74, 0x69, 0x74,
-	0x79, 0x54, 0x61, 0x73, 0x6b, 0x12, 0x12, 0x2e, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x42, 0x61,
-	0x74, 0x63, 0x68, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x1a, 0x15, 0x2e, 0x43, 0x6f, 0x6d, 0x70,
-	0x6c, 0x65, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x12, 0x3e, 0x0a, 0x0d, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x48, 0x75,
-	0x62, 0x12, 0x15, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x48, 0x75,
-	0x62, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x16, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74,
-	0x65, 0x54, 0x61, 0x73, 0x6b, 0x48, 0x75, 0x62, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x12, 0x3e, 0x0a, 0x0d, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x48, 0x75,
-	0x62, 0x12, 0x15, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x48, 0x75,
-	0x62, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x16, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74,
-	0x65, 0x54, 0x61, 0x73, 0x6b, 0x48, 0x75, 0x62, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x12, 0x3b, 0x0a, 0x0c, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x6c, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79,
-	0x12, 0x14, 0x2e, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x6c, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x15, 0x2e, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x6c, 0x45,
-	0x6e, 0x74, 0x69, 0x74, 0x79, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x32, 0x0a,
-	0x09, 0x47, 0x65, 0x74, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x12, 0x11, 0x2e, 0x47, 0x65, 0x74,
-	0x45, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x12, 0x2e,
-	0x47, 0x65, 0x74, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x12, 0x3e, 0x0a, 0x0d, 0x51, 0x75, 0x65, 0x72, 0x79, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x69,
-	0x65, 0x73, 0x12, 0x15, 0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x69,
-	0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x16, 0x2e, 0x51, 0x75, 0x65, 0x72,
-	0x79, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x69, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x12, 0x4d, 0x0a, 0x12, 0x43, 0x6c, 0x65, 0x61, 0x6e, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79,
-	0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x12, 0x1a, 0x2e, 0x43, 0x6c, 0x65, 0x61, 0x6e, 0x45,
-	0x6e, 0x74, 0x69, 0x74, 0x79, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x52, 0x65, 0x71, 0x75,
-	0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x43, 0x6c, 0x65, 0x61, 0x6e, 0x45, 0x6e, 0x74, 0x69, 0x74,
-	0x79, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x42, 0x66, 0x0a, 0x31, 0x63, 0x6f, 0x6d, 0x2e, 0x6d, 0x69, 0x63, 0x72, 0x6f, 0x73, 0x6f, 0x66,
-	0x74, 0x2e, 0x64, 0x75, 0x72, 0x61, 0x62, 0x6c, 0x65, 0x74, 0x61, 0x73, 0x6b, 0x2e, 0x69, 0x6d,
-	0x70, 0x6c, 0x65, 0x6d, 0x65, 0x6e, 0x74, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x2e, 0x70, 0x72, 0x6f,
-	0x74, 0x6f, 0x62, 0x75, 0x66, 0x5a, 0x10, 0x2f, 0x69, 0x6e, 0x74, 0x65, 0x72, 0x6e, 0x61, 0x6c,
-	0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x73, 0xaa, 0x02, 0x1e, 0x4d, 0x69, 0x63, 0x72, 0x6f, 0x73,
-	0x6f, 0x66, 0x74, 0x2e, 0x44, 0x75, 0x72, 0x61, 0x62, 0x6c, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x2e,
-	0x50, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x12, 0x41, 0x0a, 0x0e, 0x50, 0x75, 0x72, 0x67, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63,
+	0x65, 0x73, 0x12, 0x16, 0x2e, 0x50, 0x75, 0x72, 0x67, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e,
+	0x63, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x17, 0x2e, 0x50, 0x75, 0x72,
+	0x67, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x31, 0x0a, 0x0c, 0x47, 0x65, 0x74, 0x57, 0x6f, 0x72, 0x6b, 0x49, 0x74,
+	0x65, 0x6d, 0x73, 0x12, 0x14, 0x2e, 0x47, 0x65, 0x74, 0x57, 0x6f, 0x72, 0x6b, 0x49, 0x74, 0x65,
+	0x6d, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x09, 0x2e, 0x57, 0x6f, 0x72, 0x6b,
+	0x49, 0x74, 0x65, 0x6d, 0x30, 0x01, 0x12, 0x40, 0x0a, 0x14, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65,
+	0x74, 0x65, 0x41, 0x63, 0x74, 0x69, 0x76, 0x69, 0x74, 0x79, 0x54, 0x61, 0x73, 0x6b, 0x12, 0x11,
+	0x2e, 0x41, 0x63, 0x74, 0x69, 0x76, 0x69, 0x74, 0x79, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x1a, 0x15, 0x2e, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b,
+	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x48, 0x0a, 0x18, 0x43, 0x6f, 0x6d, 0x70,
+	0x6c, 0x65, 0x74, 0x65, 0x4f, 0x72, 0x63, 0x68, 0x65, 0x73, 0x74, 0x72, 0x61, 0x74, 0x6f, 0x72,
+	0x54, 0x61, 0x73, 0x6b, 0x12, 0x15, 0x2e, 0x4f, 0x72, 0x63, 0x68, 0x65, 0x73, 0x74, 0x72, 0x61,
+	0x74, 0x6f, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x1a, 0x15, 0x2e, 0x43, 0x6f,
+	0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x12, 0x3f, 0x0a, 0x12, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x45, 0x6e,
+	0x74, 0x69, 0x74, 0x79, 0x54, 0x61, 0x73, 0x6b, 0x12, 0x12, 0x2e, 0x45, 0x6e, 0x74, 0x69, 0x74,
+	0x79, 0x42, 0x61, 0x74, 0x63, 0x68, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x1a, 0x15, 0x2e, 0x43,
+	0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x3e, 0x0a, 0x0d, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x54, 0x61, 0x73,
+	0x6b, 0x48, 0x75, 0x62, 0x12, 0x15, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x54, 0x61, 0x73,
+	0x6b, 0x48, 0x75, 0x62, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x16, 0x2e, 0x43, 0x72,
+	0x65, 0x61, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x48, 0x75, 0x62, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x3e, 0x0a, 0x0d, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x54, 0x61, 0x73,
+	0x6b, 0x48, 0x75, 0x62, 0x12, 0x15, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x54, 0x61, 0x73,
+	0x6b, 0x48, 0x75, 0x62, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x16, 0x2e, 0x44, 0x65,
+	0x6c, 0x65, 0x74, 0x65, 0x54, 0x61, 0x73, 0x6b, 0x48, 0x75, 0x62, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x3b, 0x0a, 0x0c, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x6c, 0x45, 0x6e, 0x74,
+	0x69, 0x74, 0x79, 0x12, 0x14, 0x2e, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x6c, 0x45, 0x6e, 0x74, 0x69,
+	0x74, 0x79, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x15, 0x2e, 0x53, 0x69, 0x67, 0x6e,
+	0x61, 0x6c, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x32, 0x0a, 0x09, 0x47, 0x65, 0x74, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x12, 0x11, 0x2e,
+	0x47, 0x65, 0x74, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x1a, 0x12, 0x2e, 0x47, 0x65, 0x74, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x3e, 0x0a, 0x0d, 0x51, 0x75, 0x65, 0x72, 0x79, 0x45, 0x6e, 0x74,
+	0x69, 0x74, 0x69, 0x65, 0x73, 0x12, 0x15, 0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x45, 0x6e, 0x74,
+	0x69, 0x74, 0x69, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x16, 0x2e, 0x51,
+	0x75, 0x65, 0x72, 0x79, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x69, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4d, 0x0a, 0x12, 0x43, 0x6c, 0x65, 0x61, 0x6e, 0x45, 0x6e, 0x74,
+	0x69, 0x74, 0x79, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x12, 0x1a, 0x2e, 0x43, 0x6c, 0x65,
+	0x61, 0x6e, 0x45, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x43, 0x6c, 0x65, 0x61, 0x6e, 0x45, 0x6e,
+	0x74, 0x69, 0x74, 0x79, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x42, 0x66, 0x0a, 0x31, 0x63, 0x6f, 0x6d, 0x2e, 0x6d, 0x69, 0x63, 0x72, 0x6f,
+	0x73, 0x6f, 0x66, 0x74, 0x2e, 0x64, 0x75, 0x72, 0x61, 0x62, 0x6c, 0x65, 0x74, 0x61, 0x73, 0x6b,
+	0x2e, 0x69, 0x6d, 0x70, 0x6c, 0x65, 0x6d, 0x65, 0x6e, 0x74, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x2e,
+	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x5a, 0x10, 0x2f, 0x69, 0x6e, 0x74, 0x65, 0x72,
+	0x6e, 0x61, 0x6c, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x73, 0xaa, 0x02, 0x1e, 0x4d, 0x69, 0x63,
+	0x72, 0x6f, 0x73, 0x6f, 0x66, 0x74, 0x2e, 0x44, 0x75, 0x72, 0x61, 0x62, 0x6c, 0x65, 0x54, 0x61,
+	0x73, 0x6b, 0x2e, 0x50, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x62, 0x06, 0x70, 0x72, 0x6f,
+	0x74, 0x6f, 0x33,
 }
 
 var (
@@ -6574,308 +6706,313 @@ func file_orchestrator_service_proto_rawDescGZIP() []byte {
 	return file_orchestrator_service_proto_rawDescData
 }
 
-var file_orchestrator_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_orchestrator_service_proto_msgTypes = make([]protoimpl.MessageInfo, 84)
+var file_orchestrator_service_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_orchestrator_service_proto_msgTypes = make([]protoimpl.MessageInfo, 85)
 var file_orchestrator_service_proto_goTypes = []interface{}{
 	(OrchestrationStatus)(0),                       // 0: OrchestrationStatus
-	(*OrchestrationInstance)(nil),                  // 1: OrchestrationInstance
-	(*ActivityRequest)(nil),                        // 2: ActivityRequest
-	(*ActivityResponse)(nil),                       // 3: ActivityResponse
-	(*TaskFailureDetails)(nil),                     // 4: TaskFailureDetails
-	(*ParentInstanceInfo)(nil),                     // 5: ParentInstanceInfo
-	(*TraceContext)(nil),                           // 6: TraceContext
-	(*ExecutionStartedEvent)(nil),                  // 7: ExecutionStartedEvent
-	(*ExecutionCompletedEvent)(nil),                // 8: ExecutionCompletedEvent
-	(*ExecutionTerminatedEvent)(nil),               // 9: ExecutionTerminatedEvent
-	(*TaskScheduledEvent)(nil),                     // 10: TaskScheduledEvent
-	(*TaskCompletedEvent)(nil),                     // 11: TaskCompletedEvent
-	(*TaskFailedEvent)(nil),                        // 12: TaskFailedEvent
-	(*SubOrchestrationInstanceCreatedEvent)(nil),   // 13: SubOrchestrationInstanceCreatedEvent
-	(*SubOrchestrationInstanceCompletedEvent)(nil), // 14: SubOrchestrationInstanceCompletedEvent
-	(*SubOrchestrationInstanceFailedEvent)(nil),    // 15: SubOrchestrationInstanceFailedEvent
-	(*TimerCreatedEvent)(nil),                      // 16: TimerCreatedEvent
-	(*TimerFiredEvent)(nil),                        // 17: TimerFiredEvent
-	(*OrchestratorStartedEvent)(nil),               // 18: OrchestratorStartedEvent
-	(*OrchestratorCompletedEvent)(nil),             // 19: OrchestratorCompletedEvent
-	(*EventSentEvent)(nil),                         // 20: EventSentEvent
-	(*EventRaisedEvent)(nil),                       // 21: EventRaisedEvent
-	(*GenericEvent)(nil),                           // 22: GenericEvent
-	(*HistoryStateEvent)(nil),                      // 23: HistoryStateEvent
-	(*ContinueAsNewEvent)(nil),                     // 24: ContinueAsNewEvent
-	(*ExecutionSuspendedEvent)(nil),                // 25: ExecutionSuspendedEvent
-	(*ExecutionResumedEvent)(nil),                  // 26: ExecutionResumedEvent
-	(*HistoryEvent)(nil),                           // 27: HistoryEvent
-	(*ScheduleTaskAction)(nil),                     // 28: ScheduleTaskAction
-	(*CreateSubOrchestrationAction)(nil),           // 29: CreateSubOrchestrationAction
-	(*CreateTimerAction)(nil),                      // 30: CreateTimerAction
-	(*SendEventAction)(nil),                        // 31: SendEventAction
-	(*CompleteOrchestrationAction)(nil),            // 32: CompleteOrchestrationAction
-	(*TerminateOrchestrationAction)(nil),           // 33: TerminateOrchestrationAction
-	(*OrchestratorAction)(nil),                     // 34: OrchestratorAction
-	(*OrchestratorRequest)(nil),                    // 35: OrchestratorRequest
-	(*OrchestratorResponse)(nil),                   // 36: OrchestratorResponse
-	(*CreateInstanceRequest)(nil),                  // 37: CreateInstanceRequest
-	(*CreateInstanceResponse)(nil),                 // 38: CreateInstanceResponse
-	(*GetInstanceRequest)(nil),                     // 39: GetInstanceRequest
-	(*GetInstanceResponse)(nil),                    // 40: GetInstanceResponse
-	(*RewindInstanceRequest)(nil),                  // 41: RewindInstanceRequest
-	(*RewindInstanceResponse)(nil),                 // 42: RewindInstanceResponse
-	(*OrchestrationState)(nil),                     // 43: OrchestrationState
-	(*RaiseEventRequest)(nil),                      // 44: RaiseEventRequest
-	(*RaiseEventResponse)(nil),                     // 45: RaiseEventResponse
-	(*TerminateRequest)(nil),                       // 46: TerminateRequest
-	(*TerminateResponse)(nil),                      // 47: TerminateResponse
-	(*SuspendRequest)(nil),                         // 48: SuspendRequest
-	(*SuspendResponse)(nil),                        // 49: SuspendResponse
-	(*ResumeRequest)(nil),                          // 50: ResumeRequest
-	(*ResumeResponse)(nil),                         // 51: ResumeResponse
-	(*QueryInstancesRequest)(nil),                  // 52: QueryInstancesRequest
-	(*InstanceQuery)(nil),                          // 53: InstanceQuery
-	(*QueryInstancesResponse)(nil),                 // 54: QueryInstancesResponse
-	(*PurgeInstancesRequest)(nil),                  // 55: PurgeInstancesRequest
-	(*PurgeInstanceFilter)(nil),                    // 56: PurgeInstanceFilter
-	(*PurgeInstancesResponse)(nil),                 // 57: PurgeInstancesResponse
-	(*CreateTaskHubRequest)(nil),                   // 58: CreateTaskHubRequest
-	(*CreateTaskHubResponse)(nil),                  // 59: CreateTaskHubResponse
-	(*DeleteTaskHubRequest)(nil),                   // 60: DeleteTaskHubRequest
-	(*DeleteTaskHubResponse)(nil),                  // 61: DeleteTaskHubResponse
-	(*SignalEntityRequest)(nil),                    // 62: SignalEntityRequest
-	(*SignalEntityResponse)(nil),                   // 63: SignalEntityResponse
-	(*GetEntityRequest)(nil),                       // 64: GetEntityRequest
-	(*GetEntityResponse)(nil),                      // 65: GetEntityResponse
-	(*EntityQuery)(nil),                            // 66: EntityQuery
-	(*QueryEntitiesRequest)(nil),                   // 67: QueryEntitiesRequest
-	(*QueryEntitiesResponse)(nil),                  // 68: QueryEntitiesResponse
-	(*EntityMetadata)(nil),                         // 69: EntityMetadata
-	(*CleanEntityStorageRequest)(nil),              // 70: CleanEntityStorageRequest
-	(*CleanEntityStorageResponse)(nil),             // 71: CleanEntityStorageResponse
-	(*OrchestratorEntityParameters)(nil),           // 72: OrchestratorEntityParameters
-	(*EntityBatchRequest)(nil),                     // 73: EntityBatchRequest
-	(*EntityBatchResult)(nil),                      // 74: EntityBatchResult
-	(*OperationRequest)(nil),                       // 75: OperationRequest
-	(*OperationResult)(nil),                        // 76: OperationResult
-	(*OperationResultSuccess)(nil),                 // 77: OperationResultSuccess
-	(*OperationResultFailure)(nil),                 // 78: OperationResultFailure
-	(*OperationAction)(nil),                        // 79: OperationAction
-	(*SendSignalAction)(nil),                       // 80: SendSignalAction
-	(*StartNewOrchestrationAction)(nil),            // 81: StartNewOrchestrationAction
-	(*GetWorkItemsRequest)(nil),                    // 82: GetWorkItemsRequest
-	(*WorkItem)(nil),                               // 83: WorkItem
-	(*CompleteTaskResponse)(nil),                   // 84: CompleteTaskResponse
-	(*wrappers.StringValue)(nil),                   // 85: google.protobuf.StringValue
-	(*timestamp.Timestamp)(nil),                    // 86: google.protobuf.Timestamp
-	(*wrappers.Int32Value)(nil),                    // 87: google.protobuf.Int32Value
-	(*duration.Duration)(nil),                      // 88: google.protobuf.Duration
-	(*empty.Empty)(nil),                            // 89: google.protobuf.Empty
+	(CreateOrchestrationAction)(0),                 // 1: CreateOrchestrationAction
+	(*OrchestrationInstance)(nil),                  // 2: OrchestrationInstance
+	(*ActivityRequest)(nil),                        // 3: ActivityRequest
+	(*ActivityResponse)(nil),                       // 4: ActivityResponse
+	(*TaskFailureDetails)(nil),                     // 5: TaskFailureDetails
+	(*ParentInstanceInfo)(nil),                     // 6: ParentInstanceInfo
+	(*TraceContext)(nil),                           // 7: TraceContext
+	(*ExecutionStartedEvent)(nil),                  // 8: ExecutionStartedEvent
+	(*ExecutionCompletedEvent)(nil),                // 9: ExecutionCompletedEvent
+	(*ExecutionTerminatedEvent)(nil),               // 10: ExecutionTerminatedEvent
+	(*TaskScheduledEvent)(nil),                     // 11: TaskScheduledEvent
+	(*TaskCompletedEvent)(nil),                     // 12: TaskCompletedEvent
+	(*TaskFailedEvent)(nil),                        // 13: TaskFailedEvent
+	(*SubOrchestrationInstanceCreatedEvent)(nil),   // 14: SubOrchestrationInstanceCreatedEvent
+	(*SubOrchestrationInstanceCompletedEvent)(nil), // 15: SubOrchestrationInstanceCompletedEvent
+	(*SubOrchestrationInstanceFailedEvent)(nil),    // 16: SubOrchestrationInstanceFailedEvent
+	(*TimerCreatedEvent)(nil),                      // 17: TimerCreatedEvent
+	(*TimerFiredEvent)(nil),                        // 18: TimerFiredEvent
+	(*OrchestratorStartedEvent)(nil),               // 19: OrchestratorStartedEvent
+	(*OrchestratorCompletedEvent)(nil),             // 20: OrchestratorCompletedEvent
+	(*EventSentEvent)(nil),                         // 21: EventSentEvent
+	(*EventRaisedEvent)(nil),                       // 22: EventRaisedEvent
+	(*GenericEvent)(nil),                           // 23: GenericEvent
+	(*HistoryStateEvent)(nil),                      // 24: HistoryStateEvent
+	(*ContinueAsNewEvent)(nil),                     // 25: ContinueAsNewEvent
+	(*ExecutionSuspendedEvent)(nil),                // 26: ExecutionSuspendedEvent
+	(*ExecutionResumedEvent)(nil),                  // 27: ExecutionResumedEvent
+	(*HistoryEvent)(nil),                           // 28: HistoryEvent
+	(*ScheduleTaskAction)(nil),                     // 29: ScheduleTaskAction
+	(*CreateSubOrchestrationAction)(nil),           // 30: CreateSubOrchestrationAction
+	(*CreateTimerAction)(nil),                      // 31: CreateTimerAction
+	(*SendEventAction)(nil),                        // 32: SendEventAction
+	(*CompleteOrchestrationAction)(nil),            // 33: CompleteOrchestrationAction
+	(*TerminateOrchestrationAction)(nil),           // 34: TerminateOrchestrationAction
+	(*OrchestratorAction)(nil),                     // 35: OrchestratorAction
+	(*OrchestratorRequest)(nil),                    // 36: OrchestratorRequest
+	(*OrchestratorResponse)(nil),                   // 37: OrchestratorResponse
+	(*CreateInstanceRequest)(nil),                  // 38: CreateInstanceRequest
+	(*OrchestrationIdReusePolicy)(nil),             // 39: OrchestrationIdReusePolicy
+	(*CreateInstanceResponse)(nil),                 // 40: CreateInstanceResponse
+	(*GetInstanceRequest)(nil),                     // 41: GetInstanceRequest
+	(*GetInstanceResponse)(nil),                    // 42: GetInstanceResponse
+	(*RewindInstanceRequest)(nil),                  // 43: RewindInstanceRequest
+	(*RewindInstanceResponse)(nil),                 // 44: RewindInstanceResponse
+	(*OrchestrationState)(nil),                     // 45: OrchestrationState
+	(*RaiseEventRequest)(nil),                      // 46: RaiseEventRequest
+	(*RaiseEventResponse)(nil),                     // 47: RaiseEventResponse
+	(*TerminateRequest)(nil),                       // 48: TerminateRequest
+	(*TerminateResponse)(nil),                      // 49: TerminateResponse
+	(*SuspendRequest)(nil),                         // 50: SuspendRequest
+	(*SuspendResponse)(nil),                        // 51: SuspendResponse
+	(*ResumeRequest)(nil),                          // 52: ResumeRequest
+	(*ResumeResponse)(nil),                         // 53: ResumeResponse
+	(*QueryInstancesRequest)(nil),                  // 54: QueryInstancesRequest
+	(*InstanceQuery)(nil),                          // 55: InstanceQuery
+	(*QueryInstancesResponse)(nil),                 // 56: QueryInstancesResponse
+	(*PurgeInstancesRequest)(nil),                  // 57: PurgeInstancesRequest
+	(*PurgeInstanceFilter)(nil),                    // 58: PurgeInstanceFilter
+	(*PurgeInstancesResponse)(nil),                 // 59: PurgeInstancesResponse
+	(*CreateTaskHubRequest)(nil),                   // 60: CreateTaskHubRequest
+	(*CreateTaskHubResponse)(nil),                  // 61: CreateTaskHubResponse
+	(*DeleteTaskHubRequest)(nil),                   // 62: DeleteTaskHubRequest
+	(*DeleteTaskHubResponse)(nil),                  // 63: DeleteTaskHubResponse
+	(*SignalEntityRequest)(nil),                    // 64: SignalEntityRequest
+	(*SignalEntityResponse)(nil),                   // 65: SignalEntityResponse
+	(*GetEntityRequest)(nil),                       // 66: GetEntityRequest
+	(*GetEntityResponse)(nil),                      // 67: GetEntityResponse
+	(*EntityQuery)(nil),                            // 68: EntityQuery
+	(*QueryEntitiesRequest)(nil),                   // 69: QueryEntitiesRequest
+	(*QueryEntitiesResponse)(nil),                  // 70: QueryEntitiesResponse
+	(*EntityMetadata)(nil),                         // 71: EntityMetadata
+	(*CleanEntityStorageRequest)(nil),              // 72: CleanEntityStorageRequest
+	(*CleanEntityStorageResponse)(nil),             // 73: CleanEntityStorageResponse
+	(*OrchestratorEntityParameters)(nil),           // 74: OrchestratorEntityParameters
+	(*EntityBatchRequest)(nil),                     // 75: EntityBatchRequest
+	(*EntityBatchResult)(nil),                      // 76: EntityBatchResult
+	(*OperationRequest)(nil),                       // 77: OperationRequest
+	(*OperationResult)(nil),                        // 78: OperationResult
+	(*OperationResultSuccess)(nil),                 // 79: OperationResultSuccess
+	(*OperationResultFailure)(nil),                 // 80: OperationResultFailure
+	(*OperationAction)(nil),                        // 81: OperationAction
+	(*SendSignalAction)(nil),                       // 82: SendSignalAction
+	(*StartNewOrchestrationAction)(nil),            // 83: StartNewOrchestrationAction
+	(*GetWorkItemsRequest)(nil),                    // 84: GetWorkItemsRequest
+	(*WorkItem)(nil),                               // 85: WorkItem
+	(*CompleteTaskResponse)(nil),                   // 86: CompleteTaskResponse
+	(*wrappers.StringValue)(nil),                   // 87: google.protobuf.StringValue
+	(*timestamp.Timestamp)(nil),                    // 88: google.protobuf.Timestamp
+	(*wrappers.Int32Value)(nil),                    // 89: google.protobuf.Int32Value
+	(*duration.Duration)(nil),                      // 90: google.protobuf.Duration
+	(*empty.Empty)(nil),                            // 91: google.protobuf.Empty
 }
 var file_orchestrator_service_proto_depIdxs = []int32{
-	85,  // 0: OrchestrationInstance.executionId:type_name -> google.protobuf.StringValue
-	85,  // 1: ActivityRequest.version:type_name -> google.protobuf.StringValue
-	85,  // 2: ActivityRequest.input:type_name -> google.protobuf.StringValue
-	1,   // 3: ActivityRequest.orchestrationInstance:type_name -> OrchestrationInstance
-	85,  // 4: ActivityResponse.result:type_name -> google.protobuf.StringValue
-	4,   // 5: ActivityResponse.failureDetails:type_name -> TaskFailureDetails
-	85,  // 6: TaskFailureDetails.stackTrace:type_name -> google.protobuf.StringValue
-	4,   // 7: TaskFailureDetails.innerFailure:type_name -> TaskFailureDetails
-	85,  // 8: ParentInstanceInfo.name:type_name -> google.protobuf.StringValue
-	85,  // 9: ParentInstanceInfo.version:type_name -> google.protobuf.StringValue
-	1,   // 10: ParentInstanceInfo.orchestrationInstance:type_name -> OrchestrationInstance
-	85,  // 11: TraceContext.traceState:type_name -> google.protobuf.StringValue
-	85,  // 12: ExecutionStartedEvent.version:type_name -> google.protobuf.StringValue
-	85,  // 13: ExecutionStartedEvent.input:type_name -> google.protobuf.StringValue
-	1,   // 14: ExecutionStartedEvent.orchestrationInstance:type_name -> OrchestrationInstance
-	5,   // 15: ExecutionStartedEvent.parentInstance:type_name -> ParentInstanceInfo
-	86,  // 16: ExecutionStartedEvent.scheduledStartTimestamp:type_name -> google.protobuf.Timestamp
-	6,   // 17: ExecutionStartedEvent.parentTraceContext:type_name -> TraceContext
-	85,  // 18: ExecutionStartedEvent.orchestrationSpanID:type_name -> google.protobuf.StringValue
+	87,  // 0: OrchestrationInstance.executionId:type_name -> google.protobuf.StringValue
+	87,  // 1: ActivityRequest.version:type_name -> google.protobuf.StringValue
+	87,  // 2: ActivityRequest.input:type_name -> google.protobuf.StringValue
+	2,   // 3: ActivityRequest.orchestrationInstance:type_name -> OrchestrationInstance
+	87,  // 4: ActivityResponse.result:type_name -> google.protobuf.StringValue
+	5,   // 5: ActivityResponse.failureDetails:type_name -> TaskFailureDetails
+	87,  // 6: TaskFailureDetails.stackTrace:type_name -> google.protobuf.StringValue
+	5,   // 7: TaskFailureDetails.innerFailure:type_name -> TaskFailureDetails
+	87,  // 8: ParentInstanceInfo.name:type_name -> google.protobuf.StringValue
+	87,  // 9: ParentInstanceInfo.version:type_name -> google.protobuf.StringValue
+	2,   // 10: ParentInstanceInfo.orchestrationInstance:type_name -> OrchestrationInstance
+	87,  // 11: TraceContext.traceState:type_name -> google.protobuf.StringValue
+	87,  // 12: ExecutionStartedEvent.version:type_name -> google.protobuf.StringValue
+	87,  // 13: ExecutionStartedEvent.input:type_name -> google.protobuf.StringValue
+	2,   // 14: ExecutionStartedEvent.orchestrationInstance:type_name -> OrchestrationInstance
+	6,   // 15: ExecutionStartedEvent.parentInstance:type_name -> ParentInstanceInfo
+	88,  // 16: ExecutionStartedEvent.scheduledStartTimestamp:type_name -> google.protobuf.Timestamp
+	7,   // 17: ExecutionStartedEvent.parentTraceContext:type_name -> TraceContext
+	87,  // 18: ExecutionStartedEvent.orchestrationSpanID:type_name -> google.protobuf.StringValue
 	0,   // 19: ExecutionCompletedEvent.orchestrationStatus:type_name -> OrchestrationStatus
-	85,  // 20: ExecutionCompletedEvent.result:type_name -> google.protobuf.StringValue
-	4,   // 21: ExecutionCompletedEvent.failureDetails:type_name -> TaskFailureDetails
-	85,  // 22: ExecutionTerminatedEvent.input:type_name -> google.protobuf.StringValue
-	85,  // 23: TaskScheduledEvent.version:type_name -> google.protobuf.StringValue
-	85,  // 24: TaskScheduledEvent.input:type_name -> google.protobuf.StringValue
-	6,   // 25: TaskScheduledEvent.parentTraceContext:type_name -> TraceContext
-	85,  // 26: TaskCompletedEvent.result:type_name -> google.protobuf.StringValue
-	4,   // 27: TaskFailedEvent.failureDetails:type_name -> TaskFailureDetails
-	85,  // 28: SubOrchestrationInstanceCreatedEvent.version:type_name -> google.protobuf.StringValue
-	85,  // 29: SubOrchestrationInstanceCreatedEvent.input:type_name -> google.protobuf.StringValue
-	6,   // 30: SubOrchestrationInstanceCreatedEvent.parentTraceContext:type_name -> TraceContext
-	85,  // 31: SubOrchestrationInstanceCompletedEvent.result:type_name -> google.protobuf.StringValue
-	4,   // 32: SubOrchestrationInstanceFailedEvent.failureDetails:type_name -> TaskFailureDetails
-	86,  // 33: TimerCreatedEvent.fireAt:type_name -> google.protobuf.Timestamp
-	86,  // 34: TimerFiredEvent.fireAt:type_name -> google.protobuf.Timestamp
-	85,  // 35: EventSentEvent.input:type_name -> google.protobuf.StringValue
-	85,  // 36: EventRaisedEvent.input:type_name -> google.protobuf.StringValue
-	85,  // 37: GenericEvent.data:type_name -> google.protobuf.StringValue
-	43,  // 38: HistoryStateEvent.orchestrationState:type_name -> OrchestrationState
-	85,  // 39: ContinueAsNewEvent.input:type_name -> google.protobuf.StringValue
-	85,  // 40: ExecutionSuspendedEvent.input:type_name -> google.protobuf.StringValue
-	85,  // 41: ExecutionResumedEvent.input:type_name -> google.protobuf.StringValue
-	86,  // 42: HistoryEvent.timestamp:type_name -> google.protobuf.Timestamp
-	7,   // 43: HistoryEvent.executionStarted:type_name -> ExecutionStartedEvent
-	8,   // 44: HistoryEvent.executionCompleted:type_name -> ExecutionCompletedEvent
-	9,   // 45: HistoryEvent.executionTerminated:type_name -> ExecutionTerminatedEvent
-	10,  // 46: HistoryEvent.taskScheduled:type_name -> TaskScheduledEvent
-	11,  // 47: HistoryEvent.taskCompleted:type_name -> TaskCompletedEvent
-	12,  // 48: HistoryEvent.taskFailed:type_name -> TaskFailedEvent
-	13,  // 49: HistoryEvent.subOrchestrationInstanceCreated:type_name -> SubOrchestrationInstanceCreatedEvent
-	14,  // 50: HistoryEvent.subOrchestrationInstanceCompleted:type_name -> SubOrchestrationInstanceCompletedEvent
-	15,  // 51: HistoryEvent.subOrchestrationInstanceFailed:type_name -> SubOrchestrationInstanceFailedEvent
-	16,  // 52: HistoryEvent.timerCreated:type_name -> TimerCreatedEvent
-	17,  // 53: HistoryEvent.timerFired:type_name -> TimerFiredEvent
-	18,  // 54: HistoryEvent.orchestratorStarted:type_name -> OrchestratorStartedEvent
-	19,  // 55: HistoryEvent.orchestratorCompleted:type_name -> OrchestratorCompletedEvent
-	20,  // 56: HistoryEvent.eventSent:type_name -> EventSentEvent
-	21,  // 57: HistoryEvent.eventRaised:type_name -> EventRaisedEvent
-	22,  // 58: HistoryEvent.genericEvent:type_name -> GenericEvent
-	23,  // 59: HistoryEvent.historyState:type_name -> HistoryStateEvent
-	24,  // 60: HistoryEvent.continueAsNew:type_name -> ContinueAsNewEvent
-	25,  // 61: HistoryEvent.executionSuspended:type_name -> ExecutionSuspendedEvent
-	26,  // 62: HistoryEvent.executionResumed:type_name -> ExecutionResumedEvent
-	85,  // 63: ScheduleTaskAction.version:type_name -> google.protobuf.StringValue
-	85,  // 64: ScheduleTaskAction.input:type_name -> google.protobuf.StringValue
-	85,  // 65: CreateSubOrchestrationAction.version:type_name -> google.protobuf.StringValue
-	85,  // 66: CreateSubOrchestrationAction.input:type_name -> google.protobuf.StringValue
-	86,  // 67: CreateTimerAction.fireAt:type_name -> google.protobuf.Timestamp
-	1,   // 68: SendEventAction.instance:type_name -> OrchestrationInstance
-	85,  // 69: SendEventAction.data:type_name -> google.protobuf.StringValue
+	87,  // 20: ExecutionCompletedEvent.result:type_name -> google.protobuf.StringValue
+	5,   // 21: ExecutionCompletedEvent.failureDetails:type_name -> TaskFailureDetails
+	87,  // 22: ExecutionTerminatedEvent.input:type_name -> google.protobuf.StringValue
+	87,  // 23: TaskScheduledEvent.version:type_name -> google.protobuf.StringValue
+	87,  // 24: TaskScheduledEvent.input:type_name -> google.protobuf.StringValue
+	7,   // 25: TaskScheduledEvent.parentTraceContext:type_name -> TraceContext
+	87,  // 26: TaskCompletedEvent.result:type_name -> google.protobuf.StringValue
+	5,   // 27: TaskFailedEvent.failureDetails:type_name -> TaskFailureDetails
+	87,  // 28: SubOrchestrationInstanceCreatedEvent.version:type_name -> google.protobuf.StringValue
+	87,  // 29: SubOrchestrationInstanceCreatedEvent.input:type_name -> google.protobuf.StringValue
+	7,   // 30: SubOrchestrationInstanceCreatedEvent.parentTraceContext:type_name -> TraceContext
+	87,  // 31: SubOrchestrationInstanceCompletedEvent.result:type_name -> google.protobuf.StringValue
+	5,   // 32: SubOrchestrationInstanceFailedEvent.failureDetails:type_name -> TaskFailureDetails
+	88,  // 33: TimerCreatedEvent.fireAt:type_name -> google.protobuf.Timestamp
+	88,  // 34: TimerFiredEvent.fireAt:type_name -> google.protobuf.Timestamp
+	87,  // 35: EventSentEvent.input:type_name -> google.protobuf.StringValue
+	87,  // 36: EventRaisedEvent.input:type_name -> google.protobuf.StringValue
+	87,  // 37: GenericEvent.data:type_name -> google.protobuf.StringValue
+	45,  // 38: HistoryStateEvent.orchestrationState:type_name -> OrchestrationState
+	87,  // 39: ContinueAsNewEvent.input:type_name -> google.protobuf.StringValue
+	87,  // 40: ExecutionSuspendedEvent.input:type_name -> google.protobuf.StringValue
+	87,  // 41: ExecutionResumedEvent.input:type_name -> google.protobuf.StringValue
+	88,  // 42: HistoryEvent.timestamp:type_name -> google.protobuf.Timestamp
+	8,   // 43: HistoryEvent.executionStarted:type_name -> ExecutionStartedEvent
+	9,   // 44: HistoryEvent.executionCompleted:type_name -> ExecutionCompletedEvent
+	10,  // 45: HistoryEvent.executionTerminated:type_name -> ExecutionTerminatedEvent
+	11,  // 46: HistoryEvent.taskScheduled:type_name -> TaskScheduledEvent
+	12,  // 47: HistoryEvent.taskCompleted:type_name -> TaskCompletedEvent
+	13,  // 48: HistoryEvent.taskFailed:type_name -> TaskFailedEvent
+	14,  // 49: HistoryEvent.subOrchestrationInstanceCreated:type_name -> SubOrchestrationInstanceCreatedEvent
+	15,  // 50: HistoryEvent.subOrchestrationInstanceCompleted:type_name -> SubOrchestrationInstanceCompletedEvent
+	16,  // 51: HistoryEvent.subOrchestrationInstanceFailed:type_name -> SubOrchestrationInstanceFailedEvent
+	17,  // 52: HistoryEvent.timerCreated:type_name -> TimerCreatedEvent
+	18,  // 53: HistoryEvent.timerFired:type_name -> TimerFiredEvent
+	19,  // 54: HistoryEvent.orchestratorStarted:type_name -> OrchestratorStartedEvent
+	20,  // 55: HistoryEvent.orchestratorCompleted:type_name -> OrchestratorCompletedEvent
+	21,  // 56: HistoryEvent.eventSent:type_name -> EventSentEvent
+	22,  // 57: HistoryEvent.eventRaised:type_name -> EventRaisedEvent
+	23,  // 58: HistoryEvent.genericEvent:type_name -> GenericEvent
+	24,  // 59: HistoryEvent.historyState:type_name -> HistoryStateEvent
+	25,  // 60: HistoryEvent.continueAsNew:type_name -> ContinueAsNewEvent
+	26,  // 61: HistoryEvent.executionSuspended:type_name -> ExecutionSuspendedEvent
+	27,  // 62: HistoryEvent.executionResumed:type_name -> ExecutionResumedEvent
+	87,  // 63: ScheduleTaskAction.version:type_name -> google.protobuf.StringValue
+	87,  // 64: ScheduleTaskAction.input:type_name -> google.protobuf.StringValue
+	87,  // 65: CreateSubOrchestrationAction.version:type_name -> google.protobuf.StringValue
+	87,  // 66: CreateSubOrchestrationAction.input:type_name -> google.protobuf.StringValue
+	88,  // 67: CreateTimerAction.fireAt:type_name -> google.protobuf.Timestamp
+	2,   // 68: SendEventAction.instance:type_name -> OrchestrationInstance
+	87,  // 69: SendEventAction.data:type_name -> google.protobuf.StringValue
 	0,   // 70: CompleteOrchestrationAction.orchestrationStatus:type_name -> OrchestrationStatus
-	85,  // 71: CompleteOrchestrationAction.result:type_name -> google.protobuf.StringValue
-	85,  // 72: CompleteOrchestrationAction.details:type_name -> google.protobuf.StringValue
-	85,  // 73: CompleteOrchestrationAction.newVersion:type_name -> google.protobuf.StringValue
-	27,  // 74: CompleteOrchestrationAction.carryoverEvents:type_name -> HistoryEvent
-	4,   // 75: CompleteOrchestrationAction.failureDetails:type_name -> TaskFailureDetails
-	85,  // 76: TerminateOrchestrationAction.reason:type_name -> google.protobuf.StringValue
-	28,  // 77: OrchestratorAction.scheduleTask:type_name -> ScheduleTaskAction
-	29,  // 78: OrchestratorAction.createSubOrchestration:type_name -> CreateSubOrchestrationAction
-	30,  // 79: OrchestratorAction.createTimer:type_name -> CreateTimerAction
-	31,  // 80: OrchestratorAction.sendEvent:type_name -> SendEventAction
-	32,  // 81: OrchestratorAction.completeOrchestration:type_name -> CompleteOrchestrationAction
-	33,  // 82: OrchestratorAction.terminateOrchestration:type_name -> TerminateOrchestrationAction
-	85,  // 83: OrchestratorRequest.executionId:type_name -> google.protobuf.StringValue
-	27,  // 84: OrchestratorRequest.pastEvents:type_name -> HistoryEvent
-	27,  // 85: OrchestratorRequest.newEvents:type_name -> HistoryEvent
-	72,  // 86: OrchestratorRequest.entityParameters:type_name -> OrchestratorEntityParameters
-	34,  // 87: OrchestratorResponse.actions:type_name -> OrchestratorAction
-	85,  // 88: OrchestratorResponse.customStatus:type_name -> google.protobuf.StringValue
-	85,  // 89: CreateInstanceRequest.version:type_name -> google.protobuf.StringValue
-	85,  // 90: CreateInstanceRequest.input:type_name -> google.protobuf.StringValue
-	86,  // 91: CreateInstanceRequest.scheduledStartTimestamp:type_name -> google.protobuf.Timestamp
-	43,  // 92: GetInstanceResponse.orchestrationState:type_name -> OrchestrationState
-	85,  // 93: RewindInstanceRequest.reason:type_name -> google.protobuf.StringValue
-	85,  // 94: OrchestrationState.version:type_name -> google.protobuf.StringValue
-	0,   // 95: OrchestrationState.orchestrationStatus:type_name -> OrchestrationStatus
-	86,  // 96: OrchestrationState.scheduledStartTimestamp:type_name -> google.protobuf.Timestamp
-	86,  // 97: OrchestrationState.createdTimestamp:type_name -> google.protobuf.Timestamp
-	86,  // 98: OrchestrationState.lastUpdatedTimestamp:type_name -> google.protobuf.Timestamp
-	85,  // 99: OrchestrationState.input:type_name -> google.protobuf.StringValue
-	85,  // 100: OrchestrationState.output:type_name -> google.protobuf.StringValue
-	85,  // 101: OrchestrationState.customStatus:type_name -> google.protobuf.StringValue
-	4,   // 102: OrchestrationState.failureDetails:type_name -> TaskFailureDetails
-	85,  // 103: RaiseEventRequest.input:type_name -> google.protobuf.StringValue
-	85,  // 104: TerminateRequest.output:type_name -> google.protobuf.StringValue
-	85,  // 105: SuspendRequest.reason:type_name -> google.protobuf.StringValue
-	85,  // 106: ResumeRequest.reason:type_name -> google.protobuf.StringValue
-	53,  // 107: QueryInstancesRequest.query:type_name -> InstanceQuery
-	0,   // 108: InstanceQuery.runtimeStatus:type_name -> OrchestrationStatus
-	86,  // 109: InstanceQuery.createdTimeFrom:type_name -> google.protobuf.Timestamp
-	86,  // 110: InstanceQuery.createdTimeTo:type_name -> google.protobuf.Timestamp
-	85,  // 111: InstanceQuery.taskHubNames:type_name -> google.protobuf.StringValue
-	85,  // 112: InstanceQuery.continuationToken:type_name -> google.protobuf.StringValue
-	85,  // 113: InstanceQuery.instanceIdPrefix:type_name -> google.protobuf.StringValue
-	43,  // 114: QueryInstancesResponse.orchestrationState:type_name -> OrchestrationState
-	85,  // 115: QueryInstancesResponse.continuationToken:type_name -> google.protobuf.StringValue
-	56,  // 116: PurgeInstancesRequest.purgeInstanceFilter:type_name -> PurgeInstanceFilter
-	86,  // 117: PurgeInstanceFilter.createdTimeFrom:type_name -> google.protobuf.Timestamp
-	86,  // 118: PurgeInstanceFilter.createdTimeTo:type_name -> google.protobuf.Timestamp
-	0,   // 119: PurgeInstanceFilter.runtimeStatus:type_name -> OrchestrationStatus
-	85,  // 120: SignalEntityRequest.input:type_name -> google.protobuf.StringValue
-	86,  // 121: SignalEntityRequest.scheduledTime:type_name -> google.protobuf.Timestamp
-	69,  // 122: GetEntityResponse.entity:type_name -> EntityMetadata
-	85,  // 123: EntityQuery.instanceIdStartsWith:type_name -> google.protobuf.StringValue
-	86,  // 124: EntityQuery.lastModifiedFrom:type_name -> google.protobuf.Timestamp
-	86,  // 125: EntityQuery.lastModifiedTo:type_name -> google.protobuf.Timestamp
-	87,  // 126: EntityQuery.pageSize:type_name -> google.protobuf.Int32Value
-	85,  // 127: EntityQuery.continuationToken:type_name -> google.protobuf.StringValue
-	66,  // 128: QueryEntitiesRequest.query:type_name -> EntityQuery
-	69,  // 129: QueryEntitiesResponse.entities:type_name -> EntityMetadata
-	85,  // 130: QueryEntitiesResponse.continuationToken:type_name -> google.protobuf.StringValue
-	86,  // 131: EntityMetadata.lastModifiedTime:type_name -> google.protobuf.Timestamp
-	85,  // 132: EntityMetadata.lockedBy:type_name -> google.protobuf.StringValue
-	85,  // 133: EntityMetadata.serializedState:type_name -> google.protobuf.StringValue
-	85,  // 134: CleanEntityStorageRequest.continuationToken:type_name -> google.protobuf.StringValue
-	85,  // 135: CleanEntityStorageResponse.continuationToken:type_name -> google.protobuf.StringValue
-	88,  // 136: OrchestratorEntityParameters.entityMessageReorderWindow:type_name -> google.protobuf.Duration
-	85,  // 137: EntityBatchRequest.entityState:type_name -> google.protobuf.StringValue
-	75,  // 138: EntityBatchRequest.operations:type_name -> OperationRequest
-	76,  // 139: EntityBatchResult.results:type_name -> OperationResult
-	79,  // 140: EntityBatchResult.actions:type_name -> OperationAction
-	85,  // 141: EntityBatchResult.entityState:type_name -> google.protobuf.StringValue
-	4,   // 142: EntityBatchResult.failureDetails:type_name -> TaskFailureDetails
-	85,  // 143: OperationRequest.input:type_name -> google.protobuf.StringValue
-	77,  // 144: OperationResult.success:type_name -> OperationResultSuccess
-	78,  // 145: OperationResult.failure:type_name -> OperationResultFailure
-	85,  // 146: OperationResultSuccess.result:type_name -> google.protobuf.StringValue
-	4,   // 147: OperationResultFailure.failureDetails:type_name -> TaskFailureDetails
-	80,  // 148: OperationAction.sendSignal:type_name -> SendSignalAction
-	81,  // 149: OperationAction.startNewOrchestration:type_name -> StartNewOrchestrationAction
-	85,  // 150: SendSignalAction.input:type_name -> google.protobuf.StringValue
-	86,  // 151: SendSignalAction.scheduledTime:type_name -> google.protobuf.Timestamp
-	85,  // 152: StartNewOrchestrationAction.version:type_name -> google.protobuf.StringValue
-	85,  // 153: StartNewOrchestrationAction.input:type_name -> google.protobuf.StringValue
-	86,  // 154: StartNewOrchestrationAction.scheduledTime:type_name -> google.protobuf.Timestamp
-	35,  // 155: WorkItem.orchestratorRequest:type_name -> OrchestratorRequest
-	2,   // 156: WorkItem.activityRequest:type_name -> ActivityRequest
-	73,  // 157: WorkItem.entityRequest:type_name -> EntityBatchRequest
-	89,  // 158: TaskHubSidecarService.Hello:input_type -> google.protobuf.Empty
-	37,  // 159: TaskHubSidecarService.StartInstance:input_type -> CreateInstanceRequest
-	39,  // 160: TaskHubSidecarService.GetInstance:input_type -> GetInstanceRequest
-	41,  // 161: TaskHubSidecarService.RewindInstance:input_type -> RewindInstanceRequest
-	39,  // 162: TaskHubSidecarService.WaitForInstanceStart:input_type -> GetInstanceRequest
-	39,  // 163: TaskHubSidecarService.WaitForInstanceCompletion:input_type -> GetInstanceRequest
-	44,  // 164: TaskHubSidecarService.RaiseEvent:input_type -> RaiseEventRequest
-	46,  // 165: TaskHubSidecarService.TerminateInstance:input_type -> TerminateRequest
-	48,  // 166: TaskHubSidecarService.SuspendInstance:input_type -> SuspendRequest
-	50,  // 167: TaskHubSidecarService.ResumeInstance:input_type -> ResumeRequest
-	52,  // 168: TaskHubSidecarService.QueryInstances:input_type -> QueryInstancesRequest
-	55,  // 169: TaskHubSidecarService.PurgeInstances:input_type -> PurgeInstancesRequest
-	82,  // 170: TaskHubSidecarService.GetWorkItems:input_type -> GetWorkItemsRequest
-	3,   // 171: TaskHubSidecarService.CompleteActivityTask:input_type -> ActivityResponse
-	36,  // 172: TaskHubSidecarService.CompleteOrchestratorTask:input_type -> OrchestratorResponse
-	74,  // 173: TaskHubSidecarService.CompleteEntityTask:input_type -> EntityBatchResult
-	58,  // 174: TaskHubSidecarService.CreateTaskHub:input_type -> CreateTaskHubRequest
-	60,  // 175: TaskHubSidecarService.DeleteTaskHub:input_type -> DeleteTaskHubRequest
-	62,  // 176: TaskHubSidecarService.SignalEntity:input_type -> SignalEntityRequest
-	64,  // 177: TaskHubSidecarService.GetEntity:input_type -> GetEntityRequest
-	67,  // 178: TaskHubSidecarService.QueryEntities:input_type -> QueryEntitiesRequest
-	70,  // 179: TaskHubSidecarService.CleanEntityStorage:input_type -> CleanEntityStorageRequest
-	89,  // 180: TaskHubSidecarService.Hello:output_type -> google.protobuf.Empty
-	38,  // 181: TaskHubSidecarService.StartInstance:output_type -> CreateInstanceResponse
-	40,  // 182: TaskHubSidecarService.GetInstance:output_type -> GetInstanceResponse
-	42,  // 183: TaskHubSidecarService.RewindInstance:output_type -> RewindInstanceResponse
-	40,  // 184: TaskHubSidecarService.WaitForInstanceStart:output_type -> GetInstanceResponse
-	40,  // 185: TaskHubSidecarService.WaitForInstanceCompletion:output_type -> GetInstanceResponse
-	45,  // 186: TaskHubSidecarService.RaiseEvent:output_type -> RaiseEventResponse
-	47,  // 187: TaskHubSidecarService.TerminateInstance:output_type -> TerminateResponse
-	49,  // 188: TaskHubSidecarService.SuspendInstance:output_type -> SuspendResponse
-	51,  // 189: TaskHubSidecarService.ResumeInstance:output_type -> ResumeResponse
-	54,  // 190: TaskHubSidecarService.QueryInstances:output_type -> QueryInstancesResponse
-	57,  // 191: TaskHubSidecarService.PurgeInstances:output_type -> PurgeInstancesResponse
-	83,  // 192: TaskHubSidecarService.GetWorkItems:output_type -> WorkItem
-	84,  // 193: TaskHubSidecarService.CompleteActivityTask:output_type -> CompleteTaskResponse
-	84,  // 194: TaskHubSidecarService.CompleteOrchestratorTask:output_type -> CompleteTaskResponse
-	84,  // 195: TaskHubSidecarService.CompleteEntityTask:output_type -> CompleteTaskResponse
-	59,  // 196: TaskHubSidecarService.CreateTaskHub:output_type -> CreateTaskHubResponse
-	61,  // 197: TaskHubSidecarService.DeleteTaskHub:output_type -> DeleteTaskHubResponse
-	63,  // 198: TaskHubSidecarService.SignalEntity:output_type -> SignalEntityResponse
-	65,  // 199: TaskHubSidecarService.GetEntity:output_type -> GetEntityResponse
-	68,  // 200: TaskHubSidecarService.QueryEntities:output_type -> QueryEntitiesResponse
-	71,  // 201: TaskHubSidecarService.CleanEntityStorage:output_type -> CleanEntityStorageResponse
-	180, // [180:202] is the sub-list for method output_type
-	158, // [158:180] is the sub-list for method input_type
-	158, // [158:158] is the sub-list for extension type_name
-	158, // [158:158] is the sub-list for extension extendee
-	0,   // [0:158] is the sub-list for field type_name
+	87,  // 71: CompleteOrchestrationAction.result:type_name -> google.protobuf.StringValue
+	87,  // 72: CompleteOrchestrationAction.details:type_name -> google.protobuf.StringValue
+	87,  // 73: CompleteOrchestrationAction.newVersion:type_name -> google.protobuf.StringValue
+	28,  // 74: CompleteOrchestrationAction.carryoverEvents:type_name -> HistoryEvent
+	5,   // 75: CompleteOrchestrationAction.failureDetails:type_name -> TaskFailureDetails
+	87,  // 76: TerminateOrchestrationAction.reason:type_name -> google.protobuf.StringValue
+	29,  // 77: OrchestratorAction.scheduleTask:type_name -> ScheduleTaskAction
+	30,  // 78: OrchestratorAction.createSubOrchestration:type_name -> CreateSubOrchestrationAction
+	31,  // 79: OrchestratorAction.createTimer:type_name -> CreateTimerAction
+	32,  // 80: OrchestratorAction.sendEvent:type_name -> SendEventAction
+	33,  // 81: OrchestratorAction.completeOrchestration:type_name -> CompleteOrchestrationAction
+	34,  // 82: OrchestratorAction.terminateOrchestration:type_name -> TerminateOrchestrationAction
+	87,  // 83: OrchestratorRequest.executionId:type_name -> google.protobuf.StringValue
+	28,  // 84: OrchestratorRequest.pastEvents:type_name -> HistoryEvent
+	28,  // 85: OrchestratorRequest.newEvents:type_name -> HistoryEvent
+	74,  // 86: OrchestratorRequest.entityParameters:type_name -> OrchestratorEntityParameters
+	35,  // 87: OrchestratorResponse.actions:type_name -> OrchestratorAction
+	87,  // 88: OrchestratorResponse.customStatus:type_name -> google.protobuf.StringValue
+	87,  // 89: CreateInstanceRequest.version:type_name -> google.protobuf.StringValue
+	87,  // 90: CreateInstanceRequest.input:type_name -> google.protobuf.StringValue
+	88,  // 91: CreateInstanceRequest.scheduledStartTimestamp:type_name -> google.protobuf.Timestamp
+	39,  // 92: CreateInstanceRequest.orchestrationIdReusePolicy:type_name -> OrchestrationIdReusePolicy
+	0,   // 93: OrchestrationIdReusePolicy.operationStatus:type_name -> OrchestrationStatus
+	1,   // 94: OrchestrationIdReusePolicy.action:type_name -> CreateOrchestrationAction
+	45,  // 95: GetInstanceResponse.orchestrationState:type_name -> OrchestrationState
+	87,  // 96: RewindInstanceRequest.reason:type_name -> google.protobuf.StringValue
+	87,  // 97: OrchestrationState.version:type_name -> google.protobuf.StringValue
+	0,   // 98: OrchestrationState.orchestrationStatus:type_name -> OrchestrationStatus
+	88,  // 99: OrchestrationState.scheduledStartTimestamp:type_name -> google.protobuf.Timestamp
+	88,  // 100: OrchestrationState.createdTimestamp:type_name -> google.protobuf.Timestamp
+	88,  // 101: OrchestrationState.lastUpdatedTimestamp:type_name -> google.protobuf.Timestamp
+	87,  // 102: OrchestrationState.input:type_name -> google.protobuf.StringValue
+	87,  // 103: OrchestrationState.output:type_name -> google.protobuf.StringValue
+	87,  // 104: OrchestrationState.customStatus:type_name -> google.protobuf.StringValue
+	5,   // 105: OrchestrationState.failureDetails:type_name -> TaskFailureDetails
+	87,  // 106: RaiseEventRequest.input:type_name -> google.protobuf.StringValue
+	87,  // 107: TerminateRequest.output:type_name -> google.protobuf.StringValue
+	87,  // 108: SuspendRequest.reason:type_name -> google.protobuf.StringValue
+	87,  // 109: ResumeRequest.reason:type_name -> google.protobuf.StringValue
+	55,  // 110: QueryInstancesRequest.query:type_name -> InstanceQuery
+	0,   // 111: InstanceQuery.runtimeStatus:type_name -> OrchestrationStatus
+	88,  // 112: InstanceQuery.createdTimeFrom:type_name -> google.protobuf.Timestamp
+	88,  // 113: InstanceQuery.createdTimeTo:type_name -> google.protobuf.Timestamp
+	87,  // 114: InstanceQuery.taskHubNames:type_name -> google.protobuf.StringValue
+	87,  // 115: InstanceQuery.continuationToken:type_name -> google.protobuf.StringValue
+	87,  // 116: InstanceQuery.instanceIdPrefix:type_name -> google.protobuf.StringValue
+	45,  // 117: QueryInstancesResponse.orchestrationState:type_name -> OrchestrationState
+	87,  // 118: QueryInstancesResponse.continuationToken:type_name -> google.protobuf.StringValue
+	58,  // 119: PurgeInstancesRequest.purgeInstanceFilter:type_name -> PurgeInstanceFilter
+	88,  // 120: PurgeInstanceFilter.createdTimeFrom:type_name -> google.protobuf.Timestamp
+	88,  // 121: PurgeInstanceFilter.createdTimeTo:type_name -> google.protobuf.Timestamp
+	0,   // 122: PurgeInstanceFilter.runtimeStatus:type_name -> OrchestrationStatus
+	87,  // 123: SignalEntityRequest.input:type_name -> google.protobuf.StringValue
+	88,  // 124: SignalEntityRequest.scheduledTime:type_name -> google.protobuf.Timestamp
+	71,  // 125: GetEntityResponse.entity:type_name -> EntityMetadata
+	87,  // 126: EntityQuery.instanceIdStartsWith:type_name -> google.protobuf.StringValue
+	88,  // 127: EntityQuery.lastModifiedFrom:type_name -> google.protobuf.Timestamp
+	88,  // 128: EntityQuery.lastModifiedTo:type_name -> google.protobuf.Timestamp
+	89,  // 129: EntityQuery.pageSize:type_name -> google.protobuf.Int32Value
+	87,  // 130: EntityQuery.continuationToken:type_name -> google.protobuf.StringValue
+	68,  // 131: QueryEntitiesRequest.query:type_name -> EntityQuery
+	71,  // 132: QueryEntitiesResponse.entities:type_name -> EntityMetadata
+	87,  // 133: QueryEntitiesResponse.continuationToken:type_name -> google.protobuf.StringValue
+	88,  // 134: EntityMetadata.lastModifiedTime:type_name -> google.protobuf.Timestamp
+	87,  // 135: EntityMetadata.lockedBy:type_name -> google.protobuf.StringValue
+	87,  // 136: EntityMetadata.serializedState:type_name -> google.protobuf.StringValue
+	87,  // 137: CleanEntityStorageRequest.continuationToken:type_name -> google.protobuf.StringValue
+	87,  // 138: CleanEntityStorageResponse.continuationToken:type_name -> google.protobuf.StringValue
+	90,  // 139: OrchestratorEntityParameters.entityMessageReorderWindow:type_name -> google.protobuf.Duration
+	87,  // 140: EntityBatchRequest.entityState:type_name -> google.protobuf.StringValue
+	77,  // 141: EntityBatchRequest.operations:type_name -> OperationRequest
+	78,  // 142: EntityBatchResult.results:type_name -> OperationResult
+	81,  // 143: EntityBatchResult.actions:type_name -> OperationAction
+	87,  // 144: EntityBatchResult.entityState:type_name -> google.protobuf.StringValue
+	5,   // 145: EntityBatchResult.failureDetails:type_name -> TaskFailureDetails
+	87,  // 146: OperationRequest.input:type_name -> google.protobuf.StringValue
+	79,  // 147: OperationResult.success:type_name -> OperationResultSuccess
+	80,  // 148: OperationResult.failure:type_name -> OperationResultFailure
+	87,  // 149: OperationResultSuccess.result:type_name -> google.protobuf.StringValue
+	5,   // 150: OperationResultFailure.failureDetails:type_name -> TaskFailureDetails
+	82,  // 151: OperationAction.sendSignal:type_name -> SendSignalAction
+	83,  // 152: OperationAction.startNewOrchestration:type_name -> StartNewOrchestrationAction
+	87,  // 153: SendSignalAction.input:type_name -> google.protobuf.StringValue
+	88,  // 154: SendSignalAction.scheduledTime:type_name -> google.protobuf.Timestamp
+	87,  // 155: StartNewOrchestrationAction.version:type_name -> google.protobuf.StringValue
+	87,  // 156: StartNewOrchestrationAction.input:type_name -> google.protobuf.StringValue
+	88,  // 157: StartNewOrchestrationAction.scheduledTime:type_name -> google.protobuf.Timestamp
+	36,  // 158: WorkItem.orchestratorRequest:type_name -> OrchestratorRequest
+	3,   // 159: WorkItem.activityRequest:type_name -> ActivityRequest
+	75,  // 160: WorkItem.entityRequest:type_name -> EntityBatchRequest
+	91,  // 161: TaskHubSidecarService.Hello:input_type -> google.protobuf.Empty
+	38,  // 162: TaskHubSidecarService.StartInstance:input_type -> CreateInstanceRequest
+	41,  // 163: TaskHubSidecarService.GetInstance:input_type -> GetInstanceRequest
+	43,  // 164: TaskHubSidecarService.RewindInstance:input_type -> RewindInstanceRequest
+	41,  // 165: TaskHubSidecarService.WaitForInstanceStart:input_type -> GetInstanceRequest
+	41,  // 166: TaskHubSidecarService.WaitForInstanceCompletion:input_type -> GetInstanceRequest
+	46,  // 167: TaskHubSidecarService.RaiseEvent:input_type -> RaiseEventRequest
+	48,  // 168: TaskHubSidecarService.TerminateInstance:input_type -> TerminateRequest
+	50,  // 169: TaskHubSidecarService.SuspendInstance:input_type -> SuspendRequest
+	52,  // 170: TaskHubSidecarService.ResumeInstance:input_type -> ResumeRequest
+	54,  // 171: TaskHubSidecarService.QueryInstances:input_type -> QueryInstancesRequest
+	57,  // 172: TaskHubSidecarService.PurgeInstances:input_type -> PurgeInstancesRequest
+	84,  // 173: TaskHubSidecarService.GetWorkItems:input_type -> GetWorkItemsRequest
+	4,   // 174: TaskHubSidecarService.CompleteActivityTask:input_type -> ActivityResponse
+	37,  // 175: TaskHubSidecarService.CompleteOrchestratorTask:input_type -> OrchestratorResponse
+	76,  // 176: TaskHubSidecarService.CompleteEntityTask:input_type -> EntityBatchResult
+	60,  // 177: TaskHubSidecarService.CreateTaskHub:input_type -> CreateTaskHubRequest
+	62,  // 178: TaskHubSidecarService.DeleteTaskHub:input_type -> DeleteTaskHubRequest
+	64,  // 179: TaskHubSidecarService.SignalEntity:input_type -> SignalEntityRequest
+	66,  // 180: TaskHubSidecarService.GetEntity:input_type -> GetEntityRequest
+	69,  // 181: TaskHubSidecarService.QueryEntities:input_type -> QueryEntitiesRequest
+	72,  // 182: TaskHubSidecarService.CleanEntityStorage:input_type -> CleanEntityStorageRequest
+	91,  // 183: TaskHubSidecarService.Hello:output_type -> google.protobuf.Empty
+	40,  // 184: TaskHubSidecarService.StartInstance:output_type -> CreateInstanceResponse
+	42,  // 185: TaskHubSidecarService.GetInstance:output_type -> GetInstanceResponse
+	44,  // 186: TaskHubSidecarService.RewindInstance:output_type -> RewindInstanceResponse
+	42,  // 187: TaskHubSidecarService.WaitForInstanceStart:output_type -> GetInstanceResponse
+	42,  // 188: TaskHubSidecarService.WaitForInstanceCompletion:output_type -> GetInstanceResponse
+	47,  // 189: TaskHubSidecarService.RaiseEvent:output_type -> RaiseEventResponse
+	49,  // 190: TaskHubSidecarService.TerminateInstance:output_type -> TerminateResponse
+	51,  // 191: TaskHubSidecarService.SuspendInstance:output_type -> SuspendResponse
+	53,  // 192: TaskHubSidecarService.ResumeInstance:output_type -> ResumeResponse
+	56,  // 193: TaskHubSidecarService.QueryInstances:output_type -> QueryInstancesResponse
+	59,  // 194: TaskHubSidecarService.PurgeInstances:output_type -> PurgeInstancesResponse
+	85,  // 195: TaskHubSidecarService.GetWorkItems:output_type -> WorkItem
+	86,  // 196: TaskHubSidecarService.CompleteActivityTask:output_type -> CompleteTaskResponse
+	86,  // 197: TaskHubSidecarService.CompleteOrchestratorTask:output_type -> CompleteTaskResponse
+	86,  // 198: TaskHubSidecarService.CompleteEntityTask:output_type -> CompleteTaskResponse
+	61,  // 199: TaskHubSidecarService.CreateTaskHub:output_type -> CreateTaskHubResponse
+	63,  // 200: TaskHubSidecarService.DeleteTaskHub:output_type -> DeleteTaskHubResponse
+	65,  // 201: TaskHubSidecarService.SignalEntity:output_type -> SignalEntityResponse
+	67,  // 202: TaskHubSidecarService.GetEntity:output_type -> GetEntityResponse
+	70,  // 203: TaskHubSidecarService.QueryEntities:output_type -> QueryEntitiesResponse
+	73,  // 204: TaskHubSidecarService.CleanEntityStorage:output_type -> CleanEntityStorageResponse
+	183, // [183:205] is the sub-list for method output_type
+	161, // [161:183] is the sub-list for method input_type
+	161, // [161:161] is the sub-list for extension type_name
+	161, // [161:161] is the sub-list for extension extendee
+	0,   // [0:161] is the sub-list for field type_name
 }
 
 func init() { file_orchestrator_service_proto_init() }
@@ -7329,7 +7466,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[37].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateInstanceResponse); i {
+			switch v := v.(*OrchestrationIdReusePolicy); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7341,7 +7478,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[38].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetInstanceRequest); i {
+			switch v := v.(*CreateInstanceResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7353,7 +7490,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[39].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetInstanceResponse); i {
+			switch v := v.(*GetInstanceRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7365,7 +7502,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[40].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RewindInstanceRequest); i {
+			switch v := v.(*GetInstanceResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7377,7 +7514,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[41].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RewindInstanceResponse); i {
+			switch v := v.(*RewindInstanceRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7389,7 +7526,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[42].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*OrchestrationState); i {
+			switch v := v.(*RewindInstanceResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7401,7 +7538,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[43].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RaiseEventRequest); i {
+			switch v := v.(*OrchestrationState); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7413,7 +7550,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[44].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RaiseEventResponse); i {
+			switch v := v.(*RaiseEventRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7425,7 +7562,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[45].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*TerminateRequest); i {
+			switch v := v.(*RaiseEventResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7437,7 +7574,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[46].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*TerminateResponse); i {
+			switch v := v.(*TerminateRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7449,7 +7586,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[47].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*SuspendRequest); i {
+			switch v := v.(*TerminateResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7461,7 +7598,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[48].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*SuspendResponse); i {
+			switch v := v.(*SuspendRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7473,7 +7610,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[49].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ResumeRequest); i {
+			switch v := v.(*SuspendResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7485,7 +7622,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[50].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ResumeResponse); i {
+			switch v := v.(*ResumeRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7497,7 +7634,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[51].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*QueryInstancesRequest); i {
+			switch v := v.(*ResumeResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7509,7 +7646,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[52].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*InstanceQuery); i {
+			switch v := v.(*QueryInstancesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7521,7 +7658,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[53].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*QueryInstancesResponse); i {
+			switch v := v.(*InstanceQuery); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7533,7 +7670,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[54].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*PurgeInstancesRequest); i {
+			switch v := v.(*QueryInstancesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7545,7 +7682,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[55].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*PurgeInstanceFilter); i {
+			switch v := v.(*PurgeInstancesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7557,7 +7694,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[56].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*PurgeInstancesResponse); i {
+			switch v := v.(*PurgeInstanceFilter); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7569,7 +7706,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[57].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateTaskHubRequest); i {
+			switch v := v.(*PurgeInstancesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7581,7 +7718,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[58].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateTaskHubResponse); i {
+			switch v := v.(*CreateTaskHubRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7593,7 +7730,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[59].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteTaskHubRequest); i {
+			switch v := v.(*CreateTaskHubResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7605,7 +7742,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[60].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteTaskHubResponse); i {
+			switch v := v.(*DeleteTaskHubRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7617,7 +7754,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[61].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*SignalEntityRequest); i {
+			switch v := v.(*DeleteTaskHubResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7629,7 +7766,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[62].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*SignalEntityResponse); i {
+			switch v := v.(*SignalEntityRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7641,7 +7778,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[63].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetEntityRequest); i {
+			switch v := v.(*SignalEntityResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7653,7 +7790,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[64].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetEntityResponse); i {
+			switch v := v.(*GetEntityRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7665,7 +7802,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[65].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EntityQuery); i {
+			switch v := v.(*GetEntityResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7677,7 +7814,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[66].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*QueryEntitiesRequest); i {
+			switch v := v.(*EntityQuery); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7689,7 +7826,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[67].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*QueryEntitiesResponse); i {
+			switch v := v.(*QueryEntitiesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7701,7 +7838,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[68].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EntityMetadata); i {
+			switch v := v.(*QueryEntitiesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7713,7 +7850,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[69].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CleanEntityStorageRequest); i {
+			switch v := v.(*EntityMetadata); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7725,7 +7862,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[70].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CleanEntityStorageResponse); i {
+			switch v := v.(*CleanEntityStorageRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7737,7 +7874,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[71].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*OrchestratorEntityParameters); i {
+			switch v := v.(*CleanEntityStorageResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7749,7 +7886,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[72].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EntityBatchRequest); i {
+			switch v := v.(*OrchestratorEntityParameters); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7761,7 +7898,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[73].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EntityBatchResult); i {
+			switch v := v.(*EntityBatchRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7773,7 +7910,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[74].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*OperationRequest); i {
+			switch v := v.(*EntityBatchResult); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7785,7 +7922,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[75].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*OperationResult); i {
+			switch v := v.(*OperationRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7797,7 +7934,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[76].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*OperationResultSuccess); i {
+			switch v := v.(*OperationResult); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7809,7 +7946,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[77].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*OperationResultFailure); i {
+			switch v := v.(*OperationResultSuccess); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7821,7 +7958,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[78].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*OperationAction); i {
+			switch v := v.(*OperationResultFailure); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7833,7 +7970,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[79].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*SendSignalAction); i {
+			switch v := v.(*OperationAction); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7845,7 +7982,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[80].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StartNewOrchestrationAction); i {
+			switch v := v.(*SendSignalAction); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7857,7 +7994,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[81].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetWorkItemsRequest); i {
+			switch v := v.(*StartNewOrchestrationAction); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7869,7 +8006,7 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[82].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*WorkItem); i {
+			switch v := v.(*GetWorkItemsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7881,6 +8018,18 @@ func file_orchestrator_service_proto_init() {
 			}
 		}
 		file_orchestrator_service_proto_msgTypes[83].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*WorkItem); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_orchestrator_service_proto_msgTypes[84].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*CompleteTaskResponse); i {
 			case 0:
 				return &v.state
@@ -7923,19 +8072,19 @@ func file_orchestrator_service_proto_init() {
 		(*OrchestratorAction_CompleteOrchestration)(nil),
 		(*OrchestratorAction_TerminateOrchestration)(nil),
 	}
-	file_orchestrator_service_proto_msgTypes[54].OneofWrappers = []interface{}{
+	file_orchestrator_service_proto_msgTypes[55].OneofWrappers = []interface{}{
 		(*PurgeInstancesRequest_InstanceId)(nil),
 		(*PurgeInstancesRequest_PurgeInstanceFilter)(nil),
 	}
-	file_orchestrator_service_proto_msgTypes[75].OneofWrappers = []interface{}{
+	file_orchestrator_service_proto_msgTypes[76].OneofWrappers = []interface{}{
 		(*OperationResult_Success)(nil),
 		(*OperationResult_Failure)(nil),
 	}
-	file_orchestrator_service_proto_msgTypes[78].OneofWrappers = []interface{}{
+	file_orchestrator_service_proto_msgTypes[79].OneofWrappers = []interface{}{
 		(*OperationAction_SendSignal)(nil),
 		(*OperationAction_StartNewOrchestration)(nil),
 	}
-	file_orchestrator_service_proto_msgTypes[82].OneofWrappers = []interface{}{
+	file_orchestrator_service_proto_msgTypes[83].OneofWrappers = []interface{}{
 		(*WorkItem_OrchestratorRequest)(nil),
 		(*WorkItem_ActivityRequest)(nil),
 		(*WorkItem_EntityRequest)(nil),
@@ -7945,8 +8094,8 @@ func file_orchestrator_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_orchestrator_service_proto_rawDesc,
-			NumEnums:      1,
-			NumMessages:   84,
+			NumEnums:      2,
+			NumMessages:   85,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

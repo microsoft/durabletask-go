@@ -13,10 +13,12 @@ import (
 )
 
 var (
-	ErrInstanceNotFound = errors.New("no such instance exists")
-	ErrNotStarted       = errors.New("orchestration has not started")
-	ErrNotCompleted     = errors.New("orchestration has not yet completed")
-	ErrNoFailures       = errors.New("orchestration did not report failure details")
+	ErrInstanceNotFound  = errors.New("no such instance exists")
+	ErrNotStarted        = errors.New("orchestration has not started")
+	ErrNotCompleted      = errors.New("orchestration has not yet completed")
+	ErrNoFailures        = errors.New("orchestration did not report failure details")
+	ErrDuplicateInstance = errors.New("orchestration instance already exists")
+	ErrIgnoreInstance    = errors.New("ignore creating orchestration instance")
 
 	EmptyInstanceID = InstanceID("")
 )
@@ -56,6 +58,18 @@ type PurgeOptions func(*protos.PurgeInstancesRequest) error
 func WithInstanceID(id InstanceID) NewOrchestrationOptions {
 	return func(req *protos.CreateInstanceRequest) error {
 		req.InstanceId = string(id)
+		return nil
+	}
+}
+
+// WithOrchestrationIdReusePolicy configures Orchestration ID reuse policy.
+func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) NewOrchestrationOptions {
+	return func(req *protos.CreateInstanceRequest) error {
+		// initialize CreateInstanceOption
+		req.OrchestrationIdReusePolicy = &protos.OrchestrationIdReusePolicy{
+			Action:          policy.Action,
+			OperationStatus: policy.OperationStatus,
+		}
 		return nil
 	}
 }

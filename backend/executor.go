@@ -329,7 +329,7 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 	defer span.End()
 
 	e := helpers.NewExecutionStartedEvent(req.Name, instanceID, req.Input, nil, helpers.TraceContextFromSpan(span))
-	if err := g.backend.CreateOrchestrationInstance(ctx, e); err != nil {
+	if err := g.backend.CreateOrchestrationInstance(ctx, e, WithOrchestrationIdReusePolicy(req.OrchestrationIdReusePolicy)); err != nil {
 		return nil, err
 	}
 
