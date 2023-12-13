@@ -131,9 +131,15 @@ func GetSubOrchestrationInstances(ctx context.Context, be Backend, iid api.Insta
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch orchestration state for '%s': %w", iid, err)
 	}
-	if isPurge && !state.IsCompleted() {
-		// Orchestration must be completed before purging its state
-		return nil, api.ErrNotCompleted
+	if isPurge {
+		if len(state.NewEvents())+len(state.oldEvents) == 0 {
+			// If there are no events, the orchestration instance doesn't exist
+			return nil, api.ErrInstanceNotFound
+		}
+		if !state.IsCompleted() {
+			// Orchestration must be completed before purging its state
+			return nil, api.ErrNotCompleted
+		}
 	}
 	oldEvents := state.OldEvents()
 	newEvents := state.NewEvents()
