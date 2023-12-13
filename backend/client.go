@@ -139,22 +139,24 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 			return fmt.Errorf("failed to configure termination request: %w", err)
 		}
 	}
-
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
-	instancesToTerminate := []api.InstanceID{}
+	// Parent instance needs to be terminated first
+	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
+		return fmt.Errorf("failed to terminate orchestration instance %s: %w", id, err)
+	}
 	if req.Recursive {
 		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, c.be, id, false)
 		if err != nil {
 			return fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
 		}
-		instancesToTerminate = append(instancesToTerminate, subOrchestrationInstances...)
-	}
-	instancesToTerminate = append(instancesToTerminate, id)
-	for _, iid := range instancesToTerminate {
-		if err := c.be.AddNewOrchestrationEvent(ctx, iid, e); err != nil {
-			return fmt.Errorf("failed to add terminate event to workflow with instanceId %s: %w", iid, err)
+		for _, iid := range subOrchestrationInstances {
+			// Terminate sub-orchestrations
+			if err := c.TerminateOrchestration(ctx, iid, opts...); err != nil {
+				return fmt.Errorf("failed to terminate sub-orchestration instance %s: %w", iid, err)
+			}
 		}
 	}
+
 	return nil
 }
 
@@ -212,18 +214,24 @@ func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.Inst
 			return fmt.Errorf("failed to configure purge request: %w", err)
 		}
 	}
-	instancesToPurge := []api.InstanceID{}
+	subOrchestrationInstances := make([]api.InstanceID, 0, 10)
+	var err error
 	if req.Recursive {
-		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, c.be, id, true)
+		// Fetching sub-orchestration instances
+		subOrchestrationInstances, err = GetSubOrchestrationInstances(ctx, c.be, id, true)
 		if err != nil {
 			return fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
 		}
-		instancesToPurge = append(instancesToPurge, subOrchestrationInstances...)
 	}
-	instancesToPurge = append(instancesToPurge, id)
-	for _, iid := range instancesToPurge {
-		if err := c.be.PurgeOrchestrationState(ctx, iid); err != nil {
-			return fmt.Errorf("failed to purge orchestration state for workflow with instanceId %s: %w", iid, err)
+	// Purge parent orchestration instance
+	if err := c.be.PurgeOrchestrationState(ctx, id); err != nil {
+		return fmt.Errorf("failed to purge orchestration instance %s: %w", id, err)
+	}
+
+	// Purge sub-orchestration instances
+	for _, iid := range subOrchestrationInstances {
+		if err := c.PurgeOrchestrationState(ctx, iid, opts...); err != nil {
+			return fmt.Errorf("failed to purge sub-orchestration instance %s: %w", iid, err)
 		}
 	}
 	return nil

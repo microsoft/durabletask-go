@@ -282,22 +282,29 @@ func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInst
 	if req.GetPurgeInstanceFilter() != nil {
 		return nil, errors.New("multi-instance purge is not unimplemented")
 	}
-
-	instancesToPurge := []api.InstanceID{}
+	subOrchestrationInstances := make([]api.InstanceID, 0, 10)
+	id := api.InstanceID(req.GetInstanceId())
+	var err error
 	if req.Recursive {
-		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, g.backend, api.InstanceID(req.GetInstanceId()), true)
+		// Fetching sub-orchestration instances
+		subOrchestrationInstances, err = GetSubOrchestrationInstances(ctx, g.backend, id, true)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
 		}
-		instancesToPurge = append(instancesToPurge, subOrchestrationInstances...)
 	}
-	instancesToPurge = append(instancesToPurge, api.InstanceID(req.GetInstanceId()))
-	for _, iid := range instancesToPurge {
-		if err := g.backend.PurgeOrchestrationState(ctx, iid); err != nil {
-			return nil, fmt.Errorf("failed to purge workflow with instanceId %s: %w", iid, err)
+	// Purge parent orchestration instance
+	if err := g.backend.PurgeOrchestrationState(ctx, id); err != nil {
+		return nil, fmt.Errorf("failed to purge orchestration instance %s: %w", id, err)
+	}
+
+	// Purge sub-orchestration instances
+	for _, iid := range subOrchestrationInstances {
+		subReq := &protos.PurgeInstancesRequest{Request: &protos.PurgeInstancesRequest_InstanceId{InstanceId: string(id)}, Recursive: req.Recursive}
+		if _, err := g.PurgeInstances(ctx, subReq); err != nil {
+			return nil, fmt.Errorf("failed to purge sub-orchestration instance %s: %w", iid, err)
 		}
 	}
-	return &protos.PurgeInstancesResponse{DeletedInstanceCount: int32(len(instancesToPurge))}, nil
+	return &protos.PurgeInstancesResponse{DeletedInstanceCount: int32(len(subOrchestrationInstances) + 1)}, nil
 }
 
 // QueryInstances implements protos.TaskHubSidecarServiceServer
@@ -331,19 +338,26 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 
 // TerminateInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
-	instancesToTerminate := []api.InstanceID{}
+	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
+	id := api.InstanceID(req.InstanceId)
+	// Parent instance needs to be terminated first
+	if err := g.backend.AddNewOrchestrationEvent(ctx, id, e); err != nil {
+		return nil, fmt.Errorf("failed to terminate orchestration instance %s: %w", id, err)
+	}
 	if req.Recursive {
-		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, g.backend, api.InstanceID(req.InstanceId), false)
+		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, g.backend, id, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
 		}
-		instancesToTerminate = append(instancesToTerminate, subOrchestrationInstances...)
-	}
-	instancesToTerminate = append(instancesToTerminate, api.InstanceID(req.InstanceId))
-	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
-	for _, iid := range instancesToTerminate {
-		if err := g.backend.AddNewOrchestrationEvent(ctx, iid, e); err != nil {
-			return nil, fmt.Errorf("failed to add terminate event to workflow with instanceId %s: %w", iid, err)
+		for _, iid := range subOrchestrationInstances {
+			subReq := &protos.TerminateRequest{
+				InstanceId: string(iid),
+				Recursive:  req.Recursive,
+			}
+			// Terminate sub-orchestrations
+			if _, err := g.TerminateInstance(ctx, subReq); err != nil {
+				return nil, fmt.Errorf("failed to terminate sub-orchestration instance %s: %w", iid, err)
+			}
 		}
 	}
 	return &protos.TerminateResponse{}, nil
