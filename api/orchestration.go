@@ -137,8 +137,8 @@ func WithRawOutput(data string) TerminateOptions {
 	}
 }
 
-// WithRecursive configures whether to terminate all sub-orchestrations created by the target orchestration.
-func WithRecursive(recursive bool) TerminateOptions {
+// WithRecursiveTerminate configures whether to terminate all sub-orchestrations created by the target orchestration.
+func WithRecursiveTerminate(recursive bool) TerminateOptions {
 	return func(req *protos.TerminateRequest) error {
 		req.Recursive = recursive
 		return nil
