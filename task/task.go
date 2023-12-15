@@ -23,6 +23,7 @@ type Task interface {
 
 type completableTask struct {
 	orchestrationCtx  *OrchestrationContext
+	description       string
 	isCompleted       bool
 	isCanceled        bool
 	rawResult         []byte
@@ -30,9 +31,10 @@ type completableTask struct {
 	completedCallback func()
 }
 
-func newTask(ctx *OrchestrationContext) *completableTask {
+func newTask(ctx *OrchestrationContext, description string) *completableTask {
 	return &completableTask{
 		orchestrationCtx: ctx,
+		description:      description,
 	}
 }
 
@@ -49,13 +51,13 @@ func (t *completableTask) Await(v any) error {
 	for {
 		if t.isCompleted {
 			if t.failureDetails != nil {
-				return fmt.Errorf("task failed with an error: %v", t.failureDetails.ErrorMessage)
+				return fmt.Errorf("task '%s' failed with an error: %v", t.description, t.failureDetails.ErrorMessage)
 			} else if t.isCanceled {
 				return ErrTaskCanceled
 			}
 			if v != nil && len(t.rawResult) > 0 {
 				if err := unmarshalData(t.rawResult, v); err != nil {
-					return fmt.Errorf("failed to decode task result: %w", err)
+					return fmt.Errorf("failed to decode task '%s' result: %w", t.description, err)
 				}
 			}
 			return nil

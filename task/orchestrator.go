@@ -222,46 +222,54 @@ func (octx *OrchestrationContext) GetInput(v any) error {
 // parameter can be either the name of an activity as a string or can be a pointer to the function
 // that implements the activity, in which case the name is obtained via reflection.
 func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...callActivityOption) Task {
+	activityName := helpers.GetTaskFunctionName(activity)
+	sequentNumber := ctx.getNextSequenceNumber()
+	description := fmt.Sprintf("%s#%d", activityName, sequentNumber)
+
 	options := new(callActivityOptions)
 	for _, configure := range opts {
 		if err := configure(options); err != nil {
-			failedTask := newTask(ctx)
+			failedTask := newTask(ctx, description)
 			failedTask.fail(helpers.NewTaskFailureDetails(err))
 			return failedTask
 		}
 	}
 
 	scheduleTaskAction := helpers.NewScheduleTaskAction(
-		ctx.getNextSequenceNumber(),
+		sequentNumber,
 		helpers.GetTaskFunctionName(activity),
 		options.rawInput)
 
 	ctx.pendingActions[scheduleTaskAction.Id] = scheduleTaskAction
 
-	task := newTask(ctx)
+	task := newTask(ctx, description)
 	ctx.pendingTasks[scheduleTaskAction.Id] = task
 	return task
 }
 
 func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, opts ...subOrchestratorOption) Task {
+	name := helpers.GetTaskFunctionName(orchestrator)
+	sequentNumber := ctx.getNextSequenceNumber()
+	description := fmt.Sprintf("%s#%d", name, sequentNumber)
+
 	options := new(callSubOrchestratorOptions)
 	for _, configure := range opts {
 		if err := configure(options); err != nil {
-			failedTask := newTask(ctx)
+			failedTask := newTask(ctx, description)
 			failedTask.fail(helpers.NewTaskFailureDetails(err))
 			return failedTask
 		}
 	}
 
 	createSubOrchestrationAction := helpers.NewCreateSubOrchestrationAction(
-		ctx.getNextSequenceNumber(),
-		helpers.GetTaskFunctionName(orchestrator),
+		sequentNumber,
+		name,
 		options.instanceID,
 		options.rawInput,
 	)
 	ctx.pendingActions[createSubOrchestrationAction.Id] = createSubOrchestrationAction
 
-	task := newTask(ctx)
+	task := newTask(ctx, description)
 	ctx.pendingTasks[createSubOrchestrationAction.Id] = task
 	return task
 }
@@ -276,7 +284,8 @@ func (ctx *OrchestrationContext) createTimerInternal(delay time.Duration) *compl
 	timerAction := helpers.NewCreateTimerAction(ctx.getNextSequenceNumber(), fireAt)
 	ctx.pendingActions[timerAction.Id] = timerAction
 
-	task := newTask(ctx)
+	description := fmt.Sprintf("timer#%d", timerAction.Id)
+	task := newTask(ctx, description)
 	ctx.pendingTasks[timerAction.Id] = task
 	return task
 }
@@ -295,7 +304,8 @@ func (ctx *OrchestrationContext) createTimerInternal(delay time.Duration) *compl
 //
 // Note that event names are case-insensitive.
 func (ctx *OrchestrationContext) WaitForSingleEvent(eventName string, timeout time.Duration) Task {
-	task := newTask(ctx)
+	description := fmt.Sprintf("event:%s", eventName)
+	task := newTask(ctx, description)
 	key := strings.ToUpper(eventName)
 	if eventList, ok := ctx.bufferedExternalEvents[key]; ok {
 		// An event with this name arrived already and can be consumed immediately.

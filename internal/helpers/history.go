@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -50,6 +52,10 @@ func NewExecutionCompletedEvent(eventID int32, status protos.OrchestrationStatus
 			},
 		},
 	}
+}
+
+func NewExecutionFailedEvent(eventID int32, failureDetails *protos.TaskFailureDetails) *protos.HistoryEvent {
+	return NewExecutionCompletedEvent(eventID, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, failureDetails)
 }
 
 func NewExecutionTerminatedEvent(rawReason *wrapperspb.StringValue, recurse bool) *protos.HistoryEvent {
@@ -142,11 +148,7 @@ func NewTimerCreatedEvent(eventID int32, fireAt *timestamppb.Timestamp) *protos.
 	}
 }
 
-func NewTimerFiredEvent(
-	timerID int32,
-	fireAt *timestamppb.Timestamp,
-	parentTraceContext *protos.TraceContext,
-) *protos.HistoryEvent {
+func NewTimerFiredEvent(timerID int32, fireAt *timestamppb.Timestamp) *protos.HistoryEvent {
 	return &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.New(time.Now()),
@@ -177,6 +179,32 @@ func NewSubOrchestrationCreatedEvent(
 				Input:              rawInput,
 				InstanceId:         instanceID,
 				ParentTraceContext: parentTraceContext,
+			},
+		},
+	}
+}
+
+func NewSubOrchestrationCompletedEvent(taskID int32, result *wrapperspb.StringValue) *protos.HistoryEvent {
+	return &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_SubOrchestrationInstanceCompleted{
+			SubOrchestrationInstanceCompleted: &protos.SubOrchestrationInstanceCompletedEvent{
+				TaskScheduledId: taskID,
+				Result:          result,
+			},
+		},
+	}
+}
+
+func NewSubOrchestrationFailedEvent(taskID int32, failureDetails *protos.TaskFailureDetails) *protos.HistoryEvent {
+	return &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_SubOrchestrationInstanceFailed{
+			SubOrchestrationInstanceFailed: &protos.SubOrchestrationInstanceFailedEvent{
+				TaskScheduledId: taskID,
+				FailureDetails:  failureDetails,
 			},
 		},
 	}
@@ -328,6 +356,10 @@ func NewTaskFailureDetails(err error) *protos.TaskFailureDetails {
 	}
 }
 
+func GetProtoSize(m protoreflect.ProtoMessage) int {
+	return proto.Size(m)
+}
+
 func HistoryListSummary(list []*protos.HistoryEvent) string {
 	var sb strings.Builder
 	sb.WriteString("[")
@@ -339,12 +371,17 @@ func HistoryListSummary(list []*protos.HistoryEvent) string {
 			sb.WriteString("...")
 			break
 		}
-		name := getHistoryEventTypeName(e)
+		name := GetHistoryEventTypeName(e)
 		sb.WriteString(name)
 		taskID := GetTaskId(e)
-		if taskID > -0 {
+		if taskID >= 0 {
 			sb.WriteRune('#')
 			sb.WriteString(strconv.FormatInt(int64(taskID), 10))
+		}
+		if x := e.GetTimerFired(); x != nil {
+			sb.WriteString(" (")
+			sb.WriteString(x.FireAt.AsTime().Format(time.RFC3339))
+			sb.WriteString(")")
 		}
 	}
 	sb.WriteString("]")
@@ -367,6 +404,16 @@ func ActionListSummary(actions []*protos.OrchestratorAction) string {
 		if a.Id >= 0 {
 			sb.WriteRune('#')
 			sb.WriteString(strconv.FormatInt(int64(a.Id), 10))
+		}
+		if x := a.GetCompleteOrchestration(); x != nil {
+			sb.WriteString(" (")
+			sb.WriteString(ToRuntimeStatusString(x.OrchestrationStatus))
+			sb.WriteString(")")
+		}
+		if x := a.GetCreateTimer(); x != nil {
+			sb.WriteString(" (")
+			sb.WriteString(x.FireAt.AsTime().Format(time.RFC3339))
+			sb.WriteString(")")
 		}
 	}
 	sb.WriteString("]")
@@ -403,12 +450,18 @@ func FromRuntimeStatusString(status string) protos.OrchestrationStatus {
 	return protos.OrchestrationStatus(protos.OrchestrationStatus_value[runtimeStatus])
 }
 
-func getHistoryEventTypeName(e *protos.HistoryEvent) string {
+func GetHistoryEventTypeName(e *protos.HistoryEvent) string {
+	if e.EventType == nil {
+		return "Unknown"
+	}
 	// PERFORMANCE: Replace this with a switch statement or a map lookup to avoid this use of reflection
 	return reflect.TypeOf(e.EventType).Elem().Name()[len("HistoryEvent_"):]
 }
 
 func getActionTypeName(a *protos.OrchestratorAction) string {
+	if a.OrchestratorActionType == nil {
+		return "Unknown"
+	}
 	// PERFORMANCE: Replace this with a switch statement or a map lookup to avoid this use of reflection
 	return reflect.TypeOf(a.OrchestratorActionType).Elem().Name()[len("OrchestratorAction_"):]
 }

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/protos"
-	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -23,6 +25,26 @@ type (
 	TaskFailureDetails = protos.TaskFailureDetails
 )
 
+type OrchestrationStateChanges struct {
+	NewEvents         []*HistoryEvent
+	NewTasks          []*HistoryEvent
+	NewTimers         []*HistoryEvent
+	NewMessages       []OrchestratorMessage
+	CustomStatus      *wrapperspb.StringValue
+	RuntimeStatus     protos.OrchestrationStatus
+	ContinuedAsNew    bool
+	IsPartial         bool
+	HistoryStartIndex int
+}
+
+func (c *OrchestrationStateChanges) IsEmpty() bool {
+	return len(c.NewEvents) == 0 &&
+		len(c.NewTasks) == 0 &&
+		len(c.NewTimers) == 0 &&
+		len(c.NewMessages) == 0
+}
+
+// Backend is the interface that must be implemented by all task hub backends.
 type Backend interface {
 	// CreateTaskHub creates a new task hub for the current backend. Task hub creation must be idempotent.
 	//
@@ -62,8 +84,23 @@ type Backend interface {
 
 	// CompleteOrchestrationWorkItem completes a work item by saving the updated runtime state to durable storage.
 	//
+	// The [OrchestrationStateChanges] parameter contains the changes to the orchestration state that should be
+	// saved to durable storage. The [HistoryStartIndex] field indicates the index of the first history event
+	// in the [OrchestrationStateChanges.NewEvents] slice. This is used to determine the index of the first
+	// history event in the [OrchestrationRuntimeState.History] slice, which is useful for backends that store
+	// the history events as an append log.
+	//
+	// The [OrchestrationStateChanges.IsPartial] field indicates whether this is a partial completion operation,
+	// in which case more calls to this function are expected to follow with the same work item. Partial completion
+	// is used to commit state updates in chunks to avoid overly large transactions. The final chunk will be committed
+	// with [OrchestrationStateChanges.IsPartial] set to [false].
+	//
+	// Implementations of this function should not attempt to delete the work item from storage until the final chunk
+	// is committed (i.e., until [OrchestrationStateChanges.IsPartial] is [false]) to ensure that the work item can be
+	// recovered if the process crashes before the final chunk is committed.
+	//
 	// Returns [ErrWorkItemLockLost] if the work-item couldn't be completed due to a lock-lost conflict (e.g., split-brain).
-	CompleteOrchestrationWorkItem(context.Context, *OrchestrationWorkItem) error
+	CompleteOrchestrationWorkItem(context.Context, *OrchestrationWorkItem, OrchestrationStateChanges) error
 
 	// AbandonOrchestrationWorkItem undoes any state changes and returns the work item to the work item queue.
 	//

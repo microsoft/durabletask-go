@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -9,9 +10,12 @@ import (
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
+
+var defaultChunkingConfig = backend.ChunkingConfiguration{}
 
 // Verifies runtime state created from an ExecutionStarted event
 func Test_NewOrchestration(t *testing.T) {
@@ -127,28 +131,32 @@ func Test_CompletedSubOrchestration(t *testing.T) {
 			[]*protos.HistoryEvent{},
 			nil),
 	}
+	s.AddActions(actions)
 
-	continuedAsNew, err := s.ApplyActions(actions, nil)
-	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
-		if assert.Len(t, s.NewEvents(), 1) {
-			e := s.NewEvents()[0]
-			assert.NotNil(t, e.Timestamp)
-			if ec := e.GetExecutionCompleted(); assert.NotNil(t, ec) {
-				assert.Equal(t, expectedTaskID, e.EventId)
-				assert.Equal(t, status, ec.OrchestrationStatus)
-				assert.Equal(t, expectedOutput, ec.Result.GetValue())
-				assert.Nil(t, ec.FailureDetails)
-			}
-		}
-		if assert.Len(t, s.PendingMessages(), 1) {
-			e := s.PendingMessages()[0]
-			assert.NotNil(t, e.HistoryEvent.Timestamp)
-			if soc := e.HistoryEvent.GetSubOrchestrationInstanceCompleted(); assert.NotNil(t, soc) {
-				assert.Equal(t, expectedTaskID, soc.TaskScheduledId)
-				assert.Equal(t, expectedOutput, soc.Result.GetValue())
-			}
-		}
-	}
+	changes, err := s.ProcessChanges(defaultChunkingConfig, nil, logger)
+	require.NoError(t, err)
+	assert.False(t, changes.ContinuedAsNew)
+	assert.False(t, changes.IsPartial)
+
+	require.Len(t, changes.NewEvents, 1)
+	e := changes.NewEvents[0]
+	assert.NotNil(t, e.Timestamp)
+
+	ec := e.GetExecutionCompleted()
+	require.NotNil(t, ec)
+	assert.Equal(t, expectedTaskID, e.EventId)
+	assert.Equal(t, status, ec.OrchestrationStatus)
+	assert.Equal(t, expectedOutput, ec.Result.GetValue())
+	assert.Nil(t, ec.FailureDetails)
+
+	require.Len(t, changes.NewMessages, 1)
+	m := changes.NewMessages[0]
+	assert.NotNil(t, m.HistoryEvent.GetTimestamp())
+
+	soc := m.HistoryEvent.GetSubOrchestrationInstanceCompleted()
+	require.NotNil(t, soc)
+	assert.Equal(t, expectedTaskID, soc.TaskScheduledId)
+	assert.Equal(t, expectedOutput, soc.Result.GetValue())
 }
 
 func Test_RuntimeState_ContinueAsNew(t *testing.T) {
@@ -172,34 +180,10 @@ func Test_RuntimeState_ContinueAsNew(t *testing.T) {
 			carryoverEvents,
 			nil),
 	}
+	state.AddActions(actions)
 
-	continuedAsNew, err := state.ApplyActions(actions, nil)
-	if assert.NoError(t, err) && assert.True(t, continuedAsNew) {
-		if assert.Len(t, state.NewEvents(), 3) {
-			assert.NotNil(t, state.NewEvents()[0].Timestamp)
-			assert.NotNil(t, state.NewEvents()[0].GetOrchestratorStarted())
-			assert.NotNil(t, state.NewEvents()[1].Timestamp)
-			if ec := state.NewEvents()[1].GetExecutionStarted(); assert.NotNil(t, ec) {
-				assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING, state.RuntimeStatus())
-				assert.Equal(t, string(state.InstanceID()), ec.OrchestrationInstance.InstanceId)
-				if name, err := state.Name(); assert.NoError(t, err) {
-					assert.Equal(t, expectedName, name)
-					assert.Equal(t, expectedName, ec.Name)
-				}
-				if input, err := state.Input(); assert.NoError(t, err) {
-					assert.Equal(t, continueAsNewInput, input)
-				}
-			}
-			assert.NotNil(t, state.NewEvents()[2].Timestamp)
-			if er := state.NewEvents()[2].GetEventRaised(); assert.NotNil(t, er) {
-				assert.Equal(t, eventName, er.Name)
-				assert.Equal(t, eventPayload, er.Input.GetValue())
-			}
-		}
-		assert.Empty(t, state.PendingMessages())
-		assert.Empty(t, state.PendingTasks())
-		assert.Empty(t, state.PendingTimers())
-	}
+	_, err := state.ProcessChanges(defaultChunkingConfig, nil, logger)
+	require.ErrorIs(t, err, backend.ErrContinuedAsNew)
 }
 
 func Test_CreateTimer(t *testing.T) {
@@ -215,25 +199,26 @@ func Test_CreateTimer(t *testing.T) {
 	for i := 1; i <= timerCount; i++ {
 		actions = append(actions, helpers.NewCreateTimerAction(int32(i), expectedFireAt))
 	}
+	s.AddActions(actions)
 
-	continuedAsNew, err := s.ApplyActions(actions, nil)
-	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
-		if assert.Len(t, s.NewEvents(), timerCount) {
-			for _, e := range s.NewEvents() {
-				assert.NotNil(t, e.Timestamp)
-				if timerCreated := e.GetTimerCreated(); assert.NotNil(t, timerCreated) {
-					assert.WithinDuration(t, expectedFireAt, timerCreated.FireAt.AsTime(), 0)
-				}
+	changes, err := s.ProcessChanges(defaultChunkingConfig, nil, logger)
+	require.NoError(t, err)
+
+	if assert.Len(t, changes.NewEvents, timerCount) {
+		for _, e := range changes.NewEvents {
+			assert.NotNil(t, e.Timestamp)
+			if timerCreated := e.GetTimerCreated(); assert.NotNil(t, timerCreated) {
+				assert.WithinDuration(t, expectedFireAt, timerCreated.FireAt.AsTime(), 0)
 			}
 		}
-		if assert.Len(t, s.PendingTimers(), timerCount) {
-			for i, e := range s.PendingTimers() {
-				assert.NotNil(t, e.Timestamp)
-				if timerFired := e.GetTimerFired(); assert.NotNil(t, timerFired) {
-					expectedTimerID := int32(i + 1)
-					assert.WithinDuration(t, expectedFireAt, timerFired.FireAt.AsTime(), 0)
-					assert.Equal(t, expectedTimerID, timerFired.TimerId)
-				}
+	}
+	if assert.Len(t, changes.NewTimers, timerCount) {
+		for i, e := range changes.NewTimers {
+			assert.NotNil(t, e.Timestamp)
+			if timerFired := e.GetTimerFired(); assert.NotNil(t, timerFired) {
+				expectedTimerID := int32(i + 1)
+				assert.WithinDuration(t, expectedFireAt, timerFired.FireAt.AsTime(), 0)
+				assert.Equal(t, expectedTimerID, timerFired.TimerId)
 			}
 		}
 	}
@@ -252,32 +237,33 @@ func Test_ScheduleTask(t *testing.T) {
 	actions := []*protos.OrchestratorAction{
 		helpers.NewScheduleTaskAction(expectedTaskID, expectedName, wrapperspb.String(expectedInput)),
 	}
+	state.AddActions(actions)
 
 	tc := &protos.TraceContext{TraceParent: "trace", TraceState: wrapperspb.String("state")}
-	continuedAsNew, err := state.ApplyActions(actions, tc)
-	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
-		if assert.Len(t, state.NewEvents(), 1) {
-			e := state.NewEvents()[0]
-			if taskScheduled := e.GetTaskScheduled(); assert.NotNil(t, taskScheduled) {
-				assert.Equal(t, expectedTaskID, e.EventId)
-				assert.Equal(t, expectedName, taskScheduled.Name)
-				assert.Equal(t, expectedInput, taskScheduled.Input.GetValue())
-				if assert.NotNil(t, taskScheduled.ParentTraceContext) {
-					assert.Equal(t, "trace", taskScheduled.ParentTraceContext.TraceParent)
-					assert.Equal(t, "state", taskScheduled.ParentTraceContext.TraceState.GetValue())
-				}
+	changes, err := state.ProcessChanges(defaultChunkingConfig, tc, logger)
+	require.NoError(t, err)
+
+	if assert.Len(t, changes.NewEvents, 1) {
+		e := changes.NewEvents[0]
+		if taskScheduled := e.GetTaskScheduled(); assert.NotNil(t, taskScheduled) {
+			assert.Equal(t, expectedTaskID, e.EventId)
+			assert.Equal(t, expectedName, taskScheduled.Name)
+			assert.Equal(t, expectedInput, taskScheduled.Input.GetValue())
+			if assert.NotNil(t, taskScheduled.ParentTraceContext) {
+				assert.Equal(t, "trace", taskScheduled.ParentTraceContext.TraceParent)
+				assert.Equal(t, "state", taskScheduled.ParentTraceContext.TraceState.GetValue())
 			}
 		}
-		if assert.Len(t, state.PendingTasks(), 1) {
-			e := state.PendingTasks()[0]
-			if taskScheduled := e.GetTaskScheduled(); assert.NotNil(t, taskScheduled) {
-				assert.Equal(t, expectedTaskID, e.EventId)
-				assert.Equal(t, expectedName, taskScheduled.Name)
-				assert.Equal(t, expectedInput, taskScheduled.Input.GetValue())
-				if assert.NotNil(t, taskScheduled.ParentTraceContext) {
-					assert.Equal(t, "trace", taskScheduled.ParentTraceContext.TraceParent)
-					assert.Equal(t, "state", taskScheduled.ParentTraceContext.TraceState.GetValue())
-				}
+	}
+	if assert.Len(t, changes.NewTasks, 1) {
+		e := changes.NewTasks[0]
+		if taskScheduled := e.GetTaskScheduled(); assert.NotNil(t, taskScheduled) {
+			assert.Equal(t, expectedTaskID, e.EventId)
+			assert.Equal(t, expectedName, taskScheduled.Name)
+			assert.Equal(t, expectedInput, taskScheduled.Input.GetValue())
+			if assert.NotNil(t, taskScheduled.ParentTraceContext) {
+				assert.Equal(t, "trace", taskScheduled.ParentTraceContext.TraceParent)
+				assert.Equal(t, "state", taskScheduled.ParentTraceContext.TraceState.GetValue())
 			}
 		}
 	}
@@ -299,45 +285,46 @@ func Test_CreateSubOrchestration(t *testing.T) {
 	actions := []*protos.OrchestratorAction{
 		helpers.NewCreateSubOrchestrationAction(expectedTaskID, expectedName, expectedInstanceID, expectedInput),
 	}
+	state.AddActions(actions)
 
 	tc := &protos.TraceContext{
 		TraceParent: expectedTraceParent,
 		TraceState:  wrapperspb.String(expectedTraceState),
 	}
-	continuedAsNew, err := state.ApplyActions(actions, tc)
-	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
-		if assert.Len(t, state.NewEvents(), 1) {
-			e := state.NewEvents()[0]
-			if orchCreated := e.GetSubOrchestrationInstanceCreated(); assert.NotNil(t, orchCreated) {
-				assert.Equal(t, expectedTaskID, e.EventId)
-				assert.Equal(t, expectedInstanceID, orchCreated.InstanceId)
-				assert.Equal(t, expectedName, orchCreated.Name)
-				assert.Equal(t, expectedInput.GetValue(), orchCreated.Input.GetValue())
-				if assert.NotNil(t, orchCreated.ParentTraceContext) {
-					assert.Equal(t, expectedTraceParent, orchCreated.ParentTraceContext.TraceParent)
-					assert.Equal(t, expectedTraceState, orchCreated.ParentTraceContext.TraceState.GetValue())
-				}
+	changes, err := state.ProcessChanges(defaultChunkingConfig, tc, logger)
+	require.NoError(t, err)
+
+	if assert.Len(t, changes.NewEvents, 1) {
+		e := changes.NewEvents[0]
+		if orchCreated := e.GetSubOrchestrationInstanceCreated(); assert.NotNil(t, orchCreated) {
+			assert.Equal(t, expectedTaskID, e.EventId)
+			assert.Equal(t, expectedInstanceID, orchCreated.InstanceId)
+			assert.Equal(t, expectedName, orchCreated.Name)
+			assert.Equal(t, expectedInput.GetValue(), orchCreated.Input.GetValue())
+			if assert.NotNil(t, orchCreated.ParentTraceContext) {
+				assert.Equal(t, expectedTraceParent, orchCreated.ParentTraceContext.TraceParent)
+				assert.Equal(t, expectedTraceState, orchCreated.ParentTraceContext.TraceState.GetValue())
 			}
 		}
-		if assert.Len(t, state.PendingMessages(), 1) {
-			msg := state.PendingMessages()[0]
-			if executionStarted := msg.HistoryEvent.GetExecutionStarted(); assert.NotNil(t, executionStarted) {
-				assert.Equal(t, int32(-1), msg.HistoryEvent.EventId)
-				assert.Equal(t, expectedInstanceID, executionStarted.OrchestrationInstance.InstanceId)
-				assert.NotEmpty(t, executionStarted.OrchestrationInstance.ExecutionId)
-				assert.Equal(t, expectedName, executionStarted.Name)
-				assert.Equal(t, expectedInput.GetValue(), executionStarted.Input.GetValue())
-				if assert.NotNil(t, executionStarted.ParentInstance) {
-					assert.Equal(t, "Parent", executionStarted.ParentInstance.Name.GetValue())
-					assert.Equal(t, expectedTaskID, executionStarted.ParentInstance.TaskScheduledId)
-					if assert.NotNil(t, executionStarted.ParentInstance.OrchestrationInstance) {
-						assert.Equal(t, iid, executionStarted.ParentInstance.OrchestrationInstance.InstanceId)
-					}
+	}
+	if assert.Len(t, changes.NewMessages, 1) {
+		msg := changes.NewMessages[0]
+		if executionStarted := msg.HistoryEvent.GetExecutionStarted(); assert.NotNil(t, executionStarted) {
+			assert.Equal(t, int32(-1), msg.HistoryEvent.EventId)
+			assert.Equal(t, expectedInstanceID, executionStarted.OrchestrationInstance.InstanceId)
+			assert.NotEmpty(t, executionStarted.OrchestrationInstance.ExecutionId)
+			assert.Equal(t, expectedName, executionStarted.Name)
+			assert.Equal(t, expectedInput.GetValue(), executionStarted.Input.GetValue())
+			if assert.NotNil(t, executionStarted.ParentInstance) {
+				assert.Equal(t, "Parent", executionStarted.ParentInstance.Name.GetValue())
+				assert.Equal(t, expectedTaskID, executionStarted.ParentInstance.TaskScheduledId)
+				if assert.NotNil(t, executionStarted.ParentInstance.OrchestrationInstance) {
+					assert.Equal(t, iid, executionStarted.ParentInstance.OrchestrationInstance.InstanceId)
 				}
-				if assert.NotNil(t, executionStarted.ParentTraceContext) {
-					assert.Equal(t, expectedTraceParent, executionStarted.ParentTraceContext.TraceParent)
-					assert.Equal(t, expectedTraceState, executionStarted.ParentTraceContext.TraceState.GetValue())
-				}
+			}
+			if assert.NotNil(t, executionStarted.ParentTraceContext) {
+				assert.Equal(t, expectedTraceParent, executionStarted.ParentTraceContext.TraceParent)
+				assert.Equal(t, expectedTraceState, executionStarted.ParentTraceContext.TraceState.GetValue())
 			}
 		}
 	}
@@ -355,24 +342,25 @@ func Test_SendEvent(t *testing.T) {
 	actions := []*protos.OrchestratorAction{
 		helpers.NewSendEventAction(expectedInstanceID, expectedEventName, wrapperspb.String(expectedInput)),
 	}
+	s.AddActions(actions)
 
-	continuedAsNew, err := s.ApplyActions(actions, nil)
-	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
-		if assert.Len(t, s.NewEvents(), 1) {
-			e := s.NewEvents()[0]
-			if sendEvent := e.GetEventSent(); assert.NotNil(t, sendEvent) {
-				assert.Equal(t, expectedEventName, sendEvent.Name)
-				assert.Equal(t, expectedInput, sendEvent.Input.GetValue())
-				assert.Equal(t, expectedInstanceID, sendEvent.InstanceId)
-			}
+	changes, err := s.ProcessChanges(defaultChunkingConfig, nil, logger)
+	require.NoError(t, err)
+
+	if assert.Len(t, changes.NewEvents, 1) {
+		e := changes.NewEvents[0]
+		if sendEvent := e.GetEventSent(); assert.NotNil(t, sendEvent) {
+			assert.Equal(t, expectedEventName, sendEvent.Name)
+			assert.Equal(t, expectedInput, sendEvent.Input.GetValue())
+			assert.Equal(t, expectedInstanceID, sendEvent.InstanceId)
 		}
-		if assert.Len(t, s.PendingMessages(), 1) {
-			msg := s.PendingMessages()[0]
-			if sendEvent := msg.HistoryEvent.GetEventSent(); assert.NotNil(t, sendEvent) {
-				assert.Equal(t, expectedEventName, sendEvent.Name)
-				assert.Equal(t, expectedInput, sendEvent.Input.GetValue())
-				assert.Equal(t, expectedInstanceID, sendEvent.InstanceId)
-			}
+	}
+	if assert.Len(t, changes.NewMessages, 1) {
+		msg := changes.NewMessages[0]
+		if sendEvent := msg.HistoryEvent.GetEventSent(); assert.NotNil(t, sendEvent) {
+			assert.Equal(t, expectedEventName, sendEvent.Name)
+			assert.Equal(t, expectedInput, sendEvent.Input.GetValue())
+			assert.Equal(t, expectedInstanceID, sendEvent.InstanceId)
 		}
 	}
 }
@@ -390,21 +378,160 @@ func Test_StateIsValid(t *testing.T) {
 	assert.False(t, s.IsValid())
 }
 
-func Test_DuplicateEvents(t *testing.T) {
-	s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
-	if err := s.AddEvent(helpers.NewExecutionStartedEvent("MyOrchestration", "abc", nil, nil, nil)); assert.NoError(t, err) {
+func Test_DuplicateIncomingEvents(t *testing.T) {
+	t.Run("ExecutionStarted", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		err := s.AddEvent(helpers.NewExecutionStartedEvent("MyOrchestration", "abc", nil, nil, nil))
+		require.NoError(t, err)
 		err = s.AddEvent(helpers.NewExecutionStartedEvent("MyOrchestration", "abc", nil, nil, nil))
-		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
-	} else {
-		return
-	}
+		require.ErrorIs(t, err, backend.ErrDuplicateEvent)
+	})
 
-	// TODO: Add other types of duplicate events (task completion, external events, sub-orchestration, etc.)
-
-	if err := s.AddEvent(helpers.NewExecutionCompletedEvent(-1, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, nil, nil)); assert.NoError(t, err) {
+	t.Run("ExecutionCompleted", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		err := s.AddEvent(helpers.NewExecutionCompletedEvent(-1, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, nil, nil))
+		require.NoError(t, err)
 		err = s.AddEvent(helpers.NewExecutionCompletedEvent(-1, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, nil, nil))
 		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
-	} else {
-		return
-	}
+	})
+
+	t.Run("TaskScheduled", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		err := s.AddEvent(helpers.NewTaskScheduledEvent(1, "MyTask", nil, nil, nil))
+		require.NoError(t, err)
+		err = s.AddEvent(helpers.NewTaskScheduledEvent(1, "MyTask", nil, nil, nil))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+	})
+
+	t.Run("TaskCompleted", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		err := s.AddEvent(helpers.NewTaskCompletedEvent(1, nil))
+		require.NoError(t, err)
+		err = s.AddEvent(helpers.NewTaskCompletedEvent(1, nil))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+		err = s.AddEvent(helpers.NewTaskFailedEvent(1, nil))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+	})
+
+	t.Run("TaskFailed", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		err := s.AddEvent(helpers.NewTaskFailedEvent(1, nil))
+		require.NoError(t, err)
+		err = s.AddEvent(helpers.NewTaskFailedEvent(1, nil))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+		err = s.AddEvent(helpers.NewTaskCompletedEvent(1, nil))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+	})
+
+	t.Run("TimerCreated", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		err := s.AddEvent(helpers.NewTimerCreatedEvent(1, timestamppb.Now()))
+		require.NoError(t, err)
+		err = s.AddEvent(helpers.NewTimerCreatedEvent(1, timestamppb.Now()))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+	})
+
+	t.Run("TimerFired", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		err := s.AddEvent(helpers.NewTimerFiredEvent(1, timestamppb.Now()))
+		require.NoError(t, err)
+		err = s.AddEvent(helpers.NewTimerFiredEvent(1, timestamppb.Now()))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+	})
+
+	t.Run("SubOrchestrationInstanceCreated", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		err := s.AddEvent(helpers.NewSubOrchestrationCreatedEvent(1, "MyOrchestration", nil, nil, "xyz", nil))
+		require.NoError(t, err)
+		err = s.AddEvent(helpers.NewSubOrchestrationCreatedEvent(1, "MyOrchestration", nil, nil, "xyz", nil))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+	})
+
+	t.Run("SubOrchestrationInstanceCompleted", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		err := s.AddEvent(helpers.NewSubOrchestrationCompletedEvent(1, nil))
+		require.NoError(t, err)
+		err = s.AddEvent(helpers.NewSubOrchestrationCompletedEvent(1, nil))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+		err = s.AddEvent(helpers.NewSubOrchestrationFailedEvent(1, nil))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+	})
+
+	t.Run("SubOrchestrationInstanceFailed", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		err := s.AddEvent(helpers.NewSubOrchestrationFailedEvent(1, nil))
+		require.NoError(t, err)
+		err = s.AddEvent(helpers.NewSubOrchestrationFailedEvent(1, nil))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+		err = s.AddEvent(helpers.NewSubOrchestrationCompletedEvent(1, nil))
+		assert.ErrorIs(t, err, backend.ErrDuplicateEvent)
+	})
+}
+
+// Test_DuplicateOutgoingEvents verifies that duplicate outgoing events are ignored.
+// This can happen if the orchestrator code schedules certain actions successfully as part of
+// a chunk, but then fails before the final chunk is committed. When the orchestrator is replayed,
+// it will attempt to schedule the same actions again, but the runtime state will already contain
+// the outbound events in its history, so it can identify and de-dupe them.
+func Test_DuplicateOutgoingEvents(t *testing.T) {
+	t.Run("TimerCreated", func(t *testing.T) {
+		now := timestamppb.Now()
+		timerID := int32(1)
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{helpers.NewTimerCreatedEvent(timerID, now)})
+		s.AddActions([]*protos.OrchestratorAction{helpers.NewCreateTimerAction(timerID, now.AsTime())})
+		changes, err := s.ProcessChanges(defaultChunkingConfig, nil, logger)
+		require.NoError(t, err)
+		assert.Empty(t, changes.NewEvents)
+		assert.Empty(t, changes.NewTimers)
+	})
+
+	t.Run("TaskScheduled", func(t *testing.T) {
+		taskID := int32(1)
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{helpers.NewTaskScheduledEvent(taskID, "MyTask", nil, nil, nil)})
+		s.AddActions([]*protos.OrchestratorAction{helpers.NewScheduleTaskAction(taskID, "MyTask", nil)})
+		changes, err := s.ProcessChanges(defaultChunkingConfig, nil, logger)
+		require.NoError(t, err)
+		assert.Empty(t, changes.NewEvents)
+		assert.Empty(t, changes.NewTasks)
+	})
+
+	t.Run("SubOrchestrationInstanceCreated", func(t *testing.T) {
+		taskID := int32(1)
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{helpers.NewSubOrchestrationCreatedEvent(taskID, "MyOrchestration", nil, nil, "xyz", nil)})
+		s.AddActions([]*protos.OrchestratorAction{helpers.NewCreateSubOrchestrationAction(taskID, "MyOrchestration", "xyz", nil)})
+		changes, err := s.ProcessChanges(defaultChunkingConfig, nil, logger)
+		require.NoError(t, err)
+		assert.Empty(t, changes.NewEvents)
+		assert.Empty(t, changes.NewMessages)
+	})
+}
+
+func Test_SetFailed(t *testing.T) {
+	errFailure := errors.New("you got terminated")
+	t.Run("Running", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
+			helpers.NewExecutionStartedEvent("MyOrchestration", "abc", nil, nil, nil),
+		})
+		assert.NotEqual(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, s.RuntimeStatus())
+		s.SetFailed(errFailure)
+		s.ProcessChanges(defaultChunkingConfig, nil, logger)
+		assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, s.RuntimeStatus())
+		failureDetails, err := s.FailureDetails()
+		require.NoError(t, err)
+		assert.Equal(t, errFailure.Error(), failureDetails.ErrorMessage)
+	})
+
+	t.Run("ContinuedAsNew", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
+			helpers.NewExecutionStartedEvent("MyOrchestration", "abc", nil, nil, nil),
+		})
+		s.AddEvent(helpers.NewExecutionCompletedEvent(-1, protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW, nil, nil))
+		assert.NotEqual(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, s.RuntimeStatus())
+		s.SetFailed(errFailure)
+		s.ProcessChanges(defaultChunkingConfig, nil, logger)
+		assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, s.RuntimeStatus())
+		failureDetails, err := s.FailureDetails()
+		require.NoError(t, err)
+		assert.Equal(t, errFailure.Error(), failureDetails.ErrorMessage)
+	})
 }

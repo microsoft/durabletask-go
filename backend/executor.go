@@ -404,6 +404,8 @@ loop:
 }
 
 // mustEmbedUnimplementedTaskHubSidecarServiceServer implements protos.TaskHubSidecarServiceServer
+//
+//lint:ignore U1000 because this is a required gRPC method
 func (grpcExecutor) mustEmbedUnimplementedTaskHubSidecarServiceServer() {
 }
 

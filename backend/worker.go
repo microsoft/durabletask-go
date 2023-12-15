@@ -28,7 +28,6 @@ type TaskProcessor interface {
 	FetchWorkItem(context.Context) (WorkItem, error)
 	ProcessWorkItem(context.Context, WorkItem) error
 	AbandonWorkItem(context.Context, WorkItem) error
-	CompleteWorkItem(context.Context, WorkItem) error
 }
 
 type worker struct {
@@ -217,13 +216,6 @@ func (w *worker) processWorkItem(ctx context.Context, wi WorkItem) {
 			w.logger.Errorf("%v: failed to abandon work item: %v", w.Name(), err)
 		}
 		return
-	}
-
-	if err := w.processor.CompleteWorkItem(ctx, wi); err != nil {
-		w.logger.Errorf("%v: failed to complete work item: %v", w.Name(), err)
-		if err := w.processor.AbandonWorkItem(ctx, wi); err != nil {
-			w.logger.Errorf("%v: failed to abandon work item: %v", w.Name(), err)
-		}
 	}
 
 	w.logger.Debugf("%v: work item processed successfully", w.Name())

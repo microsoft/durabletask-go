@@ -186,7 +186,7 @@ func (be *sqliteBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi *b
 }
 
 // CompleteOrchestrationWorkItem implements backend.Backend
-func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *backend.OrchestrationWorkItem) error {
+func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *backend.OrchestrationWorkItem, changes backend.OrchestrationStateChanges) error {
 	if err := be.ensureDB(); err != nil {
 		return err
 	}
@@ -207,7 +207,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	isCreated := false
 	isCompleted := false
 
-	for _, e := range wi.State.NewEvents() {
+	for _, e := range changes.NewEvents {
 		if es := e.GetExecutionStarted(); es != nil {
 			if isCreated {
 				// TODO: Log warning about duplicate start event
@@ -236,19 +236,19 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 				sqlUpdateArgs = append(sqlUpdateArgs, nil)
 			}
 		}
-		// TODO: Execution suspended & resumed
 	}
 
-	if wi.State.CustomStatus != nil {
+	if changes.CustomStatus != nil {
 		sqlSB.WriteString("[CustomStatus] = ?, ")
-		sqlUpdateArgs = append(sqlUpdateArgs, wi.State.CustomStatus.Value)
+		sqlUpdateArgs = append(sqlUpdateArgs, changes.CustomStatus.Value)
 	}
 
 	// TODO: Support for stickiness, which would extend the LockExpiration
 	sqlSB.WriteString("[RuntimeStatus] = ?, [LastUpdatedTime] = ?, [LockExpiration] = NULL WHERE [InstanceID] = ? AND [LockedBy] = ?")
-	sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()), now, string(wi.InstanceID), wi.LockedBy)
+	sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(changes.RuntimeStatus), now, string(wi.InstanceID), wi.LockedBy)
 
-	result, err := tx.ExecContext(ctx, sqlSB.String(), sqlUpdateArgs...)
+	updateSql := sqlSB.String()
+	result, err := tx.ExecContext(ctx, updateSql, sqlUpdateArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to update Instances table: %w", err)
 	}
@@ -261,21 +261,23 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	}
 
 	// If continue-as-new, delete all existing history
-	if wi.State.ContinuedAsNew() {
+	if changes.ContinuedAsNew {
+		be.logger.Debugf("%v: Deleting all existing history events as part of continue-as-new", wi.InstanceID)
 		if _, err := tx.ExecContext(ctx, "DELETE FROM History WHERE InstanceID = ?", string(wi.InstanceID)); err != nil {
 			return fmt.Errorf("failed to delete from History table: %w", err)
 		}
 	}
 
 	// Save new history events
-	newHistoryCount := len(wi.State.NewEvents())
+	newHistoryCount := len(changes.NewEvents)
 	if newHistoryCount > 0 {
 		query := "INSERT INTO History ([InstanceID], [SequenceNumber], [EventPayload]) VALUES (?, ?, ?)" +
 			strings.Repeat(", (?, ?, ?)", newHistoryCount-1)
 
 		args := make([]interface{}, 0, newHistoryCount*3)
-		nextSequenceNumber := len(wi.State.OldEvents())
-		for _, e := range wi.State.NewEvents() {
+		startIndex := len(wi.State.OldEvents()) + changes.HistoryStartIndex
+		nextSequenceNumber := startIndex
+		for _, e := range changes.NewEvents {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
 				return err
@@ -285,6 +287,13 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 			nextSequenceNumber++
 		}
 
+		be.logger.Debugf(
+			"%v: Inserting %d new history events with sequence numbers %d thru %d",
+			wi.InstanceID,
+			newHistoryCount,
+			startIndex,
+			nextSequenceNumber-1)
+
 		_, err = tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("failed to insert into the History table: %w", err)
@@ -292,13 +301,13 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	}
 
 	// Save outbound activity tasks
-	newActivityCount := len(wi.State.PendingTasks())
+	newActivityCount := len(changes.NewTasks)
 	if newActivityCount > 0 {
 		insertSql := "INSERT INTO NewTasks ([InstanceID], [EventPayload]) VALUES (?, ?)" +
 			strings.Repeat(", (?, ?)", newActivityCount-1)
 
 		sqlInsertArgs := make([]interface{}, 0, newActivityCount*2)
-		for _, e := range wi.State.PendingTasks() {
+		for _, e := range changes.NewTasks {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
 				return err
@@ -314,13 +323,14 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	}
 
 	// Save outbound orchestrator events
-	newEventCount := len(wi.State.PendingTimers()) + len(wi.State.PendingMessages())
+	newEventCount := len(changes.NewTimers) + len(changes.NewMessages)
 	if newEventCount > 0 {
+		be.logger.Debugf("%v: Inserting %d rows into the NewEvents table", wi.InstanceID, newEventCount)
 		insertSql := "INSERT INTO NewEvents ([InstanceID], [EventPayload], [VisibleTime]) VALUES (?, ?, ?)" +
 			strings.Repeat(", (?, ?, ?)", newEventCount-1)
 
 		sqlInsertArgs := make([]interface{}, 0, newEventCount*3)
-		for _, e := range wi.State.PendingTimers() {
+		for _, e := range changes.NewTimers {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
 				return err
@@ -330,7 +340,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 			sqlInsertArgs = append(sqlInsertArgs, string(wi.InstanceID), eventPayload, visibileTime)
 		}
 
-		for _, msg := range wi.State.PendingMessages() {
+		for _, msg := range changes.NewMessages {
 			if es := msg.HistoryEvent.GetExecutionStarted(); es != nil {
 				// Need to insert a new row into the DB
 				var instanceID string
@@ -360,22 +370,26 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 		}
 	}
 
-	// Delete inbound events
-	dbResult, err := tx.ExecContext(
-		ctx,
-		"DELETE FROM NewEvents WHERE [InstanceID] = ? AND [LockedBy] = ?",
-		string(wi.InstanceID),
-		wi.LockedBy,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to delete from NewEvents table: %w", err)
-	}
+	// Delete inbound events only on the final "chunk", if completion is being done in batches
+	if !changes.IsPartial {
+		dbResult, err := tx.ExecContext(
+			ctx,
+			"DELETE FROM NewEvents WHERE [InstanceID] = ? AND [LockedBy] = ?",
+			string(wi.InstanceID),
+			wi.LockedBy,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to delete from NewEvents table: %w", err)
+		}
 
-	rowsAffected, err := dbResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed get rows affected by delete statement: %w", err)
-	} else if rowsAffected == 0 {
-		return backend.ErrWorkItemLockLost
+		rowsAffected, err := dbResult.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("failed get rows affected by delete statement: %w", err)
+		} else if rowsAffected == 0 {
+			// Log a warning about no events to delete. This is not severe enough to be considered an error.
+			be.logger.Warnf("%v: no incoming events to delete", wi.InstanceID)
+		}
+		be.logger.Debugf("%v: Deleted %d row(s) from the NewEvents table", wi.InstanceID, rowsAffected)
 	}
 
 	if err != nil {
