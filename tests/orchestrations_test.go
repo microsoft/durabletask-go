@@ -853,8 +853,8 @@ func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
 
 	instanceID := api.InstanceID("IGNORE_IF_RUNNING_OR_COMPLETED")
 	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
-		Action:          api.IGNORE,
-		OperationStatus: []api.OrchestrationStatus{api.RUNNING, api.COMPLETED, api.PENDING},
+		Action:          api.REUSE_ID_ACTION_IGNORE,
+		OperationStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
 	}
 
 	// Run the orchestration
@@ -904,8 +904,8 @@ func Test_SingleActivity_ReuseInstanceIDTerminate(t *testing.T) {
 
 	instanceID := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
 	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
-		Action:          api.TERMINATE,
-		OperationStatus: []api.OrchestrationStatus{api.RUNNING, api.COMPLETED, api.PENDING},
+		Action:          api.REUSE_ID_ACTION_TERMINATE,
+		OperationStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
 	}
 
 	// Run the orchestration

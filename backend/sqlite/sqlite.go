@@ -511,10 +511,8 @@ func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, s
 		return fmt.Errorf("failed to scan the Instances table result: %w", err)
 	}
 
-	// instance already exists
-	targetStatusValues := buildStatusSet(policy.OperationStatus)
 	// status not match, return instance duplicate error
-	if _, ok := targetStatusValues[helpers.FromRuntimeStatusString(*runtimeStatus)]; !ok {
+	if !isStatusMatch(policy.OperationStatus, helpers.FromRuntimeStatusString(*runtimeStatus)) {
 		return api.ErrDuplicateInstance
 	}
 
@@ -527,7 +525,7 @@ func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, s
 	case protos.CreateOrchestrationAction_TERMINATE:
 		// terminate existing instance
 		if err := be.cleanupOrchestrationStateInternal(ctx, tx, api.InstanceID(startEvent.OrchestrationInstance.InstanceId), false); err != nil {
-			return err
+			return fmt.Errorf("failed to cleanup orchestration status: %w", err)
 		}
 		// create a new instance
 		var rows int64
@@ -545,12 +543,13 @@ func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, s
 	return api.ErrDuplicateInstance
 }
 
-func buildStatusSet(statuses []api.OrchestrationStatus) map[api.OrchestrationStatus]struct{} {
-	statusSet := make(map[api.OrchestrationStatus]struct{}, len(statuses))
+func isStatusMatch(statuses []protos.OrchestrationStatus, runtimeStatus protos.OrchestrationStatus) bool {
 	for _, status := range statuses {
-		statusSet[status] = struct{}{}
+		if status == runtimeStatus {
+			return true
+		}
 	}
-	return statusSet
+	return false
 }
 
 func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, tx *sql.Tx, id api.InstanceID, requireCompleted bool) error {
