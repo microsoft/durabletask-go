@@ -26,22 +26,22 @@ var (
 type CreateOrchestrationAction = protos.CreateOrchestrationAction
 
 const (
-	ERROR     CreateOrchestrationAction = 0
-	IGNORE    CreateOrchestrationAction = 1
-	TERMINATE CreateOrchestrationAction = 2
+	ERROR     CreateOrchestrationAction = protos.CreateOrchestrationAction_ERROR
+	IGNORE    CreateOrchestrationAction = protos.CreateOrchestrationAction_IGNORE
+	TERMINATE CreateOrchestrationAction = protos.CreateOrchestrationAction_TERMINATE
 )
 
 type OrchestrationStatus = protos.OrchestrationStatus
 
 const (
-	RUNNING          OrchestrationStatus = 0
-	COMPLETED        OrchestrationStatus = 1
-	CONTINUED_AS_NEW OrchestrationStatus = 2
-	FAILED           OrchestrationStatus = 3
-	CANCELED         OrchestrationStatus = 4
-	TERMINATED       OrchestrationStatus = 5
-	PENDING          OrchestrationStatus = 6
-	SUSPENDED        OrchestrationStatus = 7
+	RUNNING          OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING
+	COMPLETED        OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
+	CONTINUED_AS_NEW OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW
+	FAILED           OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED
+	CANCELED         OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED
+	TERMINATED       OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED
+	PENDING          OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
+	SUSPENDED        OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED
 )
 
 type OrchestrationIdReusePolicy = protos.OrchestrationIdReusePolicy

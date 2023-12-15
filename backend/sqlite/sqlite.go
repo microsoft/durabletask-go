@@ -512,7 +512,7 @@ func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, s
 	}
 
 	// instance already exists
-	targetStatusValues := backend.BuildStatusSet(policy.OperationStatus)
+	targetStatusValues := buildStatusSet(policy.OperationStatus)
 	// status not match, return instance duplicate error
 	if _, ok := targetStatusValues[helpers.FromRuntimeStatusString(*runtimeStatus)]; !ok {
 		return api.ErrDuplicateInstance
@@ -543,6 +543,14 @@ func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, s
 	}
 	// default behavior
 	return api.ErrDuplicateInstance
+}
+
+func buildStatusSet(statuses []api.OrchestrationStatus) map[api.OrchestrationStatus]struct{} {
+	statusSet := make(map[api.OrchestrationStatus]struct{}, len(statuses))
+	for _, status := range statuses {
+		statusSet[status] = struct{}{}
+	}
+	return statusSet
 }
 
 func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, tx *sql.Tx, id api.InstanceID, requireCompleted bool) error {
