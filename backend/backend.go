@@ -44,6 +44,18 @@ func (c *OrchestrationStateChanges) IsEmpty() bool {
 		len(c.NewMessages) == 0
 }
 
+type OrchestrationIdReusePolicyOptions func(*protos.OrchestrationIdReusePolicy) error
+
+func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) OrchestrationIdReusePolicyOptions {
+	return func(po *protos.OrchestrationIdReusePolicy) error {
+		if policy != nil {
+			po.Action = policy.Action
+			po.OperationStatus = policy.OperationStatus
+		}
+		return nil
+	}
+}
+
 // Backend is the interface that must be implemented by all task hub backends.
 type Backend interface {
 	// CreateTaskHub creates a new task hub for the current backend. Task hub creation must be idempotent.
@@ -65,7 +77,7 @@ type Backend interface {
 
 	// CreateOrchestrationInstance creates a new orchestration instance with a history event that
 	// wraps a ExecutionStarted event.
-	CreateOrchestrationInstance(context.Context, *HistoryEvent) error
+	CreateOrchestrationInstance(context.Context, *HistoryEvent, ...OrchestrationIdReusePolicyOptions) error
 
 	// AddNewEvent adds a new orchestration event to the specified orchestration instance.
 	AddNewOrchestrationEvent(context.Context, api.InstanceID, *HistoryEvent) error

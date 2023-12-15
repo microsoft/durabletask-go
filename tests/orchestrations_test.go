@@ -498,6 +498,55 @@ func Test_ContinueAsNew_Events(t *testing.T) {
 	assert.Equal(t, strconv.Itoa(eventCount), metadata.SerializedOutput)
 }
 
+func Test_ExternalEventContention(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
+		var data int32
+		if err := ctx.WaitForSingleEvent("MyEventData", 1*time.Second).Await(&data); err != nil && !errors.Is(err, task.ErrTaskCanceled) {
+			return nil, err
+		}
+
+		var complete bool
+		if err := ctx.WaitForSingleEvent("MyEventSignal", -1).Await(&complete); err != nil {
+			return nil, err
+		}
+
+		if complete {
+			return data, nil
+		}
+
+		ctx.ContinueAsNew(nil, task.WithKeepUnprocessedEvents())
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest")
+	require.NoError(t, err)
+
+	// Wait for the timer to elapse
+	timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_, err = client.WaitForOrchestrationCompletion(timeoutCtx, id)
+	require.ErrorIs(t, err, timeoutCtx.Err())
+
+	// Now raise the event, which should queue correctly for the next time
+	// around
+	require.NoError(t, client.RaiseEvent(ctx, id, "MyEventData", api.WithEventPayload(42)))
+	require.NoError(t, client.RaiseEvent(ctx, id, "MyEventSignal", api.WithEventPayload(false)))
+	require.NoError(t, client.RaiseEvent(ctx, id, "MyEventSignal", api.WithEventPayload(true)))
+
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	assert.Equal(t, `42`, metadata.SerializedOutput)
+}
+
 func Test_ExternalEventOrchestration(t *testing.T) {
 	const eventCount = 10
 

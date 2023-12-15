@@ -333,7 +333,11 @@ func (ctx *OrchestrationContext) WaitForSingleEvent(eventName string, timeout ti
 		if timeout > 0 {
 			ctx.createTimerInternal(timeout).onCompleted(func() {
 				task.cancel()
-				taskList.Remove(taskElement)
+				if taskList.Len() > 1 {
+					taskList.Remove(taskElement)
+				} else {
+					delete(ctx.pendingExternalEventTasks, key)
+				}
 			})
 		}
 	}

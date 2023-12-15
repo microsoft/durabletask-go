@@ -243,13 +243,20 @@ func (_c *Backend_CompleteOrchestrationWorkItem_Call) RunAndReturn(run func(cont
 	return _c
 }
 
-// CreateOrchestrationInstance provides a mock function with given fields: _a0, _a1
-func (_m *Backend) CreateOrchestrationInstance(_a0 context.Context, _a1 *protos.HistoryEvent) error {
-	ret := _m.Called(_a0, _a1)
+// CreateOrchestrationInstance provides a mock function with given fields: _a0, _a1, _a2
+func (_m *Backend) CreateOrchestrationInstance(_a0 context.Context, _a1 *protos.HistoryEvent, _a2 ...backend.OrchestrationIdReusePolicyOptions) error {
+	_va := make([]interface{}, len(_a2))
+	for _i := range _a2 {
+		_va[_i] = _a2[_i]
+	}
+	var _ca []interface{}
+	_ca = append(_ca, _a0, _a1)
+	_ca = append(_ca, _va...)
+	ret := _m.Called(_ca...)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *protos.HistoryEvent) error); ok {
-		r0 = rf(_a0, _a1)
+	if rf, ok := ret.Get(0).(func(context.Context, *protos.HistoryEvent, ...backend.OrchestrationIdReusePolicyOptions) error); ok {
+		r0 = rf(_a0, _a1, _a2...)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -265,13 +272,21 @@ type Backend_CreateOrchestrationInstance_Call struct {
 // CreateOrchestrationInstance is a helper method to define mock.On call
 //   - _a0 context.Context
 //   - _a1 *protos.HistoryEvent
-func (_e *Backend_Expecter) CreateOrchestrationInstance(_a0 interface{}, _a1 interface{}) *Backend_CreateOrchestrationInstance_Call {
-	return &Backend_CreateOrchestrationInstance_Call{Call: _e.mock.On("CreateOrchestrationInstance", _a0, _a1)}
+//   - _a2 ...backend.OrchestrationIdReusePolicyOptions
+func (_e *Backend_Expecter) CreateOrchestrationInstance(_a0 interface{}, _a1 interface{}, _a2 ...interface{}) *Backend_CreateOrchestrationInstance_Call {
+	return &Backend_CreateOrchestrationInstance_Call{Call: _e.mock.On("CreateOrchestrationInstance",
+		append([]interface{}{_a0, _a1}, _a2...)...)}
 }
 
-func (_c *Backend_CreateOrchestrationInstance_Call) Run(run func(_a0 context.Context, _a1 *protos.HistoryEvent)) *Backend_CreateOrchestrationInstance_Call {
+func (_c *Backend_CreateOrchestrationInstance_Call) Run(run func(_a0 context.Context, _a1 *protos.HistoryEvent, _a2 ...backend.OrchestrationIdReusePolicyOptions)) *Backend_CreateOrchestrationInstance_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*protos.HistoryEvent))
+		variadicArgs := make([]backend.OrchestrationIdReusePolicyOptions, len(args)-2)
+		for i, a := range args[2:] {
+			if a != nil {
+				variadicArgs[i] = a.(backend.OrchestrationIdReusePolicyOptions)
+			}
+		}
+		run(args[0].(context.Context), args[1].(*protos.HistoryEvent), variadicArgs...)
 	})
 	return _c
 }
@@ -281,7 +296,7 @@ func (_c *Backend_CreateOrchestrationInstance_Call) Return(_a0 error) *Backend_C
 	return _c
 }
 
-func (_c *Backend_CreateOrchestrationInstance_Call) RunAndReturn(run func(context.Context, *protos.HistoryEvent) error) *Backend_CreateOrchestrationInstance_Call {
+func (_c *Backend_CreateOrchestrationInstance_Call) RunAndReturn(run func(context.Context, *protos.HistoryEvent, ...backend.OrchestrationIdReusePolicyOptions) error) *Backend_CreateOrchestrationInstance_Call {
 	_c.Call.Return(run)
 	return _c
 }
