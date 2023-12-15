@@ -124,7 +124,7 @@ func UnmarshalHistoryEvent(bytes []byte) (*HistoryEvent, error) {
 }
 
 func BuildStatusSet(statuses []api.OrchestrationStatus) map[api.OrchestrationStatus]struct{} {
-	statusSet := make(map[api.OrchestrationStatus]struct{})
+	statusSet := make(map[api.OrchestrationStatus]struct{}, len(statuses))
 	for _, status := range statuses {
 		statusSet[status] = struct{}{}
 	}
