@@ -23,6 +23,29 @@ var (
 	EmptyInstanceID = InstanceID("")
 )
 
+type CreateOrchestrationAction = protos.CreateOrchestrationAction
+
+const (
+	REUSE_ID_ACTION_ERROR     CreateOrchestrationAction = protos.CreateOrchestrationAction_ERROR
+	REUSE_ID_ACTION_IGNORE    CreateOrchestrationAction = protos.CreateOrchestrationAction_IGNORE
+	REUSE_ID_ACTION_TERMINATE CreateOrchestrationAction = protos.CreateOrchestrationAction_TERMINATE
+)
+
+type OrchestrationStatus = protos.OrchestrationStatus
+
+const (
+	RUNTIME_STATUS_RUNNING          OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING
+	RUNTIME_STATUS_COMPLETED        OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
+	RUNTIME_STATUS_CONTINUED_AS_NEW OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW
+	RUNTIME_STATUS_FAILED           OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED
+	RUNTIME_STATUS_CANCELED         OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED
+	RUNTIME_STATUS_TERMINATED       OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED
+	RUNTIME_STATUS_PENDING          OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
+	RUNTIME_STATUS_SUSPENDED        OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED
+)
+
+type OrchestrationIdReusePolicy = protos.OrchestrationIdReusePolicy
+
 // InstanceID is a unique identifier for an orchestration instance.
 type InstanceID string
 
