@@ -152,9 +152,8 @@ func NewTimerFiredEvent(
 		Timestamp: timestamppb.New(time.Now()),
 		EventType: &protos.HistoryEvent_TimerFired{
 			TimerFired: &protos.TimerFiredEvent{
-				TimerId:            timerID,
-				FireAt:             fireAt,
-				ParentTraceContext: parentTraceContext,
+				TimerId: timerID,
+				FireAt:  fireAt,
 			},
 		},
 	}

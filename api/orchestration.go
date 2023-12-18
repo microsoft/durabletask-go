@@ -13,13 +13,38 @@ import (
 )
 
 var (
-	ErrInstanceNotFound = errors.New("no such instance exists")
-	ErrNotStarted       = errors.New("orchestration has not started")
-	ErrNotCompleted     = errors.New("orchestration has not yet completed")
-	ErrNoFailures       = errors.New("orchestration did not report failure details")
+	ErrInstanceNotFound  = errors.New("no such instance exists")
+	ErrNotStarted        = errors.New("orchestration has not started")
+	ErrNotCompleted      = errors.New("orchestration has not yet completed")
+	ErrNoFailures        = errors.New("orchestration did not report failure details")
+	ErrDuplicateInstance = errors.New("orchestration instance already exists")
+	ErrIgnoreInstance    = errors.New("ignore creating orchestration instance")
 
 	EmptyInstanceID = InstanceID("")
 )
+
+type CreateOrchestrationAction = protos.CreateOrchestrationAction
+
+const (
+	REUSE_ID_ACTION_ERROR     CreateOrchestrationAction = protos.CreateOrchestrationAction_ERROR
+	REUSE_ID_ACTION_IGNORE    CreateOrchestrationAction = protos.CreateOrchestrationAction_IGNORE
+	REUSE_ID_ACTION_TERMINATE CreateOrchestrationAction = protos.CreateOrchestrationAction_TERMINATE
+)
+
+type OrchestrationStatus = protos.OrchestrationStatus
+
+const (
+	RUNTIME_STATUS_RUNNING          OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING
+	RUNTIME_STATUS_COMPLETED        OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
+	RUNTIME_STATUS_CONTINUED_AS_NEW OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW
+	RUNTIME_STATUS_FAILED           OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED
+	RUNTIME_STATUS_CANCELED         OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED
+	RUNTIME_STATUS_TERMINATED       OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED
+	RUNTIME_STATUS_PENDING          OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
+	RUNTIME_STATUS_SUSPENDED        OrchestrationStatus = protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED
+)
+
+type OrchestrationIdReusePolicy = protos.OrchestrationIdReusePolicy
 
 // InstanceID is a unique identifier for an orchestration instance.
 type InstanceID string
@@ -53,6 +78,18 @@ type TerminateOptions func(*protos.TerminateRequest) error
 func WithInstanceID(id InstanceID) NewOrchestrationOptions {
 	return func(req *protos.CreateInstanceRequest) error {
 		req.InstanceId = string(id)
+		return nil
+	}
+}
+
+// WithOrchestrationIdReusePolicy configures Orchestration ID reuse policy.
+func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) NewOrchestrationOptions {
+	return func(req *protos.CreateInstanceRequest) error {
+		// initialize CreateInstanceOption
+		req.OrchestrationIdReusePolicy = &protos.OrchestrationIdReusePolicy{
+			Action:          policy.Action,
+			OperationStatus: policy.OperationStatus,
+		}
 		return nil
 	}
 }

@@ -33,12 +33,10 @@ func Test_EmptyOrchestration(t *testing.T) {
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "EmptyOrchestrator")
-	if assert.NoError(t, err) {
-		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
-		if assert.NoError(t, err) {
-			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-		}
-	}
+	require.NoError(t, err)
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
@@ -475,6 +473,55 @@ func Test_ContinueAsNew_Events(t *testing.T) {
 	assert.Equal(t, `10`, metadata.SerializedOutput)
 }
 
+func Test_ExternalEventContention(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
+		var data int32
+		if err := ctx.WaitForSingleEvent("MyEventData", 1*time.Second).Await(&data); err != nil && !errors.Is(err, task.ErrTaskCanceled) {
+			return nil, err
+		}
+
+		var complete bool
+		if err := ctx.WaitForSingleEvent("MyEventSignal", -1).Await(&complete); err != nil {
+			return nil, err
+		}
+
+		if complete {
+			return data, nil
+		}
+
+		ctx.ContinueAsNew(nil, task.WithKeepUnprocessedEvents())
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest")
+	require.NoError(t, err)
+
+	// Wait for the timer to elapse
+	timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_, err = client.WaitForOrchestrationCompletion(timeoutCtx, id)
+	require.ErrorIs(t, err, timeoutCtx.Err())
+
+	// Now raise the event, which should queue correctly for the next time
+	// around
+	require.NoError(t, client.RaiseEvent(ctx, id, "MyEventData", api.WithEventPayload(42)))
+	require.NoError(t, client.RaiseEvent(ctx, id, "MyEventSignal", api.WithEventPayload(false)))
+	require.NoError(t, client.RaiseEvent(ctx, id, "MyEventSignal", api.WithEventPayload(true)))
+
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	assert.Equal(t, `42`, metadata.SerializedOutput)
+}
+
 func Test_ExternalEventOrchestration(t *testing.T) {
 	const eventCount = 10
 
@@ -767,6 +814,202 @@ func Test_PurgeCompletedOrchestration(t *testing.T) {
 	// Try to purge again and verify that it also fails with ErrInstanceNotFound
 	if err = client.PurgeOrchestrationState(ctx, id); !assert.ErrorIs(t, err, api.ErrInstanceNotFound) {
 		return
+	}
+}
+
+func Test_RecreateCompletedOrchestration(t *testing.T) {
+	t.Skip("Not yet supported. Needs https://github.com/microsoft/durabletask-go/issues/42")
+
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("HelloOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output string
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		var name string
+		if err := ctx.GetInput(&name); err != nil {
+			return nil, err
+		}
+		return fmt.Sprintf("Hello, %s!", name), nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the first orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "HelloOrchestration", api.WithInput("世界"))
+	require.NoError(t, err)
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+
+	// Run the second orchestration with the same ID as the first
+	var newID api.InstanceID
+	newID, err = client.ScheduleNewOrchestration(ctx, "HelloOrchestration", api.WithInstanceID(id), api.WithInput("World"))
+	require.NoError(t, err)
+	require.Equal(t, id, newID)
+	metadata, err = client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	assert.Equal(t, `"Hello, World!"`, metadata.SerializedOutput)
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("SingleActivity", id),
+		assertActivity("SayHello", id, 0),
+		assertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+		assertOrchestratorCreated("SingleActivity", id),
+		assertActivity("SayHello", id, 0),
+		assertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+	)
+}
+
+func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output string
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		var name string
+		if err := ctx.GetInput(&name); err != nil {
+			return nil, err
+		}
+		return fmt.Sprintf("Hello, %s!", name), nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	instanceID := api.InstanceID("IGNORE_IF_RUNNING_OR_COMPLETED")
+	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
+		Action:          api.REUSE_ID_ACTION_IGNORE,
+		OperationStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
+	}
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
+	require.NoError(t, err)
+	// wait orchestration to start
+	client.WaitForOrchestrationStart(ctx, id)
+	pivotTime := time.Now()
+	// schedule again, it should ignore creating the new orchestration
+	id, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
+	require.NoError(t, err)
+	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelTimeout()
+	metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
+	require.NoError(t, err)
+	assert.Equal(t, true, metadata.IsComplete())
+	// the first orchestration should complete as the second one is ignored
+	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+	// assert the orchestration created timestamp
+	assert.True(t, pivotTime.After(metadata.CreatedAt))
+}
+
+func Test_SingleActivity_ReuseInstanceIDTerminate(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output string
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		var name string
+		if err := ctx.GetInput(&name); err != nil {
+			return nil, err
+		}
+		return fmt.Sprintf("Hello, %s!", name), nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	instanceID := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
+	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
+		Action:          api.REUSE_ID_ACTION_TERMINATE,
+		OperationStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
+	}
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
+	require.NoError(t, err)
+	// wait orchestration to start
+	client.WaitForOrchestrationStart(ctx, id)
+	pivotTime := time.Now()
+	// schedule again, it should terminate the first orchestration and start a new one
+	id, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
+	require.NoError(t, err)
+	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelTimeout()
+	metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
+	require.NoError(t, err)
+	assert.Equal(t, true, metadata.IsComplete())
+	// the second orchestration should complete.
+	assert.Equal(t, `"Hello, World!"`, metadata.SerializedOutput)
+	// assert the orchestration created timestamp
+	assert.True(t, pivotTime.Before(metadata.CreatedAt))
+}
+
+func Test_SingleActivity_ReuseInstanceIDError(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output string
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		var name string
+		if err := ctx.GetInput(&name); err != nil {
+			return nil, err
+		}
+		return fmt.Sprintf("Hello, %s!", name), nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	instanceID := api.InstanceID("ERROR_IF_RUNNING_OR_COMPLETED")
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
+	require.NoError(t, err)
+	id, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}
 }
 
