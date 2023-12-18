@@ -434,15 +434,7 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 	return nil
 }
 
-func buildStatusSet(statuses []protos.OrchestrationStatus) map[protos.OrchestrationStatus]struct{} {
-	statusSet := make(map[protos.OrchestrationStatus]struct{})
-	for _, status := range statuses {
-		statusSet[status] = struct{}{}
-	}
-	return statusSet
-}
-
-func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx,  opts ...backend.OrchestrationIdReusePolicyOptions) (string, error) {
+func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx, opts ...backend.OrchestrationIdReusePolicyOptions) (string, error) {
 	if e == nil {
 		return "", errors.New("HistoryEvent must be non-nil")
 	} else if e.Timestamp == nil {
@@ -466,6 +458,7 @@ func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context
 		return "", err
 	}
 
+	// instance with same ID already exists
 	if rows <= 0 {
 		return instanceID, be.handleInstanceExists(ctx, tx, startEvent, policy, e)
 	}
@@ -500,7 +493,7 @@ func insertOrIgnoreInstanceTableInternal(ctx context.Context, tx *sql.Tx, e *bac
 	if err != nil {
 		return -1, fmt.Errorf("failed to count the rows affected: %w", err)
 	}
-	return rows, nil;
+	return rows, nil
 }
 
 func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, startEvent *protos.ExecutionStartedEvent, policy *protos.OrchestrationIdReusePolicy, e *backend.HistoryEvent) error {
@@ -518,10 +511,8 @@ func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, s
 		return fmt.Errorf("failed to scan the Instances table result: %w", err)
 	}
 
-	// instance already exists
-	targetStatusValues := buildStatusSet(policy.OperationStatus)
 	// status not match, return instance duplicate error
-	if _, ok := targetStatusValues[helpers.FromRuntimeStatusString(*runtimeStatus)]; !ok {
+	if !isStatusMatch(policy.OperationStatus, helpers.FromRuntimeStatusString(*runtimeStatus)) {
 		return api.ErrDuplicateInstance
 	}
 
@@ -533,8 +524,8 @@ func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, s
 		return api.ErrIgnoreInstance
 	case protos.CreateOrchestrationAction_TERMINATE:
 		// terminate existing instance
-		if err := be.cleanupOrchestrationStateInternal(ctx, tx, api.InstanceID(startEvent.OrchestrationInstance.InstanceId),false); err != nil {
-			return err
+		if err := be.cleanupOrchestrationStateInternal(ctx, tx, api.InstanceID(startEvent.OrchestrationInstance.InstanceId), false); err != nil {
+			return fmt.Errorf("failed to cleanup orchestration status: %w", err)
 		}
 		// create a new instance
 		var rows int64
@@ -552,7 +543,16 @@ func (be *sqliteBackend) handleInstanceExists(ctx context.Context, tx *sql.Tx, s
 	return api.ErrDuplicateInstance
 }
 
-func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, tx *sql.Tx, id api.InstanceID, onlyIfCompleted bool) error {
+func isStatusMatch(statuses []protos.OrchestrationStatus, runtimeStatus protos.OrchestrationStatus) bool {
+	for _, status := range statuses {
+		if status == runtimeStatus {
+			return true
+		}
+	}
+	return false
+}
+
+func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, tx *sql.Tx, id api.InstanceID, requireCompleted bool) error {
 	row := tx.QueryRowContext(ctx, "SELECT 1 FROM Instances WHERE [InstanceID] = ?", string(id))
 	if err := row.Err(); err != nil {
 		return fmt.Errorf("failed to query for instance existence: %w", err)
@@ -565,13 +565,13 @@ func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, 
 		return fmt.Errorf("failed to scan instance existence: %w", err)
 	}
 
-	if onlyIfCompleted {
+	if requireCompleted {
 		// purge orchestration in ['COMPLETED', 'FAILED', 'TERMINATED']
 		dbResult, err := tx.ExecContext(ctx, "DELETE FROM Instances WHERE [InstanceID] = ? AND [RuntimeStatus] IN ('COMPLETED', 'FAILED', 'TERMINATED')", string(id))
 		if err != nil {
 			return fmt.Errorf("failed to delete from the Instances table: %w", err)
 		}
-	
+
 		rowsAffected, err := dbResult.RowsAffected()
 		if err != nil {
 			return fmt.Errorf("failed to get rows affected in Instances delete operation: %w", err)
