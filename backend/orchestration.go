@@ -2,7 +2,10 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -23,19 +26,57 @@ type OrchestratorExecutor interface {
 		newEvents []*protos.HistoryEvent) (*ExecutionResults, error)
 }
 
-type orchestratorProcessor struct {
-	be       Backend
-	executor OrchestratorExecutor
-	logger   Logger
+// OrchestrationWorkerOption is a function that configures an orchestrator worker.
+type OrchestrationWorkerOption func(*orchestrationWorkerConfig)
+
+type orchestrationWorkerConfig struct {
+	workerOptions  []NewTaskWorkerOptions
+	chunkingConfig ChunkingConfiguration
 }
 
-func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
-	processor := &orchestratorProcessor{
-		be:       be,
-		executor: executor,
-		logger:   logger,
+// WithChunkingConfiguration sets the chunking configuration for the orchestrator worker.
+// Use this option to configure how the orchestrator worker will chunk large history lists.
+func WithChunkingConfiguration(config ChunkingConfiguration) OrchestrationWorkerOption {
+	return func(p *orchestrationWorkerConfig) {
+		p.chunkingConfig = config
 	}
-	return NewTaskWorker(be, processor, logger, opts...)
+}
+
+// WithMaxConcurrentOrchestratorInvocations sets the maximum number of orchestrations that can be invoked
+// concurrently by the orchestrator worker. If this limit is exceeded, the worker will block until the number
+// of concurrent orchestrations drops below the limit.
+//
+// Note that this limit is applied to the number of orchestrations that are being invoked concurrently, not
+// the number of orchestrations that are in a running state. For example, if an orchestration is waiting for
+// an external event, a timer, or an activity, it will not count against this limit.
+//
+// If this value is set to 0 or less, then the number of parallel orchestrations is unlimited.
+func WithMaxConcurrentOrchestratorInvocations(n int32) OrchestrationWorkerOption {
+	return func(p *orchestrationWorkerConfig) {
+		p.workerOptions = append(p.workerOptions, WithMaxParallelism(n))
+	}
+}
+
+type orchestratorProcessor struct {
+	be             Backend
+	executor       OrchestratorExecutor
+	logger         Logger
+	chunkingConfig ChunkingConfiguration
+}
+
+func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor, logger Logger, opts ...OrchestrationWorkerOption) TaskWorker {
+	config := &orchestrationWorkerConfig{}
+	for _, configure := range opts {
+		configure(config)
+	}
+
+	processor := &orchestratorProcessor{
+		be:             be,
+		executor:       executor,
+		logger:         logger,
+		chunkingConfig: config.chunkingConfig,
+	}
+	return NewTaskWorker(be, processor, logger, config.workerOptions...)
 }
 
 // Name implements TaskProcessor
@@ -72,11 +113,12 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 			w.endOrchestratorSpan(ctx, wi, span, false)
 		}()
 
+	continueAsNewLoop:
 		for continueAsNewCount := 0; ; continueAsNewCount++ {
 			if continueAsNewCount > 0 {
 				w.logger.Debugf("%v: continuing-as-new with %d event(s): %s", wi.InstanceID, len(wi.State.NewEvents()), helpers.HistoryListSummary(wi.State.NewEvents()))
 			} else {
-				w.logger.Debugf("%v: invoking orchestrator", wi.InstanceID)
+				w.logger.Debugf("%v: invoking orchestrator with %d event(s): %s", wi.InstanceID, len(wi.State.NewEvents()), helpers.HistoryListSummary(wi.State.NewEvents()))
 			}
 
 			// Run the user orchestrator code, providing the old history and new events together.
@@ -86,41 +128,87 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 			}
 			w.logger.Debugf("%v: orchestrator returned %d action(s): %s", wi.InstanceID, len(results.Response.Actions), helpers.ActionListSummary(results.Response.Actions))
 
-			// Apply the orchestrator outputs to the orchestration state.
-			continuedAsNew, err := wi.State.ApplyActions(results.Response.Actions, helpers.TraceContextFromSpan(span))
-			if err != nil {
-				return fmt.Errorf("failed to apply the execution result actions: %w", err)
-			}
-			wi.State.CustomStatus = results.Response.CustomStatus
+			// Apply the results of the orchestrator execution to the orchestration state.
+			wi.State.AddActions(results.Response.Actions)
 
-			// When continuing-as-new, we re-execute the orchestrator from the beginning with a truncated state in a tight loop
-			// until the orchestrator performs some non-continue-as-new action.
-			if continuedAsNew {
-				const MaxContinueAsNewCount = 20
-				if continueAsNewCount >= MaxContinueAsNewCount {
-					return fmt.Errorf("exceeded tight-loop continue-as-new limit of %d iterations", MaxContinueAsNewCount)
+			// Now we need to take all the changes we just made to the state and persist them to the backend storage.
+			// This is done in a loop because the list of actions may be too large to be committed in a single transaction.
+			// If this happens, we'll commit the changes in chunks until we've committed all of them.
+			addedEvents := 0
+			for {
+				tc := helpers.TraceContextFromSpan(span)
+				changes, err := wi.State.ProcessChanges(w.chunkingConfig, tc, w.logger)
+				if errors.Is(err, ErrContinuedAsNew) {
+					// The orchestrator did a continue-as-new, which means we should re-run the orchestator with the new state.
+					// No changes are committed to the backend until the orchestration returns a non-continue-as-new result.
+					// Safety check: see if the user code might be an infinite continue-as-new loop. 10K is the arbitrary threshold we use.
+					const MaxContinueAsNewCount = 10000
+					if continueAsNewCount >= MaxContinueAsNewCount {
+						// Fail the orchestration since we don't want it to be stuck in an infinite loop
+						continueAsNewError := fmt.Errorf("exceeded tight-loop continue-as-new limit of %d iterations", MaxContinueAsNewCount)
+						w.logger.Warnf("%v: terminating orchestration: %v", wi.InstanceID, err)
+						return w.failOrchestration(ctx, wi, continueAsNewError, tc)
+					}
+
+					// We create a new trace span for every continue-as-new
+					w.endOrchestratorSpan(ctx, wi, span, true)
+					ctx, span = w.startOrResumeOrchestratorSpan(ctx, wi)
+					continue continueAsNewLoop
+				} else if err != nil {
+					// Any other error is assumed to be non-recoverable, so we fail the orchestration
+					return w.failOrchestration(ctx, wi, err, tc)
 				}
 
-				// We create a new trace span for every continue-as-new
-				w.endOrchestratorSpan(ctx, wi, span, true)
-				ctx, span = w.startOrResumeOrchestratorSpan(ctx, wi)
-				continue
-			}
+				if !changes.IsEmpty() {
+					// Commit the changes to the backend
+					if len(changes.NewEvents) > 0 {
+						w.logger.Debugf("%v: committing %d new history event(s) to the backend (partial=%v): %v", wi.InstanceID, len(changes.NewEvents), changes.IsPartial, helpers.HistoryListSummary(changes.NewEvents))
+					}
+					if len(changes.NewTasks) > 0 {
+						w.logger.Debugf("%v: committing %d new scheduled task(s) to the backend (partial=%v): %v", wi.InstanceID, len(changes.NewTasks), changes.IsPartial, helpers.HistoryListSummary(changes.NewTasks))
+					}
+					if len(changes.NewTimers) > 0 {
+						w.logger.Debugf("%v: committing %d new timer(s) to the backend (partial=%v): %v", wi.InstanceID, len(changes.NewTimers), changes.IsPartial, helpers.HistoryListSummary(changes.NewTimers))
+					}
+					if len(changes.NewMessages) > 0 {
+						w.logger.Debugf("%v: committing %d new message(s) to the backend (partial=%v): %v", wi.InstanceID, len(changes.NewMessages), changes.IsPartial, messageListSummary(changes.NewMessages))
+					}
 
-			if wi.State.IsCompleted() {
-				name, _ := wi.State.Name()
-				w.logger.Infof("%v: '%s' completed with a %s status.", wi.InstanceID, name, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()))
+					changes.HistoryStartIndex = addedEvents
+					if err := w.be.CompleteOrchestrationWorkItem(ctx, wi, changes); err != nil {
+						return fmt.Errorf("failed to complete orchestration work item: %w", err)
+					}
+
+					addedEvents += len(changes.NewEvents)
+
+					// Keep looping until we've committed all the changes
+					continue
+				}
+
+				if wi.State.IsCompleted() {
+					name, _ := wi.State.Name()
+					w.logger.Infof("%v: '%s' completed with a %s status.", wi.InstanceID, name, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()))
+				}
+
+				break continueAsNewLoop // break out of the process results loop if no errors
 			}
-			break
 		}
 	}
 	return nil
 }
 
-// CompleteWorkItem implements TaskProcessor
-func (p *orchestratorProcessor) CompleteWorkItem(ctx context.Context, wi WorkItem) error {
-	owi := wi.(*OrchestrationWorkItem)
-	return p.be.CompleteOrchestrationWorkItem(ctx, owi)
+func (p *orchestratorProcessor) failOrchestration(ctx context.Context, wi *OrchestrationWorkItem, err error, tc *protos.TraceContext) error {
+	p.logger.Warnf("%v: setting orchestration as failed: %v", wi.InstanceID, err)
+	wi.State.SetFailed(err)
+
+	changes, err := wi.State.ProcessChanges(p.chunkingConfig, tc, p.logger)
+	if err != nil {
+		// This is assumed to be non-recoverable, so we swallow it and log a message
+		p.logger.Errorf("%v: failed to fail orchestration: %v", wi.InstanceID, err)
+		return nil
+	}
+
+	return p.be.CompleteOrchestrationWorkItem(ctx, wi, changes)
 }
 
 // AbandonWorkItem implements TaskProcessor
@@ -129,13 +217,21 @@ func (p *orchestratorProcessor) AbandonWorkItem(ctx context.Context, wi WorkItem
 	return p.be.AbandonOrchestrationWorkItem(ctx, owi)
 }
 
+// applyWorkItem adds the new events from the work item to the orchestration state.
+//
+// The returned context will contain a new distributed tracing span that should be used for all
+// subsequent operations. The returned span will be nil if the work item was dropped.
+//
+// The returned boolean will be false if the work item was dropped.
+//
+// The caller is responsible for calling endOrchestratorSpan on the returned span.
 func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *OrchestrationWorkItem) (context.Context, trace.Span, bool) {
 	// Ignore work items for orchestrations that are completed or are in a corrupted state.
 	if !wi.State.IsValid() {
 		w.logger.Warnf("%v: orchestration state is invalid; dropping work item", wi.InstanceID)
 		return nil, nil, false
 	} else if wi.State.IsCompleted() {
-		w.logger.Warnf("%v: orchestration already completed; dropping work item", wi.InstanceID)
+		w.logger.Infof("%v: dropping work item(s) for %s orchestration: %s", wi.InstanceID, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()), helpers.HistoryListSummary(wi.NewEvents))
 		return nil, nil, false
 	} else if len(wi.NewEvents) == 0 {
 		w.logger.Warnf("%v: the work item had no events!", wi.InstanceID)
@@ -306,4 +402,27 @@ func addNotableEventsToSpan(events []*protos.HistoryEvent, span trace.Span) {
 				trace.WithAttributes(attribute.String("reason", resumed.Input.GetValue())))
 		}
 	}
+}
+
+func messageListSummary(messages []OrchestratorMessage) string {
+	var sb strings.Builder
+	sb.WriteString("[")
+	for i, m := range messages {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		if i >= 10 {
+			sb.WriteString("...")
+			break
+		}
+		name := helpers.GetHistoryEventTypeName(m.HistoryEvent)
+		sb.WriteString(name)
+		taskID := helpers.GetTaskId(m.HistoryEvent)
+		if taskID >= 0 {
+			sb.WriteRune('#')
+			sb.WriteString(strconv.FormatInt(int64(taskID), 10))
+		}
+	}
+	sb.WriteString("]")
+	return sb.String()
 }

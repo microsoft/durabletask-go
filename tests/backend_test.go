@@ -14,6 +14,7 @@ import (
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -184,7 +185,7 @@ func Test_ScheduleActivityTasks(t *testing.T) {
 	for i, be := range backends {
 		initTest(t, be, i, true)
 
-		wi, err := be.GetActivityWorkItem(ctx)
+		_, err := be.GetActivityWorkItem(ctx)
 		if !assert.ErrorIs(t, err, backend.ErrNoWorkItems) {
 			continue
 		}
@@ -209,7 +210,7 @@ func Test_ScheduleActivityTasks(t *testing.T) {
 		assert.ErrorIs(t, err, backend.ErrNoWorkItems)
 
 		// However, there should be an activity work item
-		wi, err = be.GetActivityWorkItem(ctx)
+		wi, err := be.GetActivityWorkItem(ctx)
 		if assert.NoError(t, err) && assert.NotNil(t, wi) {
 			assert.Equal(t, expectedName, wi.NewEvent.GetTaskScheduled().GetName())
 			assert.Equal(t, expectedInput, wi.NewEvent.GetTaskScheduled().GetInput().GetValue())
@@ -321,6 +322,7 @@ func Test_AbandonActivityWorkItem(t *testing.T) {
 			if err := be.AbandonActivityWorkItem(ctx, wi); assert.NoError(t, err) {
 				// Re-fetch the abandoned activity work item
 				wi, err = be.GetActivityWorkItem(ctx)
+				require.NoError(t, err)
 				assert.Equal(t, "MyActivity", wi.NewEvent.GetTaskScheduled().GetName())
 				assert.Equal(t, int32(123), wi.NewEvent.EventId)
 				assert.Nil(t, wi.NewEvent.GetTaskScheduled().GetInput())
@@ -335,7 +337,7 @@ func Test_UninitializedBackend(t *testing.T) {
 
 		err := be.AbandonOrchestrationWorkItem(ctx, nil)
 		assert.Equal(t, err, backend.ErrNotInitialized)
-		err = be.CompleteOrchestrationWorkItem(ctx, nil)
+		err = be.CompleteOrchestrationWorkItem(ctx, nil, backend.OrchestrationStateChanges{})
 		assert.Equal(t, err, backend.ErrNotInitialized)
 		err = be.CreateOrchestrationInstance(ctx, nil)
 		assert.Equal(t, err, backend.ErrNotInitialized)
@@ -443,32 +445,34 @@ func workItemProcessingTestLogic(
 				}
 
 				actions := getOrchestratorActions()
-				_, err := state.ApplyActions(actions, nil)
-				if assert.NoError(t, err) {
-					wi.State = state
-					err := be.CompleteOrchestrationWorkItem(ctx, wi)
+				state.AddActions(actions)
+
+				wi.State = state
+				changes, err := state.ProcessChanges(defaultChunkingConfig, nil, logger)
+				require.NoError(t, err)
+
+				err = be.CompleteOrchestrationWorkItem(ctx, wi, changes)
+				require.NoError(t, err)
+
+				// Validate runtime state
+				if state, ok = getOrchestrationRuntimeState(t, be, wi); ok {
+					createdTime, err := state.CreatedTime()
 					if assert.NoError(t, err) {
-						// Validate runtime state
-						if state, ok = getOrchestrationRuntimeState(t, be, wi); ok {
-							createdTime, err := state.CreatedTime()
-							if assert.NoError(t, err) {
-								assert.GreaterOrEqual(t, createdTime, startTime)
-							}
+						assert.GreaterOrEqual(t, createdTime, startTime)
+					}
 
-							// State should be initialized with only "old" events
-							assert.Empty(t, state.NewEvents())
-							assert.NotEmpty(t, state.OldEvents())
+					// State should be initialized with only "old" events
+					assert.Empty(t, state.NewEvents())
+					assert.NotEmpty(t, state.OldEvents())
 
-							// Validate orchestration metadata
-							if metadata, ok := getOrchestrationMetadata(t, be, state.InstanceID()); ok {
-								assert.Equal(t, defaultName, metadata.Name)
-								assert.Equal(t, defaultInput, metadata.SerializedInput)
-								assert.Equal(t, createdTime, metadata.CreatedAt)
-								assert.Equal(t, state.RuntimeStatus(), metadata.RuntimeStatus)
+					// Validate orchestration metadata
+					if metadata, ok := getOrchestrationMetadata(t, be, state.InstanceID()); ok {
+						assert.Equal(t, defaultName, metadata.Name)
+						assert.Equal(t, defaultInput, metadata.SerializedInput)
+						assert.Equal(t, createdTime, metadata.CreatedAt)
+						assert.Equal(t, state.RuntimeStatus(), metadata.RuntimeStatus)
 
-								validateMetadata(metadata)
-							}
-						}
+						validateMetadata(metadata)
 					}
 				}
 			}

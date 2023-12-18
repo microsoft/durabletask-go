@@ -13,24 +13,55 @@ import (
 )
 
 type activityProcessor struct {
-	be       Backend
-	executor ActivityExecutor
+	be                   Backend
+	executor             ActivityExecutor
+	logger               Logger
+	maxOutputSizeInBytes int
+}
+
+type activityWorkerConfig struct {
+	workerOptions        []NewTaskWorkerOptions
+	maxOutputSizeInBytes int
+}
+
+// ActivityWorkerOption is a function that configures an activity worker.
+type ActivityWorkerOption func(*activityWorkerConfig)
+
+// WithMaxConcurrentActivityInvocations sets the maximum number of concurrent activity invocations
+// that the worker can process. If this limit is exceeded, the worker will block until the number of
+// concurrent invocations drops below the limit.
+func WithMaxConcurrentActivityInvocations(n int32) ActivityWorkerOption {
+	return func(o *activityWorkerConfig) {
+		o.workerOptions = append(o.workerOptions, WithMaxParallelism(n))
+	}
+}
+
+// WithMaxActivityOutputSizeInKB sets the maximum size of an activity's output.
+// If an activity's output exceeds this size, the activity execution will fail with an error.
+func WithMaxActivityOutputSizeInKB(n int) ActivityWorkerOption {
+	return func(o *activityWorkerConfig) {
+		o.maxOutputSizeInBytes = n * 1024
+	}
 }
 
 type ActivityExecutor interface {
 	ExecuteActivity(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error)
 }
 
-func NewActivityTaskWorker(be Backend, executor ActivityExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
-	processor := newActivityProcessor(be, executor)
-	return NewTaskWorker(be, processor, logger, opts...)
-}
-
-func newActivityProcessor(be Backend, executor ActivityExecutor) TaskProcessor {
-	return &activityProcessor{
-		be:       be,
-		executor: executor,
+func NewActivityTaskWorker(be Backend, executor ActivityExecutor, logger Logger, opts ...ActivityWorkerOption) TaskWorker {
+	config := &activityWorkerConfig{}
+	for _, configure := range opts {
+		configure(config)
 	}
+
+	processor := &activityProcessor{
+		be:                   be,
+		executor:             executor,
+		logger:               logger,
+		maxOutputSizeInBytes: config.maxOutputSizeInBytes,
+	}
+
+	return NewTaskWorker(be, processor, logger, config.workerOptions...)
 }
 
 // Name implements TaskProcessor
@@ -77,22 +108,21 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, wi WorkItem) er
 		}
 		return err
 	}
-
-	awi.Result = result
-	return nil
-}
-
-// CompleteWorkItem implements TaskDispatcher
-func (ap *activityProcessor) CompleteWorkItem(ctx context.Context, wi WorkItem) error {
-	awi := wi.(*ActivityWorkItem)
-	if awi.Result == nil {
+	if result == nil {
 		return fmt.Errorf("can't complete work item '%s' with nil result", wi.Description())
 	}
-	if awi.Result.GetTaskCompleted() == nil && awi.Result.GetTaskFailed() == nil {
+	if result.GetTaskCompleted() == nil && result.GetTaskFailed() == nil {
 		return fmt.Errorf("can't complete work item '%s', which isn't TaskCompleted or TaskFailed", wi.Description())
 	}
 
-	return ap.be.CompleteActivityWorkItem(ctx, awi)
+	if p.maxOutputSizeInBytes > 0 && helpers.GetProtoSize(result) > p.maxOutputSizeInBytes {
+		err = fmt.Errorf("activity output size %d exceeds limit of %d bytes", helpers.GetProtoSize(result), p.maxOutputSizeInBytes)
+		awi.Result = helpers.NewTaskFailedEvent(awi.NewEvent.EventId, helpers.NewTaskFailureDetails(err))
+	} else {
+		awi.Result = result
+	}
+
+	return p.be.CompleteActivityWorkItem(ctx, awi)
 }
 
 // AbandonWorkItem implements TaskDispatcher

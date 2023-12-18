@@ -173,7 +173,7 @@ func Test_Grpc_Terminate_Recursive(t *testing.T) {
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
 		tasks := []task.Task{}
-		for i := 0; i < 5; i++ {
+		for i := 0; i < 3; i++ {
 			task := ctx.CallSubOrchestrator("L1")
 			tasks = append(tasks, task)
 		}

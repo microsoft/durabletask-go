@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,27 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
 )
+
+type orchestrationTestConfig struct {
+	orchestrationWorkerOptions []backend.OrchestrationWorkerOption
+	activityWorkerOptions      []backend.ActivityWorkerOption
+}
+
+type testOption func(*orchestrationTestConfig)
+
+func withMaxParallelism(maxParallelWorkItems int32) testOption {
+	return func(cfg *orchestrationTestConfig) {
+		cfg.orchestrationWorkerOptions = append(cfg.orchestrationWorkerOptions, backend.WithMaxConcurrentOrchestratorInvocations(maxParallelWorkItems))
+		cfg.activityWorkerOptions = append(cfg.activityWorkerOptions, backend.WithMaxConcurrentActivityInvocations(maxParallelWorkItems))
+	}
+}
+
+func withChunkingConfig(chunkingConfig backend.ChunkingConfiguration) testOption {
+	return func(cfg *orchestrationTestConfig) {
+		cfg.orchestrationWorkerOptions = append(cfg.orchestrationWorkerOptions, backend.WithChunkingConfiguration(chunkingConfig))
+		cfg.activityWorkerOptions = append(cfg.activityWorkerOptions, backend.WithMaxActivityOutputSizeInKB(chunkingConfig.MaxHistoryEventSizeInKB))
+	}
+}
 
 func Test_EmptyOrchestration(t *testing.T) {
 	// Registration
@@ -284,7 +307,7 @@ func Test_ActivityFanOut(t *testing.T) {
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
-	client, worker := initTaskHubWorker(ctx, r, backend.WithMaxParallelism(10))
+	client, worker := initTaskHubWorker(ctx, r, withMaxParallelism(10))
 	defer worker.Shutdown(ctx)
 
 	// Run the orchestration
@@ -455,22 +478,24 @@ func Test_ContinueAsNew_Events(t *testing.T) {
 		return nil, nil
 	})
 
-	// Initialization
+	// Initialization - configure chunking for this test as a way to increase code coverage
 	ctx := context.Background()
-	client, worker := initTaskHubWorker(ctx, r)
+	chunkingConfig := backend.ChunkingConfiguration{MaxHistoryEventCount: 1000}
+	client, worker := initTaskHubWorker(ctx, r, withChunkingConfig(chunkingConfig))
 	defer worker.Shutdown(ctx)
 
 	// Run the orchestration
+	eventCount := 100
 	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest", api.WithInput(0))
 	require.NoError(t, err)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < eventCount; i++ {
 		require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithEventPayload(false)))
 	}
 	require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", api.WithEventPayload(true)))
 	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-	assert.Equal(t, `10`, metadata.SerializedOutput)
+	assert.Equal(t, strconv.Itoa(eventCount), metadata.SerializedOutput)
 }
 
 func Test_ExternalEventContention(t *testing.T) {
@@ -546,23 +571,20 @@ func Test_ExternalEventOrchestration(t *testing.T) {
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestration", api.WithInput(0))
-	if assert.NoError(t, err) {
-		for i := 0; i < eventCount; i++ {
-			opts := api.WithEventPayload(i)
-			require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", opts))
-		}
-
-		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-
-		metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
-		require.NoError(t, err)
-		require.True(t, metadata.IsComplete())
-		require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	require.NoError(t, err)
+	for i := 0; i < eventCount; i++ {
+		opts := api.WithEventPayload(i)
+		require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent", opts))
 	}
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	require.True(t, metadata.IsComplete())
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	require.Equal(t, strconv.FormatBool(true), metadata.SerializedOutput)
 
 	// Validate the exported OTel traces
 	eventSizeInBytes := 1
+	require.NoError(t, sharedSpanProcessor.ForceFlush(ctx))
 	spans := exporter.GetSpans().Snapshots()
 	assertSpanSequence(t, spans,
 		assertOrchestratorCreated("ExternalEventOrchestration", id),
@@ -875,6 +897,251 @@ func Test_RecreateCompletedOrchestration(t *testing.T) {
 	)
 }
 
+func Test_ContinueAsNew_InfiniteLoop(t *testing.T) {
+	// Count how many times we run the orchestrator function. We set a hard cap of 1M iterations,
+	// but the orchestrator should fail before we reach this number.
+	maxTestIterations := 1000000
+	iteration := 0
+
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("InfiniteLoop", func(ctx *task.OrchestrationContext) (any, error) {
+		iteration++
+		if iteration <= maxTestIterations {
+			ctx.ContinueAsNew(nil)
+		}
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "InfiniteLoop")
+	require.NoError(t, err)
+
+	// Wait for the orchestration to complete
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.True(t, metadata.IsComplete())
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+	if assert.NotNil(t, metadata.FailureDetails) {
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "exceeded tight-loop continue-as-new limit")
+	}
+}
+
+func Test_OrchestrationOutputTooLarge(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("OrchestrationOutputTooLarge", func(ctx *task.OrchestrationContext) (any, error) {
+		// Return a payload that's larger than the configured max chunk size
+		return strings.Repeat("a", 3*1024), nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r, withChunkingConfig(backend.ChunkingConfiguration{MaxHistoryEventSizeInKB: 2}))
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration with an input that's larger than the max chunk size
+	id, err := client.ScheduleNewOrchestration(ctx, "OrchestrationOutputTooLarge")
+	require.NoError(t, err)
+
+	// Wait for the orchestration to fail
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.True(t, metadata.IsComplete())
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+	if assert.NotNil(t, metadata.FailureDetails) {
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "exceeds")
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "maximum")
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "size")
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "2048")
+	}
+}
+
+func Test_ActivityInputTooLarge(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ActivityInputTooLarge", func(ctx *task.OrchestrationContext) (any, error) {
+		// Return a payload that's larger than the configured max chunk size
+		largeInput := strings.Repeat("a", 3*1024)
+		return nil, ctx.CallActivity("SayHello", task.WithActivityInput(largeInput)).Await(nil)
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r, withChunkingConfig(backend.ChunkingConfiguration{MaxHistoryEventSizeInKB: 2}))
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration with an input that's larger than the max chunk size
+	id, err := client.ScheduleNewOrchestration(ctx, "ActivityInputTooLarge")
+	require.NoError(t, err)
+
+	// Wait for the orchestration to fail
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.True(t, metadata.IsComplete())
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+	if assert.NotNil(t, metadata.FailureDetails) {
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "exceeds")
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "maximum")
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "size")
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "2048")
+	}
+}
+
+func Test_ActivityOutputTooLarge(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ActivityOutputTooLarge", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CallActivity("SayHello", task.WithActivityInput("世界")).Await(nil); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		// Return a payload that's larger than the configured max chunk size
+		return strings.Repeat("a", 3*1024), nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r, withChunkingConfig(backend.ChunkingConfiguration{MaxHistoryEventSizeInKB: 2}))
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration with an input that's larger than the max chunk size
+	id, err := client.ScheduleNewOrchestration(ctx, "ActivityOutputTooLarge")
+	require.NoError(t, err)
+
+	// Wait for the orchestration to fail
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.True(t, metadata.IsComplete())
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+	if assert.NotNil(t, metadata.FailureDetails) {
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "SayHello")
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "exceeds")
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "limit")
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "size")
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "2048")
+	}
+}
+
+// Test_ChunkActivityFanOut_MaxEventCount tests the case where the degree of fan out exceeds max chunking configuration.
+// The point of this test is to make sure that the orchestration completes successfully. It does not test the chunking behavior itself.
+func Test_ChunkActivityFanOut_MaxEventCount(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ActivityFanOut", func(ctx *task.OrchestrationContext) (any, error) {
+		tasks := []task.Task{}
+		for i := 0; i < 100; i++ {
+			tasks = append(tasks, ctx.CallActivity("PlusOne", task.WithActivityInput(0)))
+		}
+		results := []int{}
+		for _, t := range tasks {
+			var result int
+			if err := t.Await(&result); err != nil {
+				return nil, err
+			}
+			results = append(results, result)
+		}
+		sum := 0
+		for _, r := range results {
+			sum += r
+		}
+		return sum, nil
+	})
+	r.AddActivityN("PlusOne", func(ctx task.ActivityContext) (any, error) {
+		var input int
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		return input + 1, nil
+	})
+
+	// Force the orchestrator to chunk the history into batches of 10 events
+	chunkingConfig := backend.ChunkingConfiguration{MaxHistoryEventCount: 10}
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r, withChunkingConfig(chunkingConfig))
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "ActivityFanOut")
+	require.NoError(t, err)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	assert.Equal(t, `100`, metadata.SerializedOutput)
+}
+
+// Test_ChunkContinueAsNew test the case where an orchestration receives 30 events and then continues as new
+// after each one is processed. The chunk size is set to 10, so we expect there are at least 3 chunks.
+// We don't measure the chunking behavior here (we can't) but we do want to make sure that the orchestration
+// completes successfully with the expected output, which is the number of events processed.
+func Test_ChunkContinueAsNew(t *testing.T) {
+	targetEventCount := 30
+
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
+		var currentValue int
+		if err := ctx.GetInput(&currentValue); err != nil {
+			return nil, err
+		}
+
+		if currentValue == 0 {
+			// Wait for 1 second to give the client a chance to raise all the events
+			time.Sleep(1 * time.Second)
+		}
+
+		// Break out of the loop once we've received all N events
+		if currentValue == targetEventCount {
+			return currentValue, nil
+		}
+
+		// Wait for an event
+		if err := ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(nil); err != nil {
+			return nil, err
+		}
+
+		// Loop until we've received N events
+		ctx.ContinueAsNew(currentValue+1, task.WithKeepUnprocessedEvents())
+		return -1, nil
+	})
+
+	// Force the orchestrator to chunk the history into batches of 10 events
+	chunkingConfig := backend.ChunkingConfiguration{MaxHistoryEventCount: 10}
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r, withChunkingConfig(chunkingConfig))
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest", api.WithInput(0))
+	require.NoError(t, err)
+
+	// Raise N events to the orchestration
+	for i := 0; i < int(targetEventCount); i++ {
+		require.NoError(t, client.RaiseEvent(ctx, id, "MyEvent"))
+	}
+
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+	assert.Equal(t, fmt.Sprintf("%d", targetEventCount), metadata.SerializedOutput)
+}
+
 func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
@@ -1007,19 +1274,24 @@ func Test_SingleActivity_ReuseInstanceIDError(t *testing.T) {
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
-	id, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
+	_, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}
 }
 
-func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {
+func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...testOption) (backend.TaskHubClient, backend.TaskHubWorker) {
+	var config orchestrationTestConfig
+	for _, configure := range opts {
+		configure(&config)
+	}
+
 	// TODO: Switch to options pattern
 	logger := backend.DefaultLogger()
 	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions(""), logger)
 	executor := task.NewTaskExecutor(r)
-	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger, opts...)
-	activityWorker := backend.NewActivityTaskWorker(be, executor, logger, opts...)
+	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger, config.orchestrationWorkerOptions...)
+	activityWorker := backend.NewActivityTaskWorker(be, executor, logger, config.activityWorkerOptions...)
 	taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
 	if err := taskHubWorker.Start(ctx); err != nil {
 		panic(err)

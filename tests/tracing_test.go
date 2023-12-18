@@ -23,6 +23,7 @@ type (
 var (
 	initTracingOnce     sync.Once
 	sharedTraceExporter = tracetest.NewInMemoryExporter()
+	sharedSpanProcessor = trace.NewSimpleSpanProcessor(sharedTraceExporter)
 )
 
 func assertSpanSequence(t assert.TestingT, spans []trace.ReadOnlySpan, spanAsserts ...spanValidator) {
@@ -221,8 +222,20 @@ func initTracing() *tracetest.InMemoryExporter {
 	// The global tracer provider can only be initialized once.
 	// Subsequent initializations will silently fail.
 	initTracingOnce.Do(func() {
-		processor := trace.NewSimpleSpanProcessor(sharedTraceExporter)
-		provider := trace.NewTracerProvider(trace.WithSpanProcessor(processor))
+		// Inspired by this sample: https://github.com/open-telemetry/opentelemetry-go/blob/main/example/zipkin/main.go
+		// zexp, _ := zipkin.New("http://localhost:9411/api/v2/spans")
+
+		// NOTE: The simple span processor is not recommended for production.
+		//       Instead, the batch span processor should be used for production.
+		// zprocessor := trace.NewSimpleSpanProcessor(zexp)
+		// processor := trace.NewSimpleSpanProcessor(sharedTraceExporter)
+		provider := trace.NewTracerProvider(
+			// trace.WithSpanProcessor(processor),
+			trace.WithSpanProcessor(sharedSpanProcessor),
+			// trace.WithSpanProcessor(zprocessor),
+			trace.WithSampler(trace.AlwaysSample()),
+		)
+
 		otel.SetTracerProvider(provider)
 	})
 
