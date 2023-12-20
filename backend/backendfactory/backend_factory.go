@@ -2,6 +2,7 @@ package backendfactory
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/microsoft/durabletask-go/backend"
@@ -25,23 +26,22 @@ func getSqliteBackend(metadata map[string]string, log backend.Logger) (backend.B
 		FilePath:                 "",
 	}
 
-	if connectionString, ok := metadata["connectionString"]; ok {
-		sqliteOptions.FilePath = connectionString
-	}
-
-	if orchestrationLockTimeout, ok := metadata["orchestrationLockTimeout"]; ok {
-		if duration, err := time.ParseDuration(orchestrationLockTimeout); err == nil {
-			sqliteOptions.OrchestrationLockTimeout = duration
-		} else {
-			log.Errorf("Invalid orchestrationLockTimeout provided in backend component: %v", err)
-		}
-	}
-
-	if activityLockTimeout, ok := metadata["activityLockTimeout"]; ok {
-		if duration, err := time.ParseDuration(activityLockTimeout); err == nil {
-			sqliteOptions.ActivityLockTimeout = duration
-		} else {
-			log.Errorf("Invalid activityLockTimeout provided in backend component: %v", err)
+	for key, value := range metadata {
+		switch strings.ToLower(key) {
+		case "connectionstring":
+			sqliteOptions.FilePath = value
+		case "orchestrationlocktimeout":
+			if duration, err := time.ParseDuration(value); err == nil {
+				sqliteOptions.OrchestrationLockTimeout = duration
+			} else {
+				log.Errorf("Invalid orchestrationLockTimeout provided in backend workflow component: %v", err)
+			}
+		case "activitylocktimeout":
+			if duration, err := time.ParseDuration(value); err == nil {
+				sqliteOptions.ActivityLockTimeout = duration
+			} else {
+				log.Errorf("Invalid activityLockTimeout provided in backend workflow component: %v", err)
+			}
 		}
 	}
 
