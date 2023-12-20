@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	SqliteBackendType = "workflowbackend.sqlite"
+	SqliteBackendType = "sqlite"
 )
 
 type BackendFactory func(metadata map[string]string, log backend.Logger) (backend.Backend, error)
@@ -33,7 +33,7 @@ func getSqliteBackend(metadata map[string]string, log backend.Logger) (backend.B
 		if duration, err := time.ParseDuration(orchestrationLockTimeout); err == nil {
 			sqliteOptions.OrchestrationLockTimeout = duration
 		} else {
-			log.Errorf("Invalid orchestrationLockTimeout provided in backend workflow component: %v", err)
+			log.Errorf("Invalid orchestrationLockTimeout provided in backend component: %v", err)
 		}
 	}
 
@@ -41,14 +41,14 @@ func getSqliteBackend(metadata map[string]string, log backend.Logger) (backend.B
 		if duration, err := time.ParseDuration(activityLockTimeout); err == nil {
 			sqliteOptions.ActivityLockTimeout = duration
 		} else {
-			log.Errorf("Invalid activityLockTimeout provided in backend workflow component: %v", err)
+			log.Errorf("Invalid activityLockTimeout provided in backend component: %v", err)
 		}
 	}
 
 	return sqlite.NewSqliteBackend(sqliteOptions, log), nil
 }
 
-func InitializeWorkflowBackend(backendType string, metadata map[string]string, log backend.Logger) (backend.Backend, error) {
+func InitializeBackend(backendType string, metadata map[string]string, log backend.Logger) (backend.Backend, error) {
 	if factory, ok := backendFactories[backendType]; ok {
 		return factory(metadata, log)
 	}
