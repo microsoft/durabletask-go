@@ -282,29 +282,12 @@ func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInst
 	if req.GetPurgeInstanceFilter() != nil {
 		return nil, errors.New("multi-instance purge is not unimplemented")
 	}
-	subOrchestrationInstances := make([]api.InstanceID, 0, 10)
-	id := api.InstanceID(req.GetInstanceId())
-	var err error
-	if req.Recursive {
-		// Fetching sub-orchestration instances
-		subOrchestrationInstances, err = GetSubOrchestrationInstances(ctx, g.backend, id, true)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
-		}
+	count, err := purgeOrchestrationState(ctx, g.backend, api.InstanceID(req.GetInstanceId()), req.Recursive)
+	resp := &protos.PurgeInstancesResponse{DeletedInstanceCount: int32(count)}
+	if err != nil {
+		return resp, fmt.Errorf("failed to purge orchestration state: %w", err)
 	}
-	// Purge parent orchestration instance
-	if err := g.backend.PurgeOrchestrationState(ctx, id); err != nil {
-		return nil, fmt.Errorf("failed to purge orchestration instance %s: %w", id, err)
-	}
-
-	// Purge sub-orchestration instances
-	for _, iid := range subOrchestrationInstances {
-		subReq := &protos.PurgeInstancesRequest{Request: &protos.PurgeInstancesRequest_InstanceId{InstanceId: string(id)}, Recursive: req.Recursive}
-		if _, err := g.PurgeInstances(ctx, subReq); err != nil {
-			return nil, fmt.Errorf("failed to purge sub-orchestration instance %s: %w", iid, err)
-		}
-	}
-	return &protos.PurgeInstancesResponse{DeletedInstanceCount: int32(len(subOrchestrationInstances) + 1)}, nil
+	return resp, nil
 }
 
 // QueryInstances implements protos.TaskHubSidecarServiceServer
@@ -340,25 +323,8 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
 	id := api.InstanceID(req.InstanceId)
-	// Parent instance needs to be terminated first
 	if err := g.backend.AddNewOrchestrationEvent(ctx, id, e); err != nil {
-		return nil, fmt.Errorf("failed to terminate orchestration instance %s: %w", id, err)
-	}
-	if req.Recursive {
-		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, g.backend, id, false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
-		}
-		for _, iid := range subOrchestrationInstances {
-			subReq := &protos.TerminateRequest{
-				InstanceId: string(iid),
-				Recursive:  req.Recursive,
-			}
-			// Terminate sub-orchestrations
-			if _, err := g.TerminateInstance(ctx, subReq); err != nil {
-				return nil, fmt.Errorf("failed to terminate sub-orchestration instance %s: %w", iid, err)
-			}
-		}
+		return nil, fmt.Errorf("failed to terminate orchestration instance: %w", err)
 	}
 	return &protos.TerminateResponse{}, nil
 }

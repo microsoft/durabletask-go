@@ -140,23 +140,9 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 		}
 	}
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
-	// Parent instance needs to be terminated first
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
-		return fmt.Errorf("failed to terminate orchestration instance %s: %w", id, err)
+		return fmt.Errorf("failed to terminate orchestration: %w", err)
 	}
-	if req.Recursive {
-		subOrchestrationInstances, err := GetSubOrchestrationInstances(ctx, c.be, id, false)
-		if err != nil {
-			return fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
-		}
-		for _, iid := range subOrchestrationInstances {
-			// Terminate sub-orchestrations
-			if err := c.TerminateOrchestration(ctx, iid, opts...); err != nil {
-				return fmt.Errorf("failed to terminate sub-orchestration instance %s: %w", iid, err)
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -214,25 +200,8 @@ func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.Inst
 			return fmt.Errorf("failed to configure purge request: %w", err)
 		}
 	}
-	subOrchestrationInstances := make([]api.InstanceID, 0, 10)
-	var err error
-	if req.Recursive {
-		// Fetching sub-orchestration instances
-		subOrchestrationInstances, err = GetSubOrchestrationInstances(ctx, c.be, id, true)
-		if err != nil {
-			return fmt.Errorf("failed to fetch sub-orchestration instances: %w", err)
-		}
-	}
-	// Purge parent orchestration instance
-	if err := c.be.PurgeOrchestrationState(ctx, id); err != nil {
-		return fmt.Errorf("failed to purge orchestration instance %s: %w", id, err)
-	}
-
-	// Purge sub-orchestration instances
-	for _, iid := range subOrchestrationInstances {
-		if err := c.PurgeOrchestrationState(ctx, iid, opts...); err != nil {
-			return fmt.Errorf("failed to purge sub-orchestration instance %s: %w", iid, err)
-		}
+	if _, err := purgeOrchestrationState(ctx, c.be, id, req.Recursive); err != nil {
+		return fmt.Errorf("failed to purge orchestration state: %w", err)
 	}
 	return nil
 }
