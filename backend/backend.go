@@ -125,28 +125,30 @@ func UnmarshalHistoryEvent(bytes []byte) (*HistoryEvent, error) {
 }
 
 func purgeOrchestrationState(ctx context.Context, be Backend, iid api.InstanceID, recursive bool) (int, error) {
-	owi := &OrchestrationWorkItem{
-		InstanceID: iid,
-	}
-	state, err := be.GetOrchestrationRuntimeState(ctx, owi)
-	if err != nil {
-		return 0, fmt.Errorf("failed to fetch orchestration state: %w", err)
-	}
-	if len(state.NewEvents())+len(state.oldEvents) == 0 {
-		// If there are no events, the orchestration instance doesn't exist
-		return 0, api.ErrInstanceNotFound
-	}
-	if !state.IsCompleted() {
-		// Orchestration must be completed before purging its state
-		return 0, api.ErrNotCompleted
-	}
 	deletedInstanceCount := 0
-	subOrchestrationInstances := getSubOrchestrationInstances(state.OldEvents(), state.NewEvents())
-	for _, subOrchestrationInstance := range subOrchestrationInstances {
-		count, err := purgeOrchestrationState(ctx, be, subOrchestrationInstance, recursive)
-		deletedInstanceCount += count
+	if recursive {
+		owi := &OrchestrationWorkItem{
+			InstanceID: iid,
+		}
+		state, err := be.GetOrchestrationRuntimeState(ctx, owi)
 		if err != nil {
-			return deletedInstanceCount, fmt.Errorf("failed to purge sub-orchestration: %w", err)
+			return 0, fmt.Errorf("failed to fetch orchestration state: %w", err)
+		}
+		if len(state.NewEvents())+len(state.oldEvents) == 0 {
+			// If there are no events, the orchestration instance doesn't exist
+			return 0, api.ErrInstanceNotFound
+		}
+		if !state.IsCompleted() {
+			// Orchestration must be completed before purging its state
+			return 0, api.ErrNotCompleted
+		}
+		subOrchestrationInstances := getSubOrchestrationInstances(state.OldEvents(), state.NewEvents())
+		for _, subOrchestrationInstance := range subOrchestrationInstances {
+			count, err := purgeOrchestrationState(ctx, be, subOrchestrationInstance, recursive)
+			deletedInstanceCount += count
+			if err != nil {
+				return deletedInstanceCount, fmt.Errorf("failed to purge sub-orchestration: %w", err)
+			}
 		}
 	}
 	if err := be.PurgeOrchestrationState(ctx, iid); err != nil {

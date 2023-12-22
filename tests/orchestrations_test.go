@@ -751,7 +751,7 @@ func Test_TerminateOrchestration_Recursive(t *testing.T) {
 	defer worker.Shutdown(ctx)
 
 	// Test terminating with and without recursion
-	for _, recurse := range []bool{false} {
+	for _, recurse := range []bool{true, false} {
 		t.Run(fmt.Sprintf("Recurse = %v", recurse), func(t *testing.T) {
 			// Run the orchestration, which will block waiting for external events
 			id, err := client.ScheduleNewOrchestration(ctx, "Root")
@@ -958,7 +958,7 @@ func Test_PurgeOrchestration_Recursive(t *testing.T) {
 	defer worker.Shutdown(ctx)
 
 	// Test terminating with and without recursion
-	for _, recurse := range []bool{true} {
+	for _, recurse := range []bool{true, false} {
 		t.Run(fmt.Sprintf("Recurse = %v", recurse), func(t *testing.T) {
 			// Run the orchestration, which will block waiting for external events
 			id, err := client.ScheduleNewOrchestration(ctx, "Root")
