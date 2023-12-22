@@ -16,8 +16,8 @@ on:
 env:
   # Configure protoc and go grpc plugin
   PROTOC_VERSION: "25.x"
-  PROTOC_GEN_GO: "v1.28"
-  PROTOC_GEN_GO_GRPC: "v1.2"
+  PROTOC_GEN_GO: "v1.30"
+  PROTOC_GEN_GO_GRPC: "v1.3"
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:

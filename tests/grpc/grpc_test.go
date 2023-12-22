@@ -228,7 +228,7 @@ func Test_Grpc_Terminate_Recursive(t *testing.T) {
 	}
 }
 
-func Test_Grpc_ReuseInstanceIDSkip(t *testing.T) {
+func Test_Grpc_ReuseInstanceIDIgnore(t *testing.T) {
 	delayTime := 2 * time.Second
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
@@ -252,13 +252,9 @@ func Test_Grpc_ReuseInstanceIDSkip(t *testing.T) {
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
 	instanceID := api.InstanceID("SKIP_IF_RUNNING_OR_COMPLETED")
-	reuseIdPolicy := &protos.OrchestrationIdReusePolicy{
-		Action: protos.CreateOrchestrationAction_IGNORE,
-		OperationStatus: []protos.OrchestrationStatus{
-			protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING,
-			protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
-			protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING,
-		},
+	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
+		Action:          api.REUSE_ID_ACTION_IGNORE,
+		OperationStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
 	}
 
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
@@ -304,13 +300,9 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
 	instanceID := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
-	reuseIdPolicy := &protos.OrchestrationIdReusePolicy{
-		Action: protos.CreateOrchestrationAction_TERMINATE,
-		OperationStatus: []protos.OrchestrationStatus{
-			protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING,
-			protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
-			protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING,
-		},
+	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
+		Action:          api.REUSE_ID_ACTION_TERMINATE,
+		OperationStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
 	}
 
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
@@ -332,7 +324,7 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 	assert.True(t, pivotTime.Before(metadata.CreatedAt))
 }
 
-func Test_Grpc_ReuseInstanceIDThrow(t *testing.T) {
+func Test_Grpc_ReuseInstanceIDError(t *testing.T) {
 	delayTime := 4 * time.Second
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
