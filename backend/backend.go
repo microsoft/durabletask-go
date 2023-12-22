@@ -124,6 +124,8 @@ func UnmarshalHistoryEvent(bytes []byte) (*HistoryEvent, error) {
 	return e, nil
 }
 
+// purgeOrchestrationState purges the orchestration state, including sub-orchestrations if [recursive] is true.
+// Returns (deletedInstanceCount, error), where deletedInstanceCount is the number of instances deleted.
 func purgeOrchestrationState(ctx context.Context, be Backend, iid api.InstanceID, recursive bool) (int, error) {
 	deletedInstanceCount := 0
 	if recursive {
@@ -144,19 +146,23 @@ func purgeOrchestrationState(ctx context.Context, be Backend, iid api.InstanceID
 		}
 		subOrchestrationInstances := getSubOrchestrationInstances(state.OldEvents(), state.NewEvents())
 		for _, subOrchestrationInstance := range subOrchestrationInstances {
+			// Recursively purge sub-orchestrations
 			count, err := purgeOrchestrationState(ctx, be, subOrchestrationInstance, recursive)
+			// `count` sub-orchestrations have been successfully purged (even in case of error)
 			deletedInstanceCount += count
 			if err != nil {
 				return deletedInstanceCount, fmt.Errorf("failed to purge sub-orchestration: %w", err)
 			}
 		}
 	}
+	// Purging root orchestration
 	if err := be.PurgeOrchestrationState(ctx, iid); err != nil {
 		return deletedInstanceCount, err
 	}
 	return deletedInstanceCount + 1, nil
 }
 
+// terminateSubOrchestrationInstances submits termination requests to sub-orchestrations if [et.Recurse] is true.
 func terminateSubOrchestrationInstances(ctx context.Context, be Backend, iid api.InstanceID, state *OrchestrationRuntimeState, et *protos.ExecutionTerminatedEvent) error {
 	if !et.Recurse {
 		return nil
@@ -164,6 +170,7 @@ func terminateSubOrchestrationInstances(ctx context.Context, be Backend, iid api
 	subOrchestrationInstances := getSubOrchestrationInstances(state.OldEvents(), state.NewEvents())
 	for _, subOrchestrationInstance := range subOrchestrationInstances {
 		e := helpers.NewExecutionTerminatedEvent(et.Input, et.Recurse)
+		// Adding terminate event to sub-orchestration instance
 		if err := be.AddNewOrchestrationEvent(ctx, subOrchestrationInstance, e); err != nil {
 			return fmt.Errorf("failed to submit termination request to sub-orchestration: %w", err)
 		}
@@ -171,6 +178,7 @@ func terminateSubOrchestrationInstances(ctx context.Context, be Backend, iid api
 	return nil
 }
 
+// getSubOrchestrationInstances returns the instance IDs of all sub-orchestrations in the specified events.
 func getSubOrchestrationInstances(oldEvents []*HistoryEvent, newEvents []*HistoryEvent) []api.InstanceID {
 	subOrchestrationInstances := make([]api.InstanceID, 0, len(oldEvents)+len(newEvents))
 	for _, e := range oldEvents {
