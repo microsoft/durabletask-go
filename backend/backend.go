@@ -165,7 +165,7 @@ func terminateSubOrchestrationInstances(ctx context.Context, be Backend, iid api
 	for _, subOrchestrationInstance := range subOrchestrationInstances {
 		e := helpers.NewExecutionTerminatedEvent(et.Input, et.Recurse)
 		if err := be.AddNewOrchestrationEvent(ctx, subOrchestrationInstance, e); err != nil {
-			return fmt.Errorf("failed to terminate sub-orchestration: %w", err)
+			return fmt.Errorf("failed to submit termination request to sub-orchestration: %w", err)
 		}
 	}
 	return nil

@@ -141,7 +141,7 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 	}
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
-		return fmt.Errorf("failed to terminate orchestration: %w", err)
+		return fmt.Errorf("failed to submit termination request:: %w", err)
 	}
 	return nil
 }

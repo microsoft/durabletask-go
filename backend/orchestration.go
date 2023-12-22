@@ -122,7 +122,9 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 		}
 	}
 	if terminateEvent != nil && wi.State.IsCompleted() {
-		terminateSubOrchestrationInstances(ctx, w.be, wi.InstanceID, wi.State, terminateEvent)
+		if err := terminateSubOrchestrationInstances(ctx, w.be, wi.InstanceID, wi.State, terminateEvent); err != nil {
+			return err
+		}
 	}
 	return nil
 }

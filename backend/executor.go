@@ -323,7 +323,7 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
-		return nil, fmt.Errorf("failed to terminate orchestration instance: %w", err)
+		return nil, fmt.Errorf("failed to submit termination request: %w", err)
 	}
 	return &protos.TerminateResponse{}, nil
 }
