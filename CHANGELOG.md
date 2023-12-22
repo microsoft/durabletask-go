@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## Changed
+### Added
+
+- Cascading Terminate and Purge support ([#47](https://github.com/microsoft/durabletask-go/pull/47)) - by [@shivamkm07](https://github.com/shivamkm07)
+
+### Changed
 
 - Bump google.golang.org/grpc from 1.53.0 to 1.56.3 ([#39](https://github.com/microsoft/durabletask-go/pull/39))
+- Updated durabletask-protobuf submodule to [`4207e1d`](https://github.com/microsoft/durabletask-protobuf/commit/4207e1dbd14cedc268f69c3befee60fcaad19367)
 
 ## [v0.4.0] - 2023-12-18
 
