@@ -282,11 +282,12 @@ func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInst
 	if req.GetPurgeInstanceFilter() != nil {
 		return nil, errors.New("multi-instance purge is not unimplemented")
 	}
-
-	if err := g.backend.PurgeOrchestrationState(ctx, api.InstanceID(req.GetInstanceId())); err != nil {
-		return nil, err
+	count, err := purgeOrchestrationState(ctx, g.backend, api.InstanceID(req.GetInstanceId()), req.Recursive)
+	resp := &protos.PurgeInstancesResponse{DeletedInstanceCount: int32(count)}
+	if err != nil {
+		return resp, fmt.Errorf("failed to purge orchestration state: %w", err)
 	}
-	return &protos.PurgeInstancesResponse{DeletedInstanceCount: 1}, nil
+	return resp, nil
 }
 
 // QueryInstances implements protos.TaskHubSidecarServiceServer
@@ -322,9 +323,8 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to submit termination request: %w", err)
 	}
-
 	return &protos.TerminateResponse{}, nil
 }
 

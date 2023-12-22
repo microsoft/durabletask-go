@@ -211,7 +211,7 @@ func Test_Grpc_Terminate_Recursive(t *testing.T) {
 
 			// Terminate the root orchestration and mark whether a recursive termination
 			output := fmt.Sprintf("Recursive termination = %v", recurse)
-			opts := []api.TerminateOptions{api.WithOutput(output), api.WithRecursive(recurse)}
+			opts := []api.TerminateOptions{api.WithOutput(output), api.WithRecursiveTerminate(recurse)}
 			require.NoError(t, grpcClient.TerminateOrchestration(ctx, id, opts...))
 
 			// Wait for the root orchestration to complete and verify its terminated status
