@@ -26,9 +26,9 @@ var schema string
 var emptyString string = ""
 
 type SqliteOptions struct {
-	OrchestrationLockTimeout time.Duration
-	ActivityLockTimeout      time.Duration
-	FilePath                 string
+	OrchestrationLockTimeout time.Duration `mapstructure:"orchestrationLockTimeout"`
+	ActivityLockTimeout      time.Duration `mapstructure:"activityLockTimeout"`
+	FilePath                 string        `mapstructure:"filePath"`
 }
 
 type sqliteBackend struct {
