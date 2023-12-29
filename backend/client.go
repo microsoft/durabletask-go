@@ -24,7 +24,7 @@ type TaskHubClient interface {
 	RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, opts ...api.RaiseEventOptions) error
 	SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	ResumeOrchestration(ctx context.Context, id api.InstanceID, reason string) error
-	PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error
+	PurgeOrchestrationState(ctx context.Context, id api.InstanceID, opts ...api.PurgeOptions) error
 }
 
 type backendClient struct {
@@ -139,10 +139,9 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 			return fmt.Errorf("failed to configure termination request: %w", err)
 		}
 	}
-
 	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
-		return fmt.Errorf("failed to add terminate event: %w", err)
+		return fmt.Errorf("failed to submit termination request:: %w", err)
 	}
 	return nil
 }
@@ -194,8 +193,14 @@ func (c *backendClient) ResumeOrchestration(ctx context.Context, id api.Instance
 //
 // [api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
 // [api.ErrNotCompleted] is returned if the specified orchestration instance is still running.
-func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error {
-	if err := c.be.PurgeOrchestrationState(ctx, id); err != nil {
+func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.InstanceID, opts ...api.PurgeOptions) error {
+	req := &protos.PurgeInstancesRequest{Request: &protos.PurgeInstancesRequest_InstanceId{InstanceId: string(id)}, Recursive: true}
+	for _, configure := range opts {
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure purge request: %w", err)
+		}
+	}
+	if _, err := purgeOrchestrationState(ctx, c.be, id, req.Recursive); err != nil {
 		return fmt.Errorf("failed to purge orchestration state: %w", err)
 	}
 	return nil

@@ -66,6 +66,13 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 	}
 	w.logger.Debugf("%v: got orchestration runtime state: %s", wi.InstanceID, getOrchestrationStateDescription(wi))
 
+	var terminateEvent *protos.ExecutionTerminatedEvent = nil
+	for _, e := range wi.NewEvents {
+		if et := e.GetExecutionTerminated(); et != nil {
+			terminateEvent = et
+			break
+		}
+	}
 	if ctx, span, ok := w.applyWorkItem(ctx, wi); ok {
 		defer func() {
 			// Note that the span and ctx references may be updated inside the continue-as-new loop.
@@ -112,6 +119,11 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 				w.logger.Infof("%v: '%s' completed with a %s status.", wi.InstanceID, name, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()))
 			}
 			break
+		}
+	}
+	if terminateEvent != nil && wi.State.IsCompleted() {
+		if err := terminateSubOrchestrationInstances(ctx, w.be, wi.InstanceID, wi.State, terminateEvent); err != nil {
+			return err
 		}
 	}
 	return nil

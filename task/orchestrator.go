@@ -542,38 +542,6 @@ func (ctx *OrchestrationContext) onExecutionResumed(er *protos.ExecutionResumedE
 }
 
 func (ctx *OrchestrationContext) onExecutionTerminated(et *protos.ExecutionTerminatedEvent) error {
-	if et.Recurse {
-		// Use a map to track which sub-orchestrations have been created but not completed
-		instancesToTerminate := make(map[int32]string)
-		for _, e := range ctx.oldEvents {
-			if created := e.GetSubOrchestrationInstanceCreated(); created != nil {
-				instancesToTerminate[e.EventId] = created.InstanceId
-			} else if completed := e.GetSubOrchestrationInstanceCompleted(); completed != nil {
-				delete(instancesToTerminate, completed.TaskScheduledId)
-			} else if failed := e.GetSubOrchestrationInstanceFailed(); failed != nil {
-				delete(instancesToTerminate, failed.TaskScheduledId)
-			}
-		}
-		for _, e := range ctx.newEvents {
-			if created := e.GetSubOrchestrationInstanceCreated(); created != nil {
-				instancesToTerminate[e.EventId] = created.InstanceId
-			} else if completed := e.GetSubOrchestrationInstanceCompleted(); completed != nil {
-				delete(instancesToTerminate, completed.TaskScheduledId)
-			} else if failed := e.GetSubOrchestrationInstanceFailed(); failed != nil {
-				delete(instancesToTerminate, failed.TaskScheduledId)
-			}
-		}
-
-		// Create a terminate action for each sub-orchestration that has not yet completed
-		for _, instanceID := range instancesToTerminate {
-			terminateAction := helpers.NewTerminateOrchestrationAction(
-				ctx.getNextSequenceNumber(),
-				instanceID,
-				et.Recurse,
-				et.Input)
-			ctx.pendingActions[terminateAction.Id] = terminateAction
-		}
-	}
 	if err := ctx.setCompleteInternal(et.Input, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, nil); err != nil {
 		return err
 	}
