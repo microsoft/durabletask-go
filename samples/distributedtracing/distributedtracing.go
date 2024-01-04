@@ -138,8 +138,7 @@ func DoWorkActivity(ctx task.ActivityContext) (any, error) {
 		return "", err
 	}
 
-	parentCtx := ctx.Context()
-	_, childSpan := tracer.Start(parentCtx, "activity-subwork")
+	_, childSpan := tracer.Start(ctx.Context(), "activity-subwork")
 	// Simulate doing some sub work
 	select {
 	case <-time.After(2 * time.Second):
