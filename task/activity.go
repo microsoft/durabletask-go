@@ -3,7 +3,9 @@ package task
 import (
 	"context"
 
+	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -52,11 +54,15 @@ type activityContext struct {
 type Activity func(ctx ActivityContext) (any, error)
 
 func newTaskActivityContext(ctx context.Context, taskID int32, ts *protos.TaskScheduledEvent) *activityContext {
+	spanContext, err := helpers.SpanContextFromTraceContext(ts.ParentTraceContext)
+	if err != nil {
+		return nil
+	}
 	return &activityContext{
 		TaskID:   taskID,
 		Name:     ts.Name,
 		rawInput: []byte(ts.Input.GetValue()),
-		ctx:      ctx,
+		ctx:      trace.ContextWithRemoteSpanContext(ctx, spanContext),
 	}
 }
 

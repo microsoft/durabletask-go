@@ -18,6 +18,8 @@ import (
 	"github.com/microsoft/durabletask-go/task"
 )
 
+var tracer = otel.Tracer("distributedtracing-example")
+
 func main() {
 	// Tracing can be configured independently of the orchestration code.
 	tp, err := ConfigureZipkinTracing()
@@ -135,6 +137,17 @@ func DoWorkActivity(ctx task.ActivityContext) (any, error) {
 	if err := ctx.GetInput(&duration); err != nil {
 		return "", err
 	}
+
+	parentCtx := ctx.Context()
+	_, childSpan := tracer.Start(parentCtx, "activity-subwork")
+	// Simulate doing some sub work
+	select {
+	case <-time.After(2 * time.Second):
+		// Ok
+	case <-ctx.Context().Done():
+		return nil, ctx.Context().Err()
+	}
+	childSpan.End()
 
 	// Simulate doing work
 	select {

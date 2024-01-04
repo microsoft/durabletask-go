@@ -94,7 +94,7 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 	executor backend.Executor,
 	req *protos.ActivityRequest,
 ) {
-	var tc *protos.TraceContext = nil // TODO: How to populate trace context?
+	var tc *protos.TraceContext = req.ParentTraceContext
 	event := helpers.NewTaskScheduledEvent(req.TaskId, req.Name, req.Version, req.Input, tc)
 	result, err := executor.ExecuteActivity(ctx, api.InstanceID(req.OrchestrationInstance.InstanceId), event)
 
