@@ -15,7 +15,7 @@ import (
 
 var (
 	port       = flag.Int("port", 4001, "The server port")
-	ip         = flag.String("ip", "localhost", "The server IP")
+	host       = flag.String("host", "localhost", "The server host")
 	dbFilePath = flag.String("db", "", "The path to the sqlite file to use (or create if not exists)")
 	ctx        = context.Background()
 )
@@ -30,7 +30,7 @@ func main() {
 		log.Fatalf("failed to start worker: %v", err)
 	}
 
-	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", *ip, *port))
+	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", *host, *port))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}

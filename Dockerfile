@@ -12,4 +12,4 @@ EXPOSE 4001
 
 # Run
 ENTRYPOINT [ "/durabletask-go" ]
-CMD [ "--ip", "0.0.0.0" ]
+CMD [ "--host", "0.0.0.0", "--port", "4001" ]
