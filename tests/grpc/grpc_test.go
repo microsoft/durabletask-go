@@ -363,7 +363,7 @@ func Test_Grpc_ReuseInstanceIDError(t *testing.T) {
 func Test_SingleActivity_TaskSpan(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+	r.AddOrchestratorN("SingleActivity_TestSpan", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
@@ -377,7 +377,7 @@ func Test_SingleActivity_TaskSpan(t *testing.T) {
 		if err := ctx.GetInput(&name); err != nil {
 			return nil, err
 		}
-		_, childSpan := tracer.Start(ctx.Context(), "activityChild")
+		_, childSpan := tracer.Start(ctx.Context(), "activityChild_TestSpan")
 		childSpan.End()
 		return fmt.Sprintf("Hello, %s!", name), nil
 	})
@@ -387,7 +387,7 @@ func Test_SingleActivity_TaskSpan(t *testing.T) {
 	defer cancelListener()
 
 	// Run the orchestration
-	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"))
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity_TestSpan", api.WithInput("世界"))
 	if assert.NoError(t, err) {
 		metadata, err := grpcClient.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
@@ -399,10 +399,10 @@ func Test_SingleActivity_TaskSpan(t *testing.T) {
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
 	utils.AssertSpanSequence(t, spans,
-		utils.AssertOrchestratorCreated("SingleActivity", id),
-		utils.AssertSpan("activityChild"),
+		utils.AssertOrchestratorCreated("SingleActivity_TestSpan", id),
+		utils.AssertSpan("activityChild_TestSpan"),
 		utils.AssertActivity("SayHello", id, 0),
-		utils.AssertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+		utils.AssertOrchestratorExecuted("SingleActivity_TestSpan", id, "COMPLETED"),
 	)
 	// assert child-parent relationship
 	assert.Equal(t, spans[1].Parent().SpanID(), spans[2].SpanContext().SpanID())
