@@ -8,7 +8,7 @@ WORKDIR /root
 # Build
 RUN CGO_ENABLED=0 GOOS=linux go build -o /durabletask-go
 
-FROM gcr.io/distroless/static-debian11
+FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /durabletask-go /
 
 EXPOSE 4001
