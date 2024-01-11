@@ -18,6 +18,7 @@ import (
 	"github.com/microsoft/durabletask-go/backend/sqlite"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
+	"github.com/microsoft/durabletask-go/tests/utils"
 )
 
 var tracer = otel.Tracer("orchestration-test")
@@ -31,7 +32,7 @@ func Test_EmptyOrchestration(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -44,9 +45,9 @@ func Test_EmptyOrchestration(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("EmptyOrchestrator", id),
-		assertOrchestratorExecuted("EmptyOrchestrator", id, "COMPLETED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("EmptyOrchestrator", id),
+		utils.AssertOrchestratorExecuted("EmptyOrchestrator", id, "COMPLETED"),
 	)
 }
 
@@ -60,7 +61,7 @@ func Test_SingleTimer(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -76,10 +77,10 @@ func Test_SingleTimer(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("SingleTimer", id),
-		assertTimer(id),
-		assertOrchestratorExecuted("SingleTimer", id, "COMPLETED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("SingleTimer", id),
+		utils.AssertTimer(id),
+		utils.AssertOrchestratorExecuted("SingleTimer", id, "COMPLETED"),
 	)
 }
 
@@ -102,7 +103,7 @@ func Test_ConcurrentTimers(t *testing.T) {
 	// Initialization
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -118,12 +119,12 @@ func Test_ConcurrentTimers(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("TimerFanOut", id),
-		assertTimer(id),
-		assertTimer(id),
-		assertTimer(id),
-		assertOrchestratorExecuted("TimerFanOut", id, "COMPLETED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("TimerFanOut", id),
+		utils.AssertTimer(id),
+		utils.AssertTimer(id),
+		utils.AssertTimer(id),
+		utils.AssertOrchestratorExecuted("TimerFanOut", id, "COMPLETED"),
 	)
 }
 
@@ -141,7 +142,7 @@ func Test_IsReplaying(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -157,11 +158,11 @@ func Test_IsReplaying(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("IsReplayingOrch", id),
-		assertTimer(id),
-		assertTimer(id),
-		assertOrchestratorExecuted("IsReplayingOrch", id, "COMPLETED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("IsReplayingOrch", id),
+		utils.AssertTimer(id),
+		utils.AssertTimer(id),
+		utils.AssertOrchestratorExecuted("IsReplayingOrch", id, "COMPLETED"),
 	)
 }
 
@@ -187,7 +188,7 @@ func Test_SingleActivity(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -203,10 +204,10 @@ func Test_SingleActivity(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("SingleActivity", id),
-		assertActivity("SayHello", id, 0),
-		assertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("SingleActivity", id),
+		utils.AssertActivity("SayHello", id, 0),
+		utils.AssertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
 	)
 }
 
@@ -234,7 +235,7 @@ func Test_SingleActivity_TaskSpan(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -250,11 +251,11 @@ func Test_SingleActivity_TaskSpan(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("SingleActivity", id),
-		assertSpan("activityChild"),
-		assertActivity("SayHello", id, 0),
-		assertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("SingleActivity", id),
+		utils.AssertSpan("activityChild"),
+		utils.AssertActivity("SayHello", id, 0),
+		utils.AssertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
 	)
 	// assert child-parent relationship
 	assert.Equal(t, spans[1].Parent().SpanID(), spans[2].SpanContext().SpanID())
@@ -282,7 +283,7 @@ func Test_ActivityChain(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -298,12 +299,12 @@ func Test_ActivityChain(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("ActivityChain", id),
-		assertActivity("PlusOne", id, 0), assertActivity("PlusOne", id, 1), assertActivity("PlusOne", id, 2),
-		assertActivity("PlusOne", id, 3), assertActivity("PlusOne", id, 4), assertActivity("PlusOne", id, 5),
-		assertActivity("PlusOne", id, 6), assertActivity("PlusOne", id, 7), assertActivity("PlusOne", id, 8),
-		assertActivity("PlusOne", id, 9), assertOrchestratorExecuted("ActivityChain", id, "COMPLETED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("ActivityChain", id),
+		utils.AssertActivity("PlusOne", id, 0), utils.AssertActivity("PlusOne", id, 1), utils.AssertActivity("PlusOne", id, 2),
+		utils.AssertActivity("PlusOne", id, 3), utils.AssertActivity("PlusOne", id, 4), utils.AssertActivity("PlusOne", id, 5),
+		utils.AssertActivity("PlusOne", id, 6), utils.AssertActivity("PlusOne", id, 7), utils.AssertActivity("PlusOne", id, 8),
+		utils.AssertActivity("PlusOne", id, 9), utils.AssertOrchestratorExecuted("ActivityChain", id, "COMPLETED"),
 	)
 }
 
@@ -337,7 +338,7 @@ func Test_ActivityFanOut(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r, backend.WithMaxParallelism(10))
 	defer worker.Shutdown(ctx)
 
@@ -356,8 +357,8 @@ func Test_ActivityFanOut(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("ActivityFanOut", id),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("ActivityFanOut", id),
 		// TODO: Find a way to assert an unordered sequence of traces since the order of activity traces is non-deterministic.
 	)
 }
@@ -385,7 +386,7 @@ func Test_SingleSubOrchestrator_Completed(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -397,10 +398,10 @@ func Test_SingleSubOrchestrator_Completed(t *testing.T) {
 	assert.Equal(t, `"Hello, world!"`, metadata.SerializedOutput)
 
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("Parent", id),
-		assertOrchestratorExecuted("Child", id+"_child", "COMPLETED"),
-		assertOrchestratorExecuted("Parent", id, "COMPLETED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("Parent", id),
+		utils.AssertOrchestratorExecuted("Child", id+"_child", "COMPLETED"),
+		utils.AssertOrchestratorExecuted("Parent", id, "COMPLETED"),
 	)
 }
 
@@ -417,7 +418,7 @@ func Test_SingleSubOrchestrator_Failed(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -431,10 +432,10 @@ func Test_SingleSubOrchestrator_Failed(t *testing.T) {
 	}
 
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("Parent", id),
-		assertOrchestratorExecuted("Child", id+"_child", "FAILED"),
-		assertOrchestratorExecuted("Parent", id, "FAILED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("Parent", id),
+		utils.AssertOrchestratorExecuted("Child", id+"_child", "FAILED"),
+		utils.AssertOrchestratorExecuted("Parent", id, "FAILED"),
 	)
 }
 
@@ -458,7 +459,7 @@ func Test_ContinueAsNew(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -474,19 +475,19 @@ func Test_ContinueAsNew(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("ContinueAsNewTest", id),
-		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
-		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
-		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
-		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
-		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
-		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
-		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
-		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
-		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
-		assertTimer(id), assertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
-		assertOrchestratorExecuted("ContinueAsNewTest", id, "COMPLETED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("ContinueAsNewTest", id),
+		utils.AssertTimer(id), utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		utils.AssertTimer(id), utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		utils.AssertTimer(id), utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		utils.AssertTimer(id), utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		utils.AssertTimer(id), utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		utils.AssertTimer(id), utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		utils.AssertTimer(id), utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		utils.AssertTimer(id), utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		utils.AssertTimer(id), utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		utils.AssertTimer(id), utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "CONTINUED_AS_NEW"),
+		utils.AssertOrchestratorExecuted("ContinueAsNewTest", id, "COMPLETED"),
 	)
 }
 
@@ -594,7 +595,7 @@ func Test_ExternalEventOrchestration(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -618,19 +619,19 @@ func Test_ExternalEventOrchestration(t *testing.T) {
 	// Validate the exported OTel traces
 	eventSizeInBytes := 1
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("ExternalEventOrchestration", id),
-		assertOrchestratorExecuted("ExternalEventOrchestration", id, "COMPLETED", assertSpanEvents(
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("ExternalEventOrchestration", id),
+		utils.AssertOrchestratorExecuted("ExternalEventOrchestration", id, "COMPLETED", utils.AssertSpanEvents(
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
 		)),
 	)
 }
@@ -647,7 +648,7 @@ func Test_ExternalEventTimeout(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -673,10 +674,10 @@ func Test_ExternalEventTimeout(t *testing.T) {
 				assert.True(t, metadata.IsComplete())
 				assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
 
-				assertSpanSequence(t, spans,
-					assertOrchestratorCreated("ExternalEventOrchestrationWithTimeout", id),
-					assertOrchestratorExecuted("ExternalEventOrchestrationWithTimeout", id, "COMPLETED", assertSpanEvents(
-						assertExternalEvent("MyEvent", 0),
+				utils.AssertSpanSequence(t, spans,
+					utils.AssertOrchestratorCreated("ExternalEventOrchestrationWithTimeout", id),
+					utils.AssertOrchestratorExecuted("ExternalEventOrchestrationWithTimeout", id, "COMPLETED", utils.AssertSpanEvents(
+						utils.AssertExternalEvent("MyEvent", 0),
 					)),
 				)
 			} else {
@@ -689,11 +690,11 @@ func Test_ExternalEventTimeout(t *testing.T) {
 					assert.Equal(t, "the task was canceled", metadata.FailureDetails.ErrorMessage)
 				}
 
-				assertSpanSequence(t, spans,
-					assertOrchestratorCreated("ExternalEventOrchestrationWithTimeout", id),
+				utils.AssertSpanSequence(t, spans,
+					utils.AssertOrchestratorCreated("ExternalEventOrchestrationWithTimeout", id),
 					// A timer is used to implement the event timeout
-					assertTimer(id),
-					assertOrchestratorExecuted("ExternalEventOrchestrationWithTimeout", id, "FAILED", assertSpanEvents()),
+					utils.AssertTimer(id),
+					utils.AssertOrchestratorExecuted("ExternalEventOrchestrationWithTimeout", id, "FAILED", utils.AssertSpanEvents()),
 				)
 			}
 		})
@@ -719,7 +720,7 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -763,21 +764,21 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 	// Validate the exported OTel traces
 	eventSizeInBytes := 1
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("SuspendResumeOrchestration", id),
-		assertOrchestratorExecuted("SuspendResumeOrchestration", id, "COMPLETED", assertSpanEvents(
-			assertSuspendedEvent(),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertExternalEvent("MyEvent", eventSizeInBytes),
-			assertResumedEvent(),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("SuspendResumeOrchestration", id),
+		utils.AssertOrchestratorExecuted("SuspendResumeOrchestration", id, "COMPLETED", utils.AssertSpanEvents(
+			utils.AssertSuspendedEvent(),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertExternalEvent("MyEvent", eventSizeInBytes),
+			utils.AssertResumedEvent(),
 		)),
 	)
 }
@@ -792,7 +793,7 @@ func Test_TerminateOrchestration(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -812,9 +813,9 @@ func Test_TerminateOrchestration(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("MyOrchestrator", id),
-		assertOrchestratorExecuted("MyOrchestrator", id, "TERMINATED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("MyOrchestrator", id),
+		utils.AssertOrchestratorExecuted("MyOrchestrator", id, "TERMINATED"),
 	)
 }
 
@@ -1132,7 +1133,7 @@ func Test_RecreateCompletedOrchestration(t *testing.T) {
 
 	// Initialization
 	ctx := context.Background()
-	exporter := initTracing()
+	exporter := utils.InitTracing()
 	client, worker := initTaskHubWorker(ctx, r)
 	defer worker.Shutdown(ctx)
 
@@ -1156,13 +1157,13 @@ func Test_RecreateCompletedOrchestration(t *testing.T) {
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
-	assertSpanSequence(t, spans,
-		assertOrchestratorCreated("SingleActivity", id),
-		assertActivity("SayHello", id, 0),
-		assertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
-		assertOrchestratorCreated("SingleActivity", id),
-		assertActivity("SayHello", id, 0),
-		assertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("SingleActivity", id),
+		utils.AssertActivity("SayHello", id, 0),
+		utils.AssertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+		utils.AssertOrchestratorCreated("SingleActivity", id),
+		utils.AssertActivity("SayHello", id, 0),
+		utils.AssertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
 	)
 }
 
@@ -1298,7 +1299,7 @@ func Test_SingleActivity_ReuseInstanceIDError(t *testing.T) {
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
-	id, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
+	_, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}

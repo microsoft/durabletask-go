@@ -16,8 +16,10 @@ import (
 	"github.com/microsoft/durabletask-go/client"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
+	"github.com/microsoft/durabletask-go/tests/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -25,6 +27,7 @@ import (
 var (
 	grpcClient *client.TaskHubGrpcClient
 	ctx        = context.Background()
+	tracer     = otel.Tracer("grpc-test")
 )
 
 // TestMain is the entry point for the test suite. We use this to set up a gRPC server and client instance
@@ -351,8 +354,56 @@ func Test_Grpc_ReuseInstanceIDError(t *testing.T) {
 
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
-	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
+	_, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}
+}
+
+func Test_SingleActivity_TaskSpan(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output string
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		var name string
+		if err := ctx.GetInput(&name); err != nil {
+			return nil, err
+		}
+		_, childSpan := tracer.Start(ctx.Context(), "activityChild")
+		childSpan.End()
+		return fmt.Sprintf("Hello, %s!", name), nil
+	})
+
+	exporter := utils.InitTracing()
+	cancelListener := startGrpcListener(t, r)
+	defer cancelListener()
+
+	// Run the orchestration
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"))
+	if assert.NoError(t, err) {
+		metadata, err := grpcClient.WaitForOrchestrationCompletion(ctx, id)
+		if assert.NoError(t, err) {
+			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+			assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+		}
+	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("SingleActivity", id),
+		utils.AssertSpan("activityChild"),
+		utils.AssertActivity("SayHello", id, 0),
+		utils.AssertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+	)
+	// assert child-parent relationship
+	assert.Equal(t, spans[1].Parent().SpanID(), spans[2].SpanContext().SpanID())
 }

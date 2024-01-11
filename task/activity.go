@@ -2,9 +2,7 @@ package task
 
 import (
 	"context"
-	"fmt"
 
-	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -54,10 +52,6 @@ type activityContext struct {
 type Activity func(ctx ActivityContext) (any, error)
 
 func newTaskActivityContext(ctx context.Context, taskID int32, ts *protos.TaskScheduledEvent) *activityContext {
-	ctx, err := helpers.ContextFromTraceContext(ctx, ts.ParentTraceContext)
-	if err != nil {
-		fmt.Printf("%v: failed to parse trace context: %v", ts.Name, err)
-	}
 	return &activityContext{
 		TaskID:   taskID,
 		Name:     ts.Name,
