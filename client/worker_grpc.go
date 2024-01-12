@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -30,10 +31,18 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 
 	go func() {
 		c.logger.Info("starting background processor")
+		defer func() {
+			c.logger.Info("stopping background processor")
+			// We must use a background context here as the stream's context is likely canceled
+			shutdownErr := executor.Shutdown(context.Background())
+			if shutdownErr != nil {
+				c.logger.Warnf("error while shutting down background processor: %v", shutdownErr)
+			}
+		}()
 		for {
 			// TODO: Manage concurrency
 			workItem, err := stream.Recv()
-			if err == io.EOF || stream.Context().Err() != nil {
+			if errors.Is(err, io.EOF) || stream.Context().Err() != nil {
 				// shutdown
 				break
 			} else if err != nil {

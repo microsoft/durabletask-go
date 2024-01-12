@@ -67,6 +67,13 @@ func TestMain(m *testing.M) {
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	err = grpcExecutor.Shutdown(timeoutCtx)
+	if err != nil {
+		log.Fatalf("failed to shutdown grpc Executor: %v", err)
+	}
+
+	timeoutCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	if err := taskHubWorker.Shutdown(timeoutCtx); err != nil {
 		log.Fatalf("failed to shutdown worker: %v", err)
 	}

@@ -28,17 +28,18 @@ var errShuttingDown error = status.Error(codes.Canceled, "shutting down")
 
 type ExecutionResults struct {
 	Response *protos.OrchestratorResponse
-	complete chan interface{}
+	complete chan struct{}
 }
 
 type activityExecutionResult struct {
 	response *protos.ActivityResponse
-	complete chan interface{}
+	complete chan struct{}
 }
 
 type Executor interface {
 	ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*ExecutionResults, error)
 	ExecuteActivity(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error)
+	Shutdown(ctx context.Context) error
 }
 
 type grpcExecutor struct {
@@ -96,9 +97,8 @@ func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) (ex
 
 // ExecuteOrchestrator implements Executor
 func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*ExecutionResults, error) {
-	result := &ExecutionResults{complete: make(chan interface{})}
+	result := &ExecutionResults{complete: make(chan struct{})}
 	executor.pendingOrchestrators.Store(iid, result)
-	defer executor.pendingOrchestrators.Delete(iid)
 
 	workItem := &protos.WorkItem{
 		Request: &protos.WorkItem_OrchestratorRequest{
@@ -121,12 +121,14 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 	}
 
 	// Wait for the connected worker to signal that it's done executing the work-item
-	// TODO: Timeout logic - i.e. handle the case where we never hear back from the remote worker (due to a hang, etc.).
 	select {
 	case <-ctx.Done():
 		executor.logger.Warnf("%s: context canceled before receiving orchestrator result", iid)
 		return nil, ctx.Err()
 	case <-result.complete:
+		if result.Response == nil {
+			return nil, errors.New("operation aborted")
+		}
 	}
 
 	return result, nil
@@ -135,9 +137,8 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 // ExecuteActivity implements Executor
 func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.InstanceID, e *protos.HistoryEvent) (*protos.HistoryEvent, error) {
 	key := getActivityExecutionKey(string(iid), e.EventId)
-	result := &activityExecutionResult{complete: make(chan interface{})}
+	result := &activityExecutionResult{complete: make(chan struct{})}
 	executor.pendingActivities.Store(key, result)
-	defer executor.pendingActivities.Delete(key)
 
 	task := e.GetTaskScheduled()
 	workItem := &protos.WorkItem{
@@ -162,12 +163,14 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 	}
 
 	// Wait for the connected worker to signal that it's done executing the work-item
-	// TODO: Timeout logic
 	select {
 	case <-ctx.Done():
 		executor.logger.Warnf("%s/%s#%d: context canceled before receiving activity result", iid, task.Name, e.EventId)
 		return nil, ctx.Err()
 	case <-result.complete:
+		if result.response == nil {
+			return nil, errors.New("operation aborted")
+		}
 	}
 
 	var responseEvent *protos.HistoryEvent
@@ -181,9 +184,27 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 }
 
 // Shutdown implements Executor
-func (g *grpcExecutor) Shutdown(ctx context.Context) {
+func (g *grpcExecutor) Shutdown(ctx context.Context) error {
 	// closing the work item queue is a signal for shutdown
 	close(g.workItemQueue)
+
+	// Iterate through all pending items and close them to unblock the goroutines waiting on this
+	g.pendingActivities.Range(func(_, value any) bool {
+		p, ok := value.(*activityExecutionResult)
+		if ok {
+			close(p.complete)
+		}
+		return true
+	})
+	g.pendingOrchestrators.Range(func(_, value any) bool {
+		p, ok := value.(*ExecutionResults)
+		if ok {
+			close(p.complete)
+		}
+		return true
+	})
+
+	return nil
 }
 
 // Hello implements protos.TaskHubSidecarServiceServer
@@ -202,7 +223,7 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 	callback := g.onWorkItemConnection
 	if callback != nil {
 		if err := callback(stream.Context()); err != nil {
-			message := fmt.Sprint("unable to establish work item stream at this time: ", err)
+			message := "unable to establish work item stream at this time: " + err.Error()
 			g.logger.Warn(message)
 			return status.Errorf(codes.Unavailable, message)
 		}
@@ -227,10 +248,10 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 // CompleteOrchestratorTask implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) CompleteOrchestratorTask(ctx context.Context, res *protos.OrchestratorResponse) (*protos.CompleteTaskResponse, error) {
 	iid := api.InstanceID(res.InstanceId)
-	if p, ok := g.pendingOrchestrators.Load(iid); ok {
+	if p, ok := g.pendingOrchestrators.LoadAndDelete(iid); ok {
 		pending := p.(*ExecutionResults)
 		pending.Response = res
-		pending.complete <- true
+		close(pending.complete)
 		return emptyCompleteTaskResponse, nil
 	}
 
@@ -240,10 +261,10 @@ func (g *grpcExecutor) CompleteOrchestratorTask(ctx context.Context, res *protos
 // CompleteActivityTask implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) CompleteActivityTask(ctx context.Context, res *protos.ActivityResponse) (*protos.CompleteTaskResponse, error) {
 	key := getActivityExecutionKey(res.InstanceId, res.TaskId)
-	if p, ok := g.pendingActivities.Load(key); ok {
+	if p, ok := g.pendingActivities.LoadAndDelete(key); ok {
 		pending := p.(*activityExecutionResult)
 		pending.response = res
-		pending.complete <- true
+		close(pending.complete)
 		return emptyCompleteTaskResponse, nil
 	}
 
