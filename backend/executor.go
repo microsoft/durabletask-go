@@ -4,6 +4,7 @@ import (
 	context "context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,11 +30,13 @@ var errShuttingDown error = status.Error(codes.Canceled, "shutting down")
 type ExecutionResults struct {
 	Response *protos.OrchestratorResponse
 	complete chan struct{}
+	pending  chan string
 }
 
 type activityExecutionResult struct {
 	response *protos.ActivityResponse
 	complete chan struct{}
+	pending  chan string
 }
 
 type Executor interface {
@@ -98,6 +101,7 @@ func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) (ex
 // ExecuteOrchestrator implements Executor
 func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*ExecutionResults, error) {
 	result := &ExecutionResults{complete: make(chan struct{})}
+	fmt.Println("STORING ORCHESTRATOR", iid)
 	executor.pendingOrchestrators.Store(iid, result)
 
 	workItem := &protos.WorkItem{
@@ -126,6 +130,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 		executor.logger.Warnf("%s: context canceled before receiving orchestrator result", iid)
 		return nil, ctx.Err()
 	case <-result.complete:
+		fmt.Println("ORCHESTRATION", iid, "GOT RESULT")
 		if result.Response == nil {
 			return nil, errors.New("operation aborted")
 		}
@@ -168,6 +173,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 		executor.logger.Warnf("%s/%s#%d: context canceled before receiving activity result", iid, task.Name, e.EventId)
 		return nil, ctx.Err()
 	case <-result.complete:
+		fmt.Println("ACTIVITY", key, "GOT RESULT")
 		if result.response == nil {
 			return nil, errors.New("operation aborted")
 		}
@@ -229,16 +235,70 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 		}
 	}
 
+	// Collect all pending activities on this stream
+	// Note: we don't need sync.Map's here because access is only on this thread
+	pendingActivities := make(map[string]struct{})
+	pendingActivityCh := make(chan string, 1)
+	pendingOrchestrators := make(map[string]struct{})
+	pendingOrchestratorCh := make(chan string, 1)
+	defer func() {
+		// If there's any pending activity left, remove them
+		for key := range pendingActivities {
+			fmt.Println("CLEANING UP ACTIVITY", key)
+			p, ok := g.pendingActivities.LoadAndDelete(key)
+			if ok {
+				pending := p.(*activityExecutionResult)
+				close(pending.complete)
+			}
+		}
+		for key := range pendingOrchestrators {
+			fmt.Println("CLEANING UP ORCHESTRATION", key)
+			p, ok := g.pendingOrchestrators.LoadAndDelete(api.InstanceID(key))
+			if ok {
+				pending := p.(*ExecutionResults)
+				close(pending.complete)
+			}
+		}
+	}()
+
 	// The worker client invokes this method, which streams back work-items as they arrive.
 	for {
 		select {
 		case <-stream.Context().Done():
-			g.logger.Infof("work item stream closed")
+			g.logger.Info("work item stream closed")
 			return nil
-		case wi := <-g.workItemQueue:
+		case wi, ok := <-g.workItemQueue:
+			if !ok {
+				continue
+			}
+			switch x := wi.Request.(type) {
+			case *protos.WorkItem_OrchestratorRequest:
+				key := x.OrchestratorRequest.GetInstanceId()
+				pendingOrchestrators[key] = struct{}{}
+				p, ok := g.pendingOrchestrators.Load(api.InstanceID(key))
+				if ok {
+					p.(*ExecutionResults).pending = pendingOrchestratorCh
+				}
+				fmt.Printf("PENDING ORCHESTRATORS AFTER ADD %s: %#v\n", key, pendingOrchestrators)
+			case *protos.WorkItem_ActivityRequest:
+				key := getActivityExecutionKey(x.ActivityRequest.GetOrchestrationInstance().GetInstanceId(), x.ActivityRequest.GetTaskId())
+				pendingActivities[key] = struct{}{}
+				p, ok := g.pendingActivities.Load(key)
+				if ok {
+					p.(*activityExecutionResult).pending = pendingActivityCh
+				}
+				fmt.Printf("PENDING ACTIVITIES AFTER ADD %s: %#v\n", key, pendingActivities)
+			}
+
 			if err := stream.Send(wi); err != nil {
 				return err
 			}
+		case key := <-pendingActivityCh:
+			delete(pendingActivities, key)
+			fmt.Printf("PENDING ACTIVITIES AFTER DEL %s: %#v\n", key, pendingActivities)
+		case key := <-pendingOrchestratorCh:
+			delete(pendingOrchestrators, key)
+			fmt.Printf("PENDING ORCHESTRATORS AFTER DEL %s: %#v\n", key, pendingOrchestrators)
 		case <-g.streamShutdownChan:
 			return errShuttingDown
 		}
@@ -248,31 +308,57 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 // CompleteOrchestratorTask implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) CompleteOrchestratorTask(ctx context.Context, res *protos.OrchestratorResponse) (*protos.CompleteTaskResponse, error) {
 	iid := api.InstanceID(res.InstanceId)
-	if p, ok := g.pendingOrchestrators.LoadAndDelete(iid); ok {
-		pending := p.(*ExecutionResults)
-		pending.Response = res
-		close(pending.complete)
+	if g.deletePendingOrchestrator(iid, res) {
 		return emptyCompleteTaskResponse, nil
 	}
 
 	return emptyCompleteTaskResponse, fmt.Errorf("unknown instance ID: %s", res.InstanceId)
 }
 
+func (g *grpcExecutor) deletePendingOrchestrator(iid api.InstanceID, res *protos.OrchestratorResponse) bool {
+	p, ok := g.pendingOrchestrators.LoadAndDelete(iid)
+	if !ok {
+		return false
+	}
+
+	// Note that res can be nil in case of certain failures
+	pending := p.(*ExecutionResults)
+	pending.Response = res
+	if pending.pending != nil {
+		pending.pending <- string(iid)
+	}
+	close(pending.complete)
+	return true
+}
+
 // CompleteActivityTask implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) CompleteActivityTask(ctx context.Context, res *protos.ActivityResponse) (*protos.CompleteTaskResponse, error) {
 	key := getActivityExecutionKey(res.InstanceId, res.TaskId)
-	if p, ok := g.pendingActivities.LoadAndDelete(key); ok {
-		pending := p.(*activityExecutionResult)
-		pending.response = res
-		close(pending.complete)
+	if g.deletePendingActivityTask(key, res) {
 		return emptyCompleteTaskResponse, nil
 	}
 
 	return emptyCompleteTaskResponse, fmt.Errorf("unknown instance ID/task ID combo: %s", key)
 }
 
+func (g *grpcExecutor) deletePendingActivityTask(key string, res *protos.ActivityResponse) bool {
+	p, ok := g.pendingActivities.LoadAndDelete(key)
+	if !ok {
+		return false
+	}
+
+	// Note that res can be nil in case of certain failures
+	pending := p.(*activityExecutionResult)
+	pending.response = res
+	if pending.pending != nil {
+		pending.pending <- key
+	}
+	close(pending.complete)
+	return true
+}
+
 func getActivityExecutionKey(iid string, taskID int32) string {
-	return fmt.Sprintf("%s/%d", iid, taskID)
+	return iid + "/" + strconv.FormatInt(int64(taskID), 10)
 }
 
 // CreateTaskHub implements protos.TaskHubSidecarServiceServer
