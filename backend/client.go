@@ -59,6 +59,7 @@ func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrat
 
 	tc := helpers.TraceContextFromSpan(span)
 	e := helpers.NewExecutionStartedEvent(req.Name, req.InstanceId, req.Input, nil, tc)
+	e.EventType.(*protos.HistoryEvent_ExecutionStarted).ExecutionStarted.ScheduledStartTimestamp = req.ScheduledStartTimestamp
 	if err := c.be.CreateOrchestrationInstance(ctx, e, WithOrchestrationIdReusePolicy(req.OrchestrationIdReusePolicy)); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
