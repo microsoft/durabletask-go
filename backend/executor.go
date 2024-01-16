@@ -101,7 +101,6 @@ func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) (ex
 // ExecuteOrchestrator implements Executor
 func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*ExecutionResults, error) {
 	result := &ExecutionResults{complete: make(chan struct{})}
-	fmt.Println("STORING ORCHESTRATOR", iid)
 	executor.pendingOrchestrators.Store(iid, result)
 
 	workItem := &protos.WorkItem{
@@ -130,7 +129,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 		executor.logger.Warnf("%s: context canceled before receiving orchestrator result", iid)
 		return nil, ctx.Err()
 	case <-result.complete:
-		fmt.Println("ORCHESTRATION", iid, "GOT RESULT")
+		executor.logger.Debug("orchestrator", iid, "got result")
 		if result.Response == nil {
 			return nil, errors.New("operation aborted")
 		}
@@ -173,7 +172,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 		executor.logger.Warnf("%s/%s#%d: context canceled before receiving activity result", iid, task.Name, e.EventId)
 		return nil, ctx.Err()
 	case <-result.complete:
-		fmt.Println("ACTIVITY", key, "GOT RESULT")
+		executor.logger.Debug("activity", key, "get result")
 		if result.response == nil {
 			return nil, errors.New("operation aborted")
 		}
@@ -244,7 +243,7 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 	defer func() {
 		// If there's any pending activity left, remove them
 		for key := range pendingActivities {
-			fmt.Println("CLEANING UP ACTIVITY", key)
+			g.logger.Debug("cleaning up pending activity", key)
 			p, ok := g.pendingActivities.LoadAndDelete(key)
 			if ok {
 				pending := p.(*activityExecutionResult)
@@ -252,7 +251,7 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 			}
 		}
 		for key := range pendingOrchestrators {
-			fmt.Println("CLEANING UP ORCHESTRATION", key)
+			g.logger.Debug("cleaning up pending orchestrator", key)
 			p, ok := g.pendingOrchestrators.LoadAndDelete(api.InstanceID(key))
 			if ok {
 				pending := p.(*ExecutionResults)
@@ -279,7 +278,7 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 				if ok {
 					p.(*ExecutionResults).pending = pendingOrchestratorCh
 				}
-				fmt.Printf("PENDING ORCHESTRATORS AFTER ADD %s: %#v\n", key, pendingOrchestrators)
+				g.logger.Debugf("pending orchestrators after add %s: %#v\n", key, pendingOrchestrators)
 			case *protos.WorkItem_ActivityRequest:
 				key := getActivityExecutionKey(x.ActivityRequest.GetOrchestrationInstance().GetInstanceId(), x.ActivityRequest.GetTaskId())
 				pendingActivities[key] = struct{}{}
@@ -287,7 +286,7 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 				if ok {
 					p.(*activityExecutionResult).pending = pendingActivityCh
 				}
-				fmt.Printf("PENDING ACTIVITIES AFTER ADD %s: %#v\n", key, pendingActivities)
+				g.logger.Debugf("pending activities after add %s: %#v\n", key, pendingActivities)
 			}
 
 			if err := stream.Send(wi); err != nil {
@@ -295,10 +294,10 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 			}
 		case key := <-pendingActivityCh:
 			delete(pendingActivities, key)
-			fmt.Printf("PENDING ACTIVITIES AFTER DEL %s: %#v\n", key, pendingActivities)
+			g.logger.Debugf("pending activities after delete %s: %#v\n", key, pendingActivities)
 		case key := <-pendingOrchestratorCh:
 			delete(pendingOrchestrators, key)
-			fmt.Printf("PENDING ORCHESTRATORS AFTER DEL %s: %#v\n", key, pendingOrchestrators)
+			g.logger.Debugf("pending orchestrators after delete %s: %#v\n", key, pendingOrchestrators)
 		case <-g.streamShutdownChan:
 			return errShuttingDown
 		}
