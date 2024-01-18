@@ -288,6 +288,7 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 			}
 
 			if err := stream.Send(wi); err != nil {
+				g.logger.Errorf("encountered an error while sending work item: %v", err)
 				return err
 			}
 		case key := <-pendingActivityCh:
