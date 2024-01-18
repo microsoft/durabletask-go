@@ -94,7 +94,7 @@ func Test_Grpc_WaitForInstanceStart_Timeout(t *testing.T) {
 	r.AddOrchestratorN("WaitForInstanceStartThrowsException", func(ctx *task.OrchestrationContext) (any, error) {
 		// sleep 5 seconds
 		time.Sleep(5 * time.Second)
-		return 20, nil
+		return 42, nil
 	})
 
 	cancelListener := startGrpcListener(t, r)
@@ -108,6 +108,41 @@ func Test_Grpc_WaitForInstanceStart_Timeout(t *testing.T) {
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "context deadline exceeded")
 	}
+	time.Sleep(1 * time.Second)
+}
+
+func Test_Grpc_WaitForInstanceStart_ConnectionResume(t *testing.T) {
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("WaitForInstanceStartThrowsException", func(ctx *task.OrchestrationContext) (any, error) {
+		// sleep 5 seconds
+		time.Sleep(5 * time.Second)
+		return 42, nil
+	})
+
+	cancelListener := startGrpcListener(t, r)
+
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "WaitForInstanceStartThrowsException", api.WithInput("世界"))
+	require.NoError(t, err)
+	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, time.Second)
+	defer cancelTimeout()
+	_, err = grpcClient.WaitForOrchestrationStart(timeoutCtx, id, api.WithFetchPayloads(true))
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "context deadline exceeded")
+	}
+	cancelListener()
+	time.Sleep(2 * time.Second)
+
+	// reconnect
+	cancelListener = startGrpcListener(t, r)
+	defer cancelListener()
+
+	// workitem should be retried and completed.
+	timeoutCtx, cancelTimeout = context.WithTimeout(ctx, 30*time.Second)
+	defer cancelTimeout()
+	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
+	require.NoError(t, err)
+	assert.Equal(t, true, metadata.IsComplete())
+	assert.Equal(t, "42", metadata.SerializedOutput)
 	time.Sleep(1 * time.Second)
 }
 
