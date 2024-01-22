@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Cascading Terminate and Purge support ([#47](https://github.com/microsoft/durabletask-go/pull/47)) - by [@shivamkm07](https://github.com/shivamkm07)
+- Cascading Terminate and Purge support ([#47](https://github.com/microsoft/durabletask-go/pull/47) and [#63](https://github.com/microsoft/durabletask-go/pull/63)) - by [@shivamkm07](https://github.com/shivamkm07)
 
 ### Changed
 
