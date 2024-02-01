@@ -311,8 +311,7 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 	ctx, span := helpers.StartNewCreateOrchestrationSpan(ctx, req.Name, req.Version.GetValue(), instanceID)
 	defer span.End()
 
-	e := helpers.NewExecutionStartedEvent(req.Name, instanceID, req.Input, nil, helpers.TraceContextFromSpan(span))
-	e.EventType.(*protos.HistoryEvent_ExecutionStarted).ExecutionStarted.ScheduledStartTimestamp = req.ScheduledStartTimestamp
+	e := helpers.NewExecutionStartedEvent(req.Name, instanceID, req.Input, nil, helpers.TraceContextFromSpan(span), req.ScheduledStartTimestamp)
 	if err := g.backend.CreateOrchestrationInstance(ctx, e, WithOrchestrationIdReusePolicy(req.OrchestrationIdReusePolicy)); err != nil {
 		return nil, err
 	}
