@@ -170,18 +170,19 @@ func (w *worker) ProcessNext(ctx context.Context) (bool, error) {
 	}()
 
 	wi, err := w.processor.FetchWorkItem(ctx)
-	if err == ErrNoWorkItems || wi == nil {
+	switch {
+	case errors.Is(err, ErrNoWorkItems) || wi == nil:
 		if !w.waiting {
 			w.logger.Debugf("%v: waiting for new work items...", w.Name())
 			w.waiting = true
 		}
 		return false, nil
-	} else if err != nil {
+	case err != nil:
 		if !errors.Is(err, ctx.Err()) {
 			w.logger.Errorf("%v: failed to fetch work item: %v", w.Name(), err)
 		}
 		return false, err
-	} else {
+	default:
 		// process the work-item in the background
 		w.waiting = false
 		processing = true
@@ -205,7 +206,7 @@ func (w *worker) processWorkItem(ctx context.Context, wi WorkItem) {
 	defer w.dispatchSemaphore.Release(1)
 	defer w.pending.Done()
 
-	w.logger.Debugf("%v: processing work item: %s", w.Name(), wi.Description())
+	w.logger.Debugf("%v: processing work item: %s", w.Name(), wi)
 
 	if err := w.processor.ProcessWorkItem(ctx, wi); err != nil {
 		if errors.Is(err, ctx.Err()) {

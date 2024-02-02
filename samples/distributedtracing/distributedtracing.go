@@ -22,7 +22,7 @@ func main() {
 	// Tracing can be configured independently of the orchestration code.
 	tp, err := ConfigureZipkinTracing()
 	if err != nil {
-		log.Fatalf("Failed to create tracer: %w", err)
+		log.Fatalf("Failed to create tracer: %v", err)
 	}
 	defer func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
