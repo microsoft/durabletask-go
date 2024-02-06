@@ -18,11 +18,11 @@ var (
 )
 
 type OrchestrationRuntimeState struct {
-	instanceID      api.InstanceID
-	committedEvents []*protos.HistoryEvent
-	pendingEvents   []*protos.HistoryEvent
-	newEvents       []*protos.HistoryEvent
-	newActions      []*protos.OrchestratorAction
+	instanceID    api.InstanceID
+	oldEvents     []*protos.HistoryEvent
+	pendingEvents []*protos.HistoryEvent
+	newEvents     []*protos.HistoryEvent
+	newActions    []*protos.OrchestratorAction
 
 	startEvent       *protos.ExecutionStartedEvent
 	completedEvent   *protos.ExecutionCompletedEvent
@@ -46,10 +46,13 @@ type OrchestratorMessage struct {
 // See https://github.com/microsoft/durabletask-go/issues/44 for more details.
 type ChunkingConfiguration struct {
 	// MaxHistoryEventCount is the maximum number of history events that can be stored in a single chunk.
+	// If the number of history events exceeds this value, the history events will be saved in multiple chunks that are each less than or equal to this value.
 	// A value of 0 or less means that there is no limit.
 	MaxHistoryEventCount int
 	// MaxHistoryEventSizeInKB is the maximum size of a single chunk in kilobytes.
 	// For example, a max size of 2MB would be specified as 2048.
+	// If the aggregate size of a batch of history events exceeds this value, the history events will be saved in multiple chunks that are each less than or equal to this size.
+	// If the size of a single history event exceeds this value, the orchestration will fail.
 	// A value of 0 or less means that there is no limit.
 	MaxHistoryEventSizeInKB int
 }
@@ -57,7 +60,7 @@ type ChunkingConfiguration struct {
 func NewOrchestrationRuntimeState(instanceID api.InstanceID, existingHistory []*HistoryEvent) *OrchestrationRuntimeState {
 	s := &OrchestrationRuntimeState{
 		instanceID:       instanceID,
-		committedEvents:  make([]*HistoryEvent, 0, len(existingHistory)+10),
+		oldEvents:        make([]*HistoryEvent, 0, len(existingHistory)+10),
 		startedTaskIDs:   make(map[int32]bool),
 		completedTaskIDs: make(map[int32]bool),
 	}
@@ -116,7 +119,7 @@ func (s *OrchestrationRuntimeState) addEvent(e *HistoryEvent, isNew bool) error 
 		s.pendingEvents = append(s.pendingEvents, e)
 		s.newEvents = append(s.newEvents, e)
 	} else {
-		s.committedEvents = append(s.committedEvents, e)
+		s.oldEvents = append(s.oldEvents, e)
 	}
 
 	s.lastUpdatedTime = e.Timestamp.AsTime()
@@ -124,7 +127,7 @@ func (s *OrchestrationRuntimeState) addEvent(e *HistoryEvent, isNew bool) error 
 }
 
 func (s *OrchestrationRuntimeState) IsValid() bool {
-	if len(s.committedEvents) == 0 && len(s.pendingEvents) == 0 {
+	if len(s.oldEvents) == 0 && len(s.pendingEvents) == 0 && len(s.newEvents) == 0 {
 		// empty orchestration state
 		return true
 	} else if s.startEvent != nil {
@@ -388,6 +391,13 @@ func (s *OrchestrationRuntimeState) SetFailed(err error) {
 	// Clear the list of pending events since we don't care about these anymore.
 	s.pendingEvents = nil
 
+	// Add a fake "execution started" event if one doesn't already exist.
+	if s.startEvent == nil {
+		s.newEvents = append(s.newEvents, helpers.NewExecutionStartedEvent(
+			"(Unknown)",
+			string(s.instanceID),
+		))
+
 	// Apply an "orchestration failed" action to the current state.
 	s.newActions = []*protos.OrchestratorAction{helpers.NewCompleteOrchestrationAction(
 		-1,
@@ -469,7 +479,7 @@ func (s *OrchestrationRuntimeState) IsCompleted() bool {
 }
 
 func (s *OrchestrationRuntimeState) OldEvents() []*HistoryEvent {
-	return s.committedEvents
+	return s.oldEvents
 }
 
 func (s *OrchestrationRuntimeState) NewEvents() []*HistoryEvent {
@@ -496,10 +506,10 @@ func (s *OrchestrationRuntimeState) String() string {
 
 func (s *OrchestrationRuntimeState) getStartedTime() time.Time {
 	var startTime time.Time
-	if len(s.committedEvents) > 0 {
-		startTime = s.committedEvents[0].Timestamp.AsTime()
-	} else if len(s.committedEvents) > 0 {
-		startTime = s.committedEvents[0].Timestamp.AsTime()
+	if len(s.oldEvents) > 0 {
+		startTime = s.oldEvents[0].Timestamp.AsTime()
+	} else if len(s.newEvents) > 0 {
+		startTime = s.newEvents[0].Timestamp.AsTime()
 	}
 	return startTime
 }

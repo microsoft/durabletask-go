@@ -508,6 +508,18 @@ func Test_DuplicateOutgoingEvents(t *testing.T) {
 
 func Test_SetFailed(t *testing.T) {
 	errFailure := errors.New("you got terminated")
+	t.Run("Pending", func(t *testing.T) {
+		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+		assert.NotEqual(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, s.RuntimeStatus())
+		s.SetFailed(errFailure)
+		s.ProcessChanges(defaultChunkingConfig, nil, logger)
+		require.True(t, s.IsValid())
+		assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, s.RuntimeStatus())
+		failureDetails, err := s.FailureDetails()
+		require.NoError(t, err)
+		assert.Equal(t, errFailure.Error(), failureDetails.ErrorMessage)
+	})
+
 	t.Run("Running", func(t *testing.T) {
 		s := backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
 			helpers.NewExecutionStartedEvent("MyOrchestration", "abc", nil, nil, nil),
