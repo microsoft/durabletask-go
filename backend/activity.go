@@ -68,6 +68,8 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, wi WorkItem) er
 		}()
 	}
 
+	// set the parent trace context to be the newly created activity span
+	ts.ParentTraceContext = helpers.TraceContextFromSpan(span)
 	// Execute the activity and get its result
 	result, err := p.executor.ExecuteActivity(ctx, awi.InstanceID, awi.NewEvent)
 	if err != nil {
