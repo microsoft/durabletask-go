@@ -73,7 +73,7 @@ func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrat
 func (c *backendClient) FetchOrchestrationMetadata(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error) {
 	metadata, err := c.be.GetOrchestrationMetadata(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch orchestration metadata: %w", err)
+		return nil, fmt.Errorf("failed to fetch orchestration metadata: %w", err)
 	}
 	return metadata, nil
 }

@@ -91,6 +91,11 @@ func (te *taskExecutor) ExecuteOrchestrator(ctx context.Context, id api.Instance
 	return results, nil
 }
 
+func (te taskExecutor) Shutdown(ctx context.Context) error {
+	// Nothing to do
+	return nil
+}
+
 func unmarshalData(data []byte, v any) error {
 	if v == nil {
 		return nil
