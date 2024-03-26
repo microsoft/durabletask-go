@@ -27,7 +27,7 @@ func Test_Executor_WaitForEventSchedulesTimer(t *testing.T) {
 	oldEvents := []*protos.HistoryEvent{}
 	newEvents := []*protos.HistoryEvent{
 		startEvent,
-		helpers.NewExecutionStartedEvent("Orchestration", string(iid), nil, nil, nil),
+		helpers.NewExecutionStartedEvent("Orchestration", string(iid), nil, nil, nil, nil),
 	}
 
 	// Execute the orchestrator function and expect to get back a single timer action
@@ -57,7 +57,7 @@ func Test_Executor_SuspendStopsAllActions(t *testing.T) {
 	oldEvents := []*protos.HistoryEvent{}
 	newEvents := []*protos.HistoryEvent{
 		helpers.NewOrchestratorStartedEvent(),
-		helpers.NewExecutionStartedEvent("SuspendResumeOrchestration", string(iid), nil, nil, nil),
+		helpers.NewExecutionStartedEvent("SuspendResumeOrchestration", string(iid), nil, nil, nil, nil),
 		helpers.NewSuspendOrchestrationEvent(""),
 	}
 
