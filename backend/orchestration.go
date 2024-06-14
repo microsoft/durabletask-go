@@ -35,7 +35,7 @@ func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor, logger Lo
 		executor: executor,
 		logger:   logger,
 	}
-	return NewTaskWorker(be, processor, logger, opts...)
+	return NewTaskWorker(processor, logger, opts...)
 }
 
 // Name implements TaskProcessor
