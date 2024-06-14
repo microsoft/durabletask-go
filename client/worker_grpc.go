@@ -6,26 +6,45 @@ import (
 	"io"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+type workItemsStream interface {
+	Recv() (*protos.WorkItem, error)
+}
+
 func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.TaskRegistry) error {
 	executor := task.NewTaskExecutor(r)
 
-	if _, err := c.client.Hello(ctx, &emptypb.Empty{}); err != nil {
-		return fmt.Errorf("failed to connect to task hub service: %w", err)
+	var stream workItemsStream
+
+	initStream := func() error {
+		_, err := c.client.Hello(ctx, &emptypb.Empty{})
+		if err != nil {
+			return fmt.Errorf("failed to connect to task hub service: %w", err)
+		}
+
+		req := protos.GetWorkItemsRequest{}
+		stream, err = c.client.GetWorkItems(ctx, &req)
+		if err != nil {
+			return fmt.Errorf("failed to get work item stream: %w", err)
+		}
+		return nil
 	}
 
-	req := protos.GetWorkItemsRequest{}
-	stream, err := c.client.GetWorkItems(ctx, &req)
+	c.logger.Infof("connecting work item listener stream")
+	err := initStream()
 	if err != nil {
-		return fmt.Errorf("failed to get work item stream: %w", err)
+		return err
 	}
 
 	go func() {
@@ -33,19 +52,68 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 		for {
 			// TODO: Manage concurrency
 			workItem, err := stream.Recv()
-			if err == io.EOF || stream.Context().Err() != nil {
-				// shutdown
-				break
-			} else if err != nil {
-				c.logger.Warnf("failed to establish work item stream: %v", err)
-				time.Sleep(5 * time.Second)
+
+			if err != nil {
+				// user wants to stop the listener
+				if ctx.Err() != nil {
+					c.logger.Infof("stopping background processor: %v", err)
+					return
+				}
+
+				retriable := false
+
+				c.logger.Errorf("background processor received stream error: %v", err)
+
+				if err == io.EOF {
+					retriable = true
+				} else if grpcStatus, ok := status.FromError(err); ok {
+					c.logger.Warnf("received grpc error code %v", grpcStatus.Code().String())
+					switch grpcStatus.Code() {
+					case codes.Unavailable:
+						fallthrough
+					case codes.Canceled:
+						fallthrough
+					default:
+						retriable = true
+					}
+				}
+
+				if !retriable {
+					c.logger.Infof("stopping background processor, non retriable error: %v", err)
+					return
+				}
+
+				err = backoff.Retry(
+					func() error {
+						// user wants to stop the listener
+						if ctx.Err() != nil {
+							return backoff.Permanent(ctx.Err())
+						}
+
+						c.logger.Infof("reconnecting work item listener stream")
+						streamErr := initStream()
+						if streamErr != nil {
+							c.logger.Errorf("error initializing work item listener stream %v", streamErr)
+							return streamErr
+						}
+						return nil
+					},
+					// retry forever since we don't have a way of asynchronously return errors to the user
+					newInfiniteRetries(),
+				)
+				if err != nil {
+					c.logger.Infof("stopping background processor, unable to reconnect stream: %v", err)
+					return
+				}
+				c.logger.Infof("successfully reconnected work item listener stream...")
+				// continue iterating
 				continue
 			}
 
 			if orchReq := workItem.GetOrchestratorRequest(); orchReq != nil {
-				go c.processOrchestrationWorkItem(stream.Context(), executor, orchReq)
+				go c.processOrchestrationWorkItem(ctx, executor, orchReq)
 			} else if actReq := workItem.GetActivityRequest(); actReq != nil {
-				go c.processActivityWorkItem(stream.Context(), executor, actReq)
+				go c.processActivityWorkItem(ctx, executor, actReq)
 			} else {
 				c.logger.Warnf("received unknown work item type: %v", workItem)
 			}
@@ -124,4 +192,14 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 			c.logger.Errorf("failed to complete activity task: %v", err)
 		}
 	}
+}
+
+func newInfiniteRetries() *backoff.ExponentialBackOff {
+	b := backoff.NewExponentialBackOff()
+	// max wait of 15 seconds between retries
+	b.MaxInterval = 15 * time.Second
+	// retry forever
+	b.MaxElapsedTime = 0
+	b.Reset()
+	return b
 }
