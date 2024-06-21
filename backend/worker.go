@@ -32,7 +32,6 @@ type TaskProcessor interface {
 }
 
 type worker struct {
-	backend Backend
 	options *WorkerOptions
 	logger  Logger
 	// dispatchSemaphore is for throttling orchestration concurrency.
@@ -66,13 +65,12 @@ func WithMaxParallelism(n int32) NewTaskWorkerOptions {
 	}
 }
 
-func NewTaskWorker(be Backend, p TaskProcessor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
+func NewTaskWorker(p TaskProcessor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
 	options := &WorkerOptions{MaxParallelWorkItems: 1}
 	for _, configure := range opts {
 		configure(options)
 	}
 	return &worker{
-		backend:           be,
 		processor:         p,
 		logger:            logger,
 		dispatchSemaphore: semaphore.New(int(options.MaxParallelWorkItems)),

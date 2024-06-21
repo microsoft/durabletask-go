@@ -23,7 +23,7 @@ type ActivityExecutor interface {
 
 func NewActivityTaskWorker(be Backend, executor ActivityExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
 	processor := newActivityProcessor(be, executor)
-	return NewTaskWorker(be, processor, logger, opts...)
+	return NewTaskWorker(processor, logger, opts...)
 }
 
 func newActivityProcessor(be Backend, executor ActivityExecutor) TaskProcessor {
