@@ -104,6 +104,14 @@ type Backend interface {
 	// [api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
 	// [api.ErrNotCompleted] is returned if the specified orchestration instance is still running.
 	PurgeOrchestrationState(context.Context, api.InstanceID) error
+
+	SetPendingOrchestrator(ctx context.Context, id api.InstanceID) error
+	CompletePendingOrchestrator(ctx context.Context, res *protos.OrchestratorResponse) error
+	WaitForPendingOrchestrator(ctx context.Context, id api.InstanceID) (*protos.OrchestratorResponse, error)
+
+	SetPendingActivity(ctx context.Context, id api.InstanceID, taskID int32) error
+	CompletePendingActivity(ctx context.Context, res *protos.ActivityResponse) error
+	WaitForPendingActivity(ctx context.Context, id api.InstanceID, taskID int32) (*protos.ActivityResponse, error)
 }
 
 // MarshalHistoryEvent serializes the [HistoryEvent] into a protobuf byte array.
