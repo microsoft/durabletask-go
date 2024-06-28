@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -49,6 +50,14 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 
 	go func() {
 		c.logger.Info("starting background processor")
+		defer func() {
+			c.logger.Info("stopping background processor")
+			// We must use a background context here as the stream's context is likely canceled
+			shutdownErr := executor.Shutdown(context.Background())
+			if shutdownErr != nil {
+				c.logger.Warnf("error while shutting down background processor: %v", shutdownErr)
+			}
+		}()
 		for {
 			// TODO: Manage concurrency
 			workItem, err := stream.Recv()
@@ -64,15 +73,13 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 
 				c.logger.Errorf("background processor received stream error: %v", err)
 
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					retriable = true
 				} else if grpcStatus, ok := status.FromError(err); ok {
 					c.logger.Warnf("received grpc error code %v", grpcStatus.Code().String())
 					switch grpcStatus.Code() {
-					case codes.Unavailable:
-						fallthrough
-					case codes.Canceled:
-						fallthrough
+					case codes.Unavailable, codes.Canceled:
+						retriable = true
 					default:
 						retriable = true
 					}
