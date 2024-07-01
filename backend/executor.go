@@ -153,6 +153,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 				Input:                 task.Input,
 				OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: string(iid)},
 				TaskId:                e.EventId,
+				ParentTraceContext:    task.ParentTraceContext,
 			},
 		},
 	}

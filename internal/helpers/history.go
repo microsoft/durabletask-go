@@ -147,7 +147,6 @@ func NewTimerCreatedEvent(eventID int32, fireAt *timestamppb.Timestamp) *protos.
 func NewTimerFiredEvent(
 	timerID int32,
 	fireAt *timestamppb.Timestamp,
-	parentTraceContext *protos.TraceContext,
 ) *protos.HistoryEvent {
 	return &protos.HistoryEvent{
 		EventId:   -1,
