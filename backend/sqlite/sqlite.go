@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,6 +38,19 @@ type sqliteBackend struct {
 	workerName string
 	logger     backend.Logger
 	options    *SqliteOptions
+
+	pendingOrchestrators *sync.Map
+	pendingActivities    *sync.Map
+}
+
+type executionResults struct {
+	response *protos.OrchestratorResponse
+	complete chan interface{}
+}
+
+type activityExecutionResult struct {
+	response *protos.ActivityResponse
+	complete chan interface{}
 }
 
 // NewSqliteOptions creates a new options object for the sqlite backend provider.
@@ -62,10 +76,12 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 	uuidStr := uuid.NewString()
 
 	be := &sqliteBackend{
-		db:         nil,
-		workerName: fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
-		options:    opts,
-		logger:     logger,
+		db:                   nil,
+		workerName:           fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
+		options:              opts,
+		logger:               logger,
+		pendingOrchestrators: &sync.Map{},
+		pendingActivities:    &sync.Map{},
 	}
 
 	if opts == nil {
@@ -981,6 +997,86 @@ func (*sqliteBackend) Start(context.Context) error {
 // Stop implements backend.Backend
 func (*sqliteBackend) Stop(context.Context) error {
 	return nil
+}
+
+// SetPendingActivity implements backend.Backend.
+func (be *sqliteBackend) SetPendingActivity(ctx context.Context, id api.InstanceID, taskID int32) error {
+	key := getActivityExecutionKey(string(id), taskID)
+	result := &activityExecutionResult{complete: make(chan interface{})}
+	be.pendingActivities.Store(key, result)
+	return nil
+}
+
+// CompletePendingActivity implements backend.Backend.
+func (be *sqliteBackend) CompletePendingActivity(ctx context.Context, res *protos.ActivityResponse) error {
+	key := getActivityExecutionKey(res.InstanceId, res.TaskId)
+	if p, ok := be.pendingActivities.Load(key); ok {
+		pending := p.(*activityExecutionResult)
+		pending.response = res
+		pending.complete <- true
+		return nil
+	}
+
+	return fmt.Errorf("unknown instance ID/task ID combo: %s", key)
+}
+
+// WaitForPendingActivity implements backend.Backend.
+func (be *sqliteBackend) WaitForPendingActivity(ctx context.Context, id api.InstanceID, taskID int32) (*protos.ActivityResponse, error) {
+	key := getActivityExecutionKey(string(id), taskID)
+	p, ok := be.pendingActivities.Load(key)
+	if !ok {
+		return nil, fmt.Errorf("unknown instance ID/task ID combo: %s", key)
+	}
+	defer be.pendingActivities.Delete(key)
+
+	pending := p.(*activityExecutionResult)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-pending.complete:
+		return pending.response, nil
+	}
+}
+
+func getActivityExecutionKey(iid string, taskID int32) string {
+	return fmt.Sprintf("%s/%d", iid, taskID)
+}
+
+// SetPendingOrchestrator implements backend.Backend.
+func (be *sqliteBackend) SetPendingOrchestrator(ctx context.Context, id api.InstanceID) error {
+	result := &executionResults{complete: make(chan interface{})}
+	be.pendingOrchestrators.Store(id, result)
+	return nil
+}
+
+// CompletePendingOrchestrator implements backend.Backend.
+func (be *sqliteBackend) CompletePendingOrchestrator(ctx context.Context, res *protos.OrchestratorResponse) error {
+	iid := api.InstanceID(res.InstanceId)
+	if p, ok := be.pendingOrchestrators.Load(iid); ok {
+		pending := p.(*executionResults)
+		pending.response = res
+		pending.complete <- true
+		return nil
+	}
+
+	return fmt.Errorf("unknown instance ID: %s", res.InstanceId)
+}
+
+// WaitForPendingOrchestrator implements backend.Backend.
+func (be *sqliteBackend) WaitForPendingOrchestrator(ctx context.Context, id api.InstanceID) (*protos.OrchestratorResponse, error) {
+	p, ok := be.pendingOrchestrators.Load(id)
+	if !ok {
+		return nil, fmt.Errorf("unknown instance ID: %s", id)
+	}
+	defer be.pendingOrchestrators.Delete(id)
+
+	pending := p.(*executionResults)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-pending.complete:
+		return pending.response, nil
+	}
 }
 
 func (be *sqliteBackend) ensureDB() error {

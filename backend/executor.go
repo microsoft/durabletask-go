@@ -29,14 +29,6 @@ var errShuttingDown error = status.Error(codes.Canceled, "shutting down")
 
 type ExecutionResults struct {
 	Response *protos.OrchestratorResponse
-	complete chan struct{}
-	pending  chan string
-}
-
-type activityExecutionResult struct {
-	response *protos.ActivityResponse
-	complete chan struct{}
-	pending  chan string
 }
 
 type Executor interface {
@@ -48,8 +40,7 @@ type Executor interface {
 type grpcExecutor struct {
 	protos.UnimplementedTaskHubSidecarServiceServer
 	workItemQueue        chan *protos.WorkItem
-	pendingOrchestrators *sync.Map // map[api.InstanceID]*ExecutionResults
-	pendingActivities    *sync.Map // map[string]*activityExecutionResult
+	inflightWorkItems    *sync.Map
 	backend              Backend
 	logger               Logger
 	onWorkItemConnection func(context.Context) error
@@ -82,11 +73,10 @@ func WithStreamShutdownChannel(c <-chan any) grpcExecutorOptions {
 // NewGrpcExecutor returns the Executor object and a method to invoke to register the gRPC server in the executor.
 func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) (executor Executor, registerServerFn func(grpcServer grpc.ServiceRegistrar)) {
 	grpcExecutor := &grpcExecutor{
-		workItemQueue:        make(chan *protos.WorkItem),
-		backend:              be,
-		logger:               logger,
-		pendingOrchestrators: &sync.Map{},
-		pendingActivities:    &sync.Map{},
+		workItemQueue:     make(chan *protos.WorkItem),
+		backend:           be,
+		logger:            logger,
+		inflightWorkItems: &sync.Map{},
 	}
 
 	for _, opt := range opts {
@@ -100,8 +90,19 @@ func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) (ex
 
 // ExecuteOrchestrator implements Executor
 func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*ExecutionResults, error) {
-	result := &ExecutionResults{complete: make(chan struct{})}
-	executor.pendingOrchestrators.Store(iid, result)
+	executor.logger.Debugf("executing orchestrator %v", string(iid))
+
+	waitCtx, waitCancel := context.WithCancel(ctx)
+	defer waitCancel()
+
+	err := executor.backend.SetPendingOrchestrator(ctx, iid)
+	if err != nil {
+		return nil, err
+	}
+
+	key := getOrchestratorExecutionKey(string(iid))
+	executor.inflightWorkItems.Store(key, waitCancel)
+	defer executor.inflightWorkItems.Delete(key)
 
 	workItem := &protos.WorkItem{
 		Request: &protos.WorkItem_OrchestratorRequest{
@@ -124,25 +125,42 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 	}
 
 	// Wait for the connected worker to signal that it's done executing the work-item
-	select {
-	case <-ctx.Done():
-		executor.logger.Warnf("%s: context canceled before receiving orchestrator result", iid)
-		return nil, ctx.Err()
-	case <-result.complete:
-		executor.logger.Debugf("%s: orchestrator got result", iid)
-		if result.Response == nil {
+	response, err := executor.backend.WaitForPendingOrchestrator(waitCtx, iid)
+	if err != nil {
+		if waitCtx.Err() != nil {
 			return nil, errors.New("operation aborted")
 		}
+		if ctx.Err() != nil {
+			executor.logger.Warnf("%s: context canceled before receiving orchestrator result", iid)
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	executor.logger.Debugf("%s: orchestrator got result", iid)
+	if response == nil {
+		return nil, errors.New("operation aborted")
 	}
 
-	return result, nil
+	return &ExecutionResults{
+		Response: response,
+	}, nil
 }
 
 // ExecuteActivity implements Executor
 func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.InstanceID, e *protos.HistoryEvent) (*protos.HistoryEvent, error) {
+	executor.logger.Debugf("executing activity %v %d", string(iid), e.EventId)
+
+	waitCtx, waitCancel := context.WithCancel(ctx)
+	defer waitCancel()
+
+	err := executor.backend.SetPendingActivity(ctx, iid, e.EventId)
+	if err != nil {
+		return nil, err
+	}
+
 	key := getActivityExecutionKey(string(iid), e.EventId)
-	result := &activityExecutionResult{complete: make(chan struct{})}
-	executor.pendingActivities.Store(key, result)
+	executor.inflightWorkItems.Store(key, waitCancel)
+	defer executor.inflightWorkItems.Delete(key)
 
 	task := e.GetTaskScheduled()
 	workItem := &protos.WorkItem{
@@ -167,22 +185,27 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 	}
 
 	// Wait for the connected worker to signal that it's done executing the work-item
-	select {
-	case <-ctx.Done():
-		executor.logger.Warnf("%s/%s#%d: context canceled before receiving activity result", iid, task.Name, e.EventId)
-		return nil, ctx.Err()
-	case <-result.complete:
-		executor.logger.Debugf("%s: activity got result", key)
-		if result.response == nil {
+	response, err := executor.backend.WaitForPendingActivity(waitCtx, iid, e.EventId)
+	if err != nil {
+		if waitCtx.Err() != nil {
 			return nil, errors.New("operation aborted")
 		}
+		if ctx.Err() != nil {
+			executor.logger.Warnf("%s/%s#%d: context canceled before dispatching activity work item", iid, task.Name, e.EventId)
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	executor.logger.Debugf("%s: activity got result", key)
+	if response == nil {
+		return nil, errors.New("operation aborted")
 	}
 
 	var responseEvent *protos.HistoryEvent
-	if failureDetails := result.response.GetFailureDetails(); failureDetails != nil {
-		responseEvent = helpers.NewTaskFailedEvent(result.response.TaskId, result.response.FailureDetails)
+	if failureDetails := response.GetFailureDetails(); failureDetails != nil {
+		responseEvent = helpers.NewTaskFailedEvent(response.TaskId, response.FailureDetails)
 	} else {
-		responseEvent = helpers.NewTaskCompletedEvent(result.response.TaskId, result.response.Result)
+		responseEvent = helpers.NewTaskCompletedEvent(response.TaskId, response.Result)
 	}
 
 	return responseEvent, nil
@@ -193,19 +216,13 @@ func (g *grpcExecutor) Shutdown(ctx context.Context) error {
 	// closing the work item queue is a signal for shutdown
 	close(g.workItemQueue)
 
-	// Iterate through all pending items and close them to unblock the goroutines waiting on this
-	g.pendingActivities.Range(func(_, value any) bool {
-		p, ok := value.(*activityExecutionResult)
+	// Iterate through all inflight work items and cancel them to unblock the goroutines waiting on ExecuteOrchestrator or ExecuteActivity
+	g.inflightWorkItems.Range(func(key, value any) bool {
+		cancel, ok := value.(context.CancelFunc)
 		if ok {
-			close(p.complete)
+			cancel()
 		}
-		return true
-	})
-	g.pendingOrchestrators.Range(func(_, value any) bool {
-		p, ok := value.(*ExecutionResults)
-		if ok {
-			close(p.complete)
-		}
+		g.inflightWorkItems.Delete(key)
 		return true
 	})
 
@@ -234,30 +251,16 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 		}
 	}
 
-	// Collect all pending activities on this stream
-	// Note: we don't need sync.Map's here because access is only on this thread
-	pendingActivities := make(map[string]struct{})
-	pendingActivityCh := make(chan string, 1)
-	pendingOrchestrators := make(map[string]struct{})
-	pendingOrchestratorCh := make(chan string, 1)
 	defer func() {
-		// If there's any pending activity left, remove them
-		for key := range pendingActivities {
-			g.logger.Debugf("cleaning up pending activity: %s", key)
-			p, ok := g.pendingActivities.LoadAndDelete(key)
+		// Iterate through all inflight work items and cancel them to unblock the goroutines waiting on ExecuteOrchestrator or ExecuteActivity
+		g.inflightWorkItems.Range(func(key, value any) bool {
+			cancel, ok := value.(context.CancelFunc)
 			if ok {
-				pending := p.(*activityExecutionResult)
-				close(pending.complete)
+				cancel()
 			}
-		}
-		for key := range pendingOrchestrators {
-			g.logger.Debugf("cleaning up pending orchestrator: %s", key)
-			p, ok := g.pendingOrchestrators.LoadAndDelete(api.InstanceID(key))
-			if ok {
-				pending := p.(*ExecutionResults)
-				close(pending.complete)
-			}
-		}
+			g.inflightWorkItems.Delete(key)
+			return true
+		})
 	}()
 
 	// The worker client invokes this method, which streams back work-items as they arrive.
@@ -270,31 +273,10 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 			if !ok {
 				continue
 			}
-			switch x := wi.Request.(type) {
-			case *protos.WorkItem_OrchestratorRequest:
-				key := x.OrchestratorRequest.GetInstanceId()
-				pendingOrchestrators[key] = struct{}{}
-				p, ok := g.pendingOrchestrators.Load(api.InstanceID(key))
-				if ok {
-					p.(*ExecutionResults).pending = pendingOrchestratorCh
-				}
-			case *protos.WorkItem_ActivityRequest:
-				key := getActivityExecutionKey(x.ActivityRequest.GetOrchestrationInstance().GetInstanceId(), x.ActivityRequest.GetTaskId())
-				pendingActivities[key] = struct{}{}
-				p, ok := g.pendingActivities.Load(key)
-				if ok {
-					p.(*activityExecutionResult).pending = pendingActivityCh
-				}
-			}
-
 			if err := stream.Send(wi); err != nil {
 				g.logger.Errorf("encountered an error while sending work item: %v", err)
 				return err
 			}
-		case key := <-pendingActivityCh:
-			delete(pendingActivities, key)
-		case key := <-pendingOrchestratorCh:
-			delete(pendingOrchestrators, key)
 		case <-g.streamShutdownChan:
 			return errShuttingDown
 		}
@@ -303,58 +285,30 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 
 // CompleteOrchestratorTask implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) CompleteOrchestratorTask(ctx context.Context, res *protos.OrchestratorResponse) (*protos.CompleteTaskResponse, error) {
-	iid := api.InstanceID(res.InstanceId)
-	if g.deletePendingOrchestrator(iid, res) {
-		return emptyCompleteTaskResponse, nil
+	err := g.backend.CompletePendingOrchestrator(ctx, res)
+	if err != nil {
+		return emptyCompleteTaskResponse, err
 	}
 
-	return emptyCompleteTaskResponse, fmt.Errorf("unknown instance ID: %s", res.InstanceId)
-}
-
-func (g *grpcExecutor) deletePendingOrchestrator(iid api.InstanceID, res *protos.OrchestratorResponse) bool {
-	p, ok := g.pendingOrchestrators.LoadAndDelete(iid)
-	if !ok {
-		return false
-	}
-
-	// Note that res can be nil in case of certain failures
-	pending := p.(*ExecutionResults)
-	pending.Response = res
-	if pending.pending != nil {
-		pending.pending <- string(iid)
-	}
-	close(pending.complete)
-	return true
+	return emptyCompleteTaskResponse, nil
 }
 
 // CompleteActivityTask implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) CompleteActivityTask(ctx context.Context, res *protos.ActivityResponse) (*protos.CompleteTaskResponse, error) {
-	key := getActivityExecutionKey(res.InstanceId, res.TaskId)
-	if g.deletePendingActivityTask(key, res) {
-		return emptyCompleteTaskResponse, nil
+	err := g.backend.CompletePendingActivity(ctx, res)
+	if err != nil {
+		return emptyCompleteTaskResponse, err
 	}
 
-	return emptyCompleteTaskResponse, fmt.Errorf("unknown instance ID/task ID combo: %s", key)
+	return emptyCompleteTaskResponse, nil
 }
 
-func (g *grpcExecutor) deletePendingActivityTask(key string, res *protos.ActivityResponse) bool {
-	p, ok := g.pendingActivities.LoadAndDelete(key)
-	if !ok {
-		return false
-	}
-
-	// Note that res can be nil in case of certain failures
-	pending := p.(*activityExecutionResult)
-	pending.response = res
-	if pending.pending != nil {
-		pending.pending <- key
-	}
-	close(pending.complete)
-	return true
+func getOrchestratorExecutionKey(iid string) string {
+	return "wf:" + iid
 }
 
 func getActivityExecutionKey(iid string, taskID int32) string {
-	return iid + "/" + strconv.FormatInt(int64(taskID), 10)
+	return "activity:" + iid + "/" + strconv.FormatInt(int64(taskID), 10)
 }
 
 // CreateTaskHub implements protos.TaskHubSidecarServiceServer
