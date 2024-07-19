@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -45,6 +46,7 @@ type worker struct {
 	cancel    context.CancelFunc
 	processor TaskProcessor
 	waiting   bool
+	stop      atomic.Bool
 }
 
 type NewTaskWorkerOptions func(*WorkerOptions)
@@ -88,6 +90,8 @@ func (w *worker) Start(ctx context.Context) {
 	// TODO: Check for already started worker
 	ctx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
+
+	w.stop.Store(false)
 
 	go func() {
 		var b backoff.BackOff = &backoff.ExponentialBackOff{
@@ -190,6 +194,11 @@ func (w *worker) ProcessNext(ctx context.Context) (bool, error) {
 }
 
 func (w *worker) StopAndDrain() {
+	w.logger.Debugf("%v: stop and drain...", w.Name())
+	defer w.logger.Debugf("%v: finished stop and drain...", w.Name())
+
+	w.stop.Store(true)
+
 	// Cancel the background poller and dispatcher(s)
 	if w.cancel != nil {
 		w.cancel()
@@ -206,7 +215,17 @@ func (w *worker) processWorkItem(ctx context.Context, wi WorkItem) {
 
 	w.logger.Debugf("%v: processing work item: %s", w.Name(), wi)
 
+	if w.stop.Load() {
+		if err := w.processor.AbandonWorkItem(context.Background(), wi); err != nil {
+			w.logger.Errorf("%v: failed to abandon work item: %v", w.Name(), err)
+		}
+		return
+	}
+
 	if err := w.processor.ProcessWorkItem(ctx, wi); err != nil {
+		if w.stop.Load() {
+			ctx = context.Background()
+		}
 		if errors.Is(err, ctx.Err()) {
 			w.logger.Warnf("%v: abandoning work item due to cancellation", w.Name())
 		} else {
@@ -219,7 +238,14 @@ func (w *worker) processWorkItem(ctx context.Context, wi WorkItem) {
 	}
 
 	if err := w.processor.CompleteWorkItem(ctx, wi); err != nil {
-		w.logger.Errorf("%v: failed to complete work item: %v", w.Name(), err)
+		if w.stop.Load() {
+			ctx = context.Background()
+		}
+		if errors.Is(err, ctx.Err()) {
+			w.logger.Warnf("%v: failed to complete work item due to cancellation", w.Name())
+		} else {
+			w.logger.Errorf("%v: failed to complete work item: %v", w.Name(), err)
+		}
 		if err := w.processor.AbandonWorkItem(ctx, wi); err != nil {
 			w.logger.Errorf("%v: failed to abandon work item: %v", w.Name(), err)
 		}

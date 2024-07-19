@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
@@ -11,6 +12,7 @@ import (
 	"github.com/microsoft/durabletask-go/tests/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -106,4 +108,99 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	// Successfully processing a work-item should result in a nil error
 	assert.Nil(t, err)
 	assert.True(t, ok)
+}
+
+func Test_TaskWorker(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tp := mocks.NewTestTaskPocessor("test")
+	tp.UnblockProcessing()
+
+	first := backend.ActivityWorkItem{
+		SequenceNumber: 1,
+	}
+	second := backend.ActivityWorkItem{
+		SequenceNumber: 2,
+	}
+	tp.AddWorkItems(first, second)
+
+	worker := backend.NewTaskWorker(tp, logger)
+
+	worker.Start(ctx)
+
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		if len(tp.PendingWorkItems()) == 0 {
+			return
+		}
+		collect.Errorf("work items not consumed yet")
+	}, 500*time.Millisecond, 100*time.Millisecond)
+
+	require.Len(t, tp.PendingWorkItems(), 0)
+	require.Len(t, tp.AbandonedWorkItems(), 0)
+	require.Len(t, tp.CompletedWorkItems(), 2)
+	require.Equal(t, first, tp.CompletedWorkItems()[0])
+	require.Equal(t, second, tp.CompletedWorkItems()[1])
+
+	drainFinished := make(chan bool)
+	go func() {
+		worker.StopAndDrain()
+		drainFinished <- true
+	}()
+
+	select {
+	case <-drainFinished:
+		return
+	case <-time.After(1 * time.Second):
+		t.Fatalf("worker stop and drain not finished within timeout")
+	}
+
+}
+
+func Test_StartAndStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tp := mocks.NewTestTaskPocessor("test")
+	tp.BlockProcessing()
+
+	first := backend.ActivityWorkItem{
+		SequenceNumber: 1,
+	}
+	second := backend.ActivityWorkItem{
+		SequenceNumber: 2,
+	}
+	tp.AddWorkItems(first, second)
+
+	worker := backend.NewTaskWorker(tp, logger)
+
+	worker.Start(ctx)
+
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		if len(tp.PendingWorkItems()) == 1 {
+			return
+		}
+		collect.Errorf("first work item not consumed yet")
+	}, 500*time.Millisecond, 100*time.Millisecond)
+
+	// due to the configuration of the TestTaskProcessor, now the work item is blocked on ProcessWorkItem until the context is cancelled
+
+	drainFinished := make(chan bool)
+	go func() {
+		worker.StopAndDrain()
+		drainFinished <- true
+	}()
+
+	select {
+	case <-drainFinished:
+		return
+	case <-time.After(1 * time.Second):
+		t.Fatalf("worker stop and drain not finished within timeout")
+	}
+
+	require.Len(t, tp.PendingWorkItems(), 1)
+	require.Equal(t, second, tp.PendingWorkItems()[0])
+	require.Len(t, tp.AbandonedWorkItems(), 1)
+	require.Equal(t, first, tp.AbandonedWorkItems()[0])
+	require.Len(t, tp.CompletedWorkItems(), 0)
 }

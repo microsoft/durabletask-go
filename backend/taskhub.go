@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"sync"
 )
 
 type TaskHubWorker interface {
@@ -50,7 +51,22 @@ func (w *taskHubWorker) Shutdown(ctx context.Context) error {
 	}
 
 	w.logger.Info("workers stopping and draining...")
-	w.orchestrationWorker.StopAndDrain()
-	w.activityWorker.StopAndDrain()
+	defer w.logger.Info("finished stopping and draining workers!")
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.orchestrationWorker.StopAndDrain()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.activityWorker.StopAndDrain()
+	}()
+
+	wg.Wait()
+
 	return nil
 }
