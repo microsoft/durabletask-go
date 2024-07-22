@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,21 +31,31 @@ func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 	state := &backend.OrchestrationRuntimeState{}
 	result := &backend.ExecutionResults{Response: &protos.OrchestratorResponse{}}
 
+	completed := atomic.Bool{}
 	be := mocks.NewBackend(t)
 	be.EXPECT().GetOrchestrationWorkItem(anyContext).Return(wi, nil).Once()
 	be.EXPECT().GetOrchestrationRuntimeState(anyContext, wi).Return(state, nil).Once()
-	be.EXPECT().CompleteOrchestrationWorkItem(anyContext, wi).Return(nil).Once()
+	be.EXPECT().CompleteOrchestrationWorkItem(anyContext, wi).RunAndReturn(func(ctx context.Context, owi *backend.OrchestrationWorkItem) error {
+		completed.Store(true)
+		return nil
+	}).Once()
 
 	ex := mocks.NewExecutor(t)
 	ex.EXPECT().ExecuteOrchestrator(anyContext, wi.InstanceID, state.OldEvents(), mock.Anything).Return(result, nil).Once()
 
 	worker := backend.NewOrchestrationWorker(be, ex, logger)
 	ok, err := worker.ProcessNext(ctx)
-	worker.StopAndDrain()
-
 	// Successfully processing a work-item should result in a nil error
 	assert.Nil(t, err)
 	assert.True(t, ok)
+
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		if !completed.Load() {
+			collect.Errorf("process next not called CompleteOrchestrationWorkItem yet")
+		}
+	}, 1*time.Second, 100*time.Millisecond)
+
+	worker.StopAndDrain()
 }
 
 func Test_TryProcessSingleOrchestrationWorkItem_NoWorkItems(t *testing.T) {
@@ -98,16 +109,26 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	ex.EXPECT().ExecuteOrchestrator(anyContext, iid, []*protos.HistoryEvent{}, mock.Anything).Return(result, nil).Once()
 
 	// After execution, the Complete action should be called
-	be.EXPECT().CompleteOrchestrationWorkItem(anyContext, wi).Return(nil).Once()
+	completed := atomic.Bool{}
+	be.EXPECT().CompleteOrchestrationWorkItem(anyContext, wi).RunAndReturn(func(ctx context.Context, owi *backend.OrchestrationWorkItem) error {
+		completed.Store(true)
+		return nil
+	}).Once()
 
 	// Set up and run the test
 	worker := backend.NewOrchestrationWorker(be, ex, logger)
 	ok, err := worker.ProcessNext(ctx)
-	worker.StopAndDrain()
-
 	// Successfully processing a work-item should result in a nil error
 	assert.Nil(t, err)
 	assert.True(t, ok)
+
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		if !completed.Load() {
+			collect.Errorf("process next not called CompleteOrchestrationWorkItem yet")
+		}
+	}, 1*time.Second, 100*time.Millisecond)
+
+	worker.StopAndDrain()
 }
 
 func Test_TaskWorker(t *testing.T) {
