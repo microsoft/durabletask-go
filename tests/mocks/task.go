@@ -12,6 +12,7 @@ import (
 
 var _ backend.TaskProcessor = &TestTaskProcessor{}
 
+// TestTaskProcessor implements a dummy task processor useful for testing
 type TestTaskProcessor struct {
 	name string
 
