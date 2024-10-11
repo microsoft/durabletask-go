@@ -155,6 +155,7 @@ func Test_Grpc_HelloOrchestration(t *testing.T) {
 		}
 		var output string
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		ctx.SetCustomStatus("hello-test")
 		return output, err
 	})
 	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
@@ -176,6 +177,7 @@ func Test_Grpc_HelloOrchestration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, true, metadata.IsComplete())
 	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+	assert.Equal(t, "hello-test", metadata.SerializedCustomStatus)
 	time.Sleep(1 * time.Second)
 }
 
