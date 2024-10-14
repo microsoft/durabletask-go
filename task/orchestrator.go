@@ -37,6 +37,7 @@ type OrchestrationContext struct {
 	pendingTasks        map[int32]*completableTask
 	continuedAsNew      bool
 	continuedAsNewInput any
+	customStatus        string
 
 	bufferedExternalEvents     map[string]*list.List
 	pendingExternalEventTasks  map[string]*list.List
@@ -211,6 +212,10 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 		err = fmt.Errorf("don't know how to handle event: %v", e)
 	}
 	return err
+}
+
+func (octx *OrchestrationContext) SetCustomStatus(cs string) {
+	octx.customStatus = cs
 }
 
 // GetInput unmarshals the serialized orchestration input and stores it in [v].
