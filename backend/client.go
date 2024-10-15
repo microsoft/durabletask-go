@@ -58,7 +58,7 @@ func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrat
 	defer span.End()
 
 	tc := helpers.TraceContextFromSpan(span)
-	e := helpers.NewExecutionStartedEvent(req.Name, req.InstanceId, req.Input, nil, tc)
+	e := helpers.NewExecutionStartedEvent(req.Name, req.InstanceId, req.Input, nil, tc, req.ScheduledStartTimestamp)
 	if err := c.be.CreateOrchestrationInstance(ctx, e, WithOrchestrationIdReusePolicy(req.OrchestrationIdReusePolicy)); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -73,7 +73,7 @@ func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrat
 func (c *backendClient) FetchOrchestrationMetadata(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error) {
 	metadata, err := c.be.GetOrchestrationMetadata(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch orchestration metadata: %w", err)
+		return nil, fmt.Errorf("failed to fetch orchestration metadata: %w", err)
 	}
 	return metadata, nil
 }

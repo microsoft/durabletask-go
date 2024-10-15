@@ -117,6 +117,7 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 						completedAction.Result,
 						s.startEvent.ParentInstance,
 						s.startEvent.ParentTraceContext,
+						nil,
 					),
 				)
 
@@ -188,6 +189,7 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 				createSO.Input,
 				helpers.NewParentInfo(action.Id, s.startEvent.Name, string(s.instanceID)),
 				currentTraceContext,
+				nil,
 			)
 			s.pendingMessages = append(s.pendingMessages, OrchestratorMessage{HistoryEvent: startEvent, TargetInstanceID: createSO.InstanceId})
 		} else if sendEvent := action.GetSendEvent(); sendEvent != nil {

@@ -180,16 +180,20 @@ func terminateSubOrchestrationInstances(ctx context.Context, be Backend, iid api
 
 // getSubOrchestrationInstances returns the instance IDs of all sub-orchestrations in the specified events.
 func getSubOrchestrationInstances(oldEvents []*HistoryEvent, newEvents []*HistoryEvent) []api.InstanceID {
-	subOrchestrationInstances := make([]api.InstanceID, 0, len(oldEvents)+len(newEvents))
+	subOrchestrationInstancesMap := make(map[api.InstanceID]struct{}, len(oldEvents)+len(newEvents))
 	for _, e := range oldEvents {
 		if created := e.GetSubOrchestrationInstanceCreated(); created != nil {
-			subOrchestrationInstances = append(subOrchestrationInstances, api.InstanceID(created.InstanceId))
+			subOrchestrationInstancesMap[api.InstanceID(created.InstanceId)] = struct{}{}
 		}
 	}
 	for _, e := range newEvents {
 		if created := e.GetSubOrchestrationInstanceCreated(); created != nil {
-			subOrchestrationInstances = append(subOrchestrationInstances, api.InstanceID(created.InstanceId))
+			subOrchestrationInstancesMap[api.InstanceID(created.InstanceId)] = struct{}{}
 		}
+	}
+	subOrchestrationInstances := make([]api.InstanceID, 0, len(subOrchestrationInstancesMap))
+	for orch := range subOrchestrationInstancesMap {
+		subOrchestrationInstances = append(subOrchestrationInstances, orch)
 	}
 	return subOrchestrationInstances
 }

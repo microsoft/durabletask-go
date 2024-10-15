@@ -23,7 +23,7 @@ type ActivityExecutor interface {
 
 func NewActivityTaskWorker(be Backend, executor ActivityExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
 	processor := newActivityProcessor(be, executor)
-	return NewTaskWorker(be, processor, logger, opts...)
+	return NewTaskWorker(processor, logger, opts...)
 }
 
 func newActivityProcessor(be Backend, executor ActivityExecutor) TaskProcessor {
@@ -88,10 +88,10 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, wi WorkItem) er
 func (ap *activityProcessor) CompleteWorkItem(ctx context.Context, wi WorkItem) error {
 	awi := wi.(*ActivityWorkItem)
 	if awi.Result == nil {
-		return fmt.Errorf("can't complete work item '%s' with nil result", wi.Description())
+		return fmt.Errorf("can't complete work item '%s' with nil result", wi)
 	}
 	if awi.Result.GetTaskCompleted() == nil && awi.Result.GetTaskFailed() == nil {
-		return fmt.Errorf("can't complete work item '%s', which isn't TaskCompleted or TaskFailed", wi.Description())
+		return fmt.Errorf("can't complete work item '%s', which isn't TaskCompleted or TaskFailed", wi)
 	}
 
 	return ap.be.CompleteActivityWorkItem(ctx, awi)
