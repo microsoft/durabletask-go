@@ -1,4 +1,4 @@
-package tests
+package utils
 
 import (
 	"fmt"
@@ -25,14 +25,14 @@ var (
 	sharedTraceExporter = tracetest.NewInMemoryExporter()
 )
 
-func assertSpanSequence(t assert.TestingT, spans []trace.ReadOnlySpan, spanAsserts ...spanValidator) {
+func AssertSpanSequence(t assert.TestingT, spans []trace.ReadOnlySpan, spanAsserts ...spanValidator) {
 	for i, f := range spanAsserts {
 		f(t, spans, i)
 	}
 }
 
 // assertOrchestratorCreated validates a create_orchestration span
-func assertOrchestratorCreated(name string, id api.InstanceID, optionalAsserts ...spanAttributeValidator) spanValidator {
+func AssertOrchestratorCreated(name string, id api.InstanceID, optionalAsserts ...spanAttributeValidator) spanValidator {
 	spanName := fmt.Sprintf("create_orchestration||%s", name)
 	opts := []spanAttributeValidator{
 		assertTaskType("orchestration"),
@@ -40,11 +40,11 @@ func assertOrchestratorCreated(name string, id api.InstanceID, optionalAsserts .
 		assertInstanceID(id),
 	}
 	opts = append(opts, optionalAsserts...)
-	return assertSpan(spanName, opts...)
+	return AssertSpan(spanName, opts...)
 }
 
 // assertOrchestratorCreated validates an orchestration span
-func assertOrchestratorExecuted(name string, id api.InstanceID, status string, optionalAsserts ...spanAttributeValidator) spanValidator {
+func AssertOrchestratorExecuted(name string, id api.InstanceID, status string, optionalAsserts ...spanAttributeValidator) spanValidator {
 	spanName := fmt.Sprintf("orchestration||%s", name)
 	opts := []spanAttributeValidator{
 		assertTaskType("orchestration"),
@@ -53,10 +53,10 @@ func assertOrchestratorExecuted(name string, id api.InstanceID, status string, o
 		assertStatus(status),
 	}
 	opts = append(opts, optionalAsserts...)
-	return assertSpan(spanName, opts...)
+	return AssertSpan(spanName, opts...)
 }
 
-func assertActivity(name string, id api.InstanceID, taskID int64, optionalAsserts ...spanAttributeValidator) spanValidator {
+func AssertActivity(name string, id api.InstanceID, taskID int64, optionalAsserts ...spanAttributeValidator) spanValidator {
 	spanName := fmt.Sprintf("activity||%s", name)
 	opts := []spanAttributeValidator{
 		assertTaskType("activity"),
@@ -65,14 +65,14 @@ func assertActivity(name string, id api.InstanceID, taskID int64, optionalAssert
 		assertTaskID(taskID),
 	}
 	opts = append(opts, optionalAsserts...)
-	return assertSpan(spanName, opts...)
+	return AssertSpan(spanName, opts...)
 }
 
-func assertTimer(id api.InstanceID) spanValidator {
-	return assertSpan("timer", assertInstanceID(id), assertTimerFired())
+func AssertTimer(id api.InstanceID) spanValidator {
+	return AssertSpan("timer", assertInstanceID(id), assertTimerFired())
 }
 
-func assertSpanEvents(eventAsserts ...spanEventValidator) spanAttributeValidator {
+func AssertSpanEvents(eventAsserts ...spanEventValidator) spanAttributeValidator {
 	return func(t assert.TestingT, span trace.ReadOnlySpan) bool {
 		if assert.Equal(t, len(eventAsserts), len(span.Events()), "unexpected number of span events") {
 			for i, f := range eventAsserts {
@@ -85,7 +85,7 @@ func assertSpanEvents(eventAsserts ...spanEventValidator) spanAttributeValidator
 	}
 }
 
-func assertExternalEvent(eventName string, payloadSize int) spanEventValidator {
+func AssertExternalEvent(eventName string, payloadSize int) spanEventValidator {
 	return func(t assert.TestingT, span trace.ReadOnlySpan, eventIndex int) bool {
 		event := span.Events()[eventIndex]
 		hasMessage := assert.Equal(t, "Received external event", event.Name)
@@ -101,21 +101,21 @@ func assertExternalEvent(eventName string, payloadSize int) spanEventValidator {
 	}
 }
 
-func assertSuspendedEvent() spanEventValidator {
+func AssertSuspendedEvent() spanEventValidator {
 	return func(t assert.TestingT, span trace.ReadOnlySpan, eventIndex int) bool {
 		event := span.Events()[eventIndex]
 		return assert.Equal(t, "Execution suspended", event.Name)
 	}
 }
 
-func assertResumedEvent() spanEventValidator {
+func AssertResumedEvent() spanEventValidator {
 	return func(t assert.TestingT, span trace.ReadOnlySpan, eventIndex int) bool {
 		event := span.Events()[eventIndex]
 		return assert.Equal(t, "Execution resumed", event.Name)
 	}
 }
 
-func assertSpan(name string, optionalAsserts ...spanAttributeValidator) spanValidator {
+func AssertSpan(name string, optionalAsserts ...spanAttributeValidator) spanValidator {
 	return func(t assert.TestingT, spans []trace.ReadOnlySpan, index int) {
 		if !doAssertSpan(t, spans, index, name, optionalAsserts...) {
 			fmt.Printf("span assertion for %s (index=%d) failed\n", name, index)
@@ -217,7 +217,7 @@ func assertTimerFired() spanAttributeValidator {
 // to examine the exported traces. We only want to look at exported traces because we do
 // tricks to mark certain spans as non-exported (i.e. orchestration replays), and want
 // to ensure that those spans are never actually exported.
-func initTracing() *tracetest.InMemoryExporter {
+func InitTracing() *tracetest.InMemoryExporter {
 	// The global tracer provider can only be initialized once.
 	// Subsequent initializations will silently fail.
 	initTracingOnce.Do(func() {

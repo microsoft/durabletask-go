@@ -169,8 +169,12 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 	executor backend.Executor,
 	req *protos.ActivityRequest,
 ) {
-	var tc *protos.TraceContext = nil // TODO: How to populate trace context?
-	event := helpers.NewTaskScheduledEvent(req.TaskId, req.Name, req.Version, req.Input, tc)
+	var ptc *protos.TraceContext = req.ParentTraceContext
+	ctx, err := helpers.ContextFromTraceContext(ctx, ptc)
+	if err != nil {
+		fmt.Printf("%v: failed to parse trace context: %v", req.Name, err)
+	}
+	event := helpers.NewTaskScheduledEvent(req.TaskId, req.Name, req.Version, req.Input, ptc)
 	result, err := executor.ExecuteActivity(ctx, api.InstanceID(req.OrchestrationInstance.InstanceId), event)
 
 	resp := protos.ActivityResponse{InstanceId: req.OrchestrationInstance.InstanceId, TaskId: req.TaskId}
