@@ -188,9 +188,14 @@ func (c *TaskHubGrpcClient) ResumeOrchestration(ctx context.Context, id api.Inst
 // PurgeOrchestrationState deletes the state of the specified orchestration instance.
 //
 // [api.api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
-func (c *TaskHubGrpcClient) PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error {
+func (c *TaskHubGrpcClient) PurgeOrchestrationState(ctx context.Context, id api.InstanceID, opts ...api.PurgeOptions) error {
 	req := &protos.PurgeInstancesRequest{
 		Request: &protos.PurgeInstancesRequest_InstanceId{InstanceId: string(id)},
+	}
+	for _, configure := range opts {
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure purge request: %w", err)
+		}
 	}
 
 	res, err := c.client.PurgeInstances(ctx, req)
