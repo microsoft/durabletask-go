@@ -99,3 +99,14 @@ func (t *completableTask) completeInternal() {
 		t.completedCallback()
 	}
 }
+
+type taskWrapper struct {
+	delegate      Task
+	onAwaitResult func(any, error) error
+}
+
+var _ Task = &taskWrapper{}
+
+func (t *taskWrapper) Await(v any) error {
+	return t.onAwaitResult(v, t.delegate.Await(v))
+}
