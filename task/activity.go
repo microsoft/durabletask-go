@@ -20,12 +20,16 @@ type callActivityOptions struct {
 type ActivityRetryPolicy struct {
 	// Max number of attempts to try the activity call, first execution inclusive
 	MaxAttempts int
-	//
+	// Timespan to wait for the first retry
 	InitialRetryInterval time.Duration
-	BackoffCoefficient   float64
-	MaxRetryInterval     time.Duration
-	RetryTimeout         time.Duration
-	Handle               func(error) bool
+	// Used to determine rate of increase of back-off
+	BackoffCoefficient float64
+	// Max timespan to wait for a retry
+	MaxRetryInterval time.Duration
+	// Total timeout across all the retries performed
+	RetryTimeout time.Duration
+	// Optional function to control if retries should proceed
+	Handle func(error) bool
 }
 
 // WithActivityInput configures an input for an activity invocation.
