@@ -290,8 +290,10 @@ func Test_ActivityRetries(t *testing.T) {
 	assertSpanSequence(t, spans,
 		assertOrchestratorCreated("ActivityRetries", id),
 		assertActivity("FailActivity", id, 0),
-		assertActivity("FailActivity", id, 1),
+		assertTimer(id, assertTaskID(1)),
 		assertActivity("FailActivity", id, 2),
+		assertTimer(id, assertTaskID(3)),
+		assertActivity("FailActivity", id, 4),
 		assertOrchestratorExecuted("ActivityRetries", id, "FAILED"),
 	)
 }

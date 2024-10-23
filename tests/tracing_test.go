@@ -68,8 +68,13 @@ func assertActivity(name string, id api.InstanceID, taskID int64, optionalAssert
 	return assertSpan(spanName, opts...)
 }
 
-func assertTimer(id api.InstanceID) spanValidator {
-	return assertSpan("timer", assertInstanceID(id), assertTimerFired())
+func assertTimer(id api.InstanceID, optionalAsserts ...spanAttributeValidator) spanValidator {
+	opts := []spanAttributeValidator{
+		assertInstanceID(id),
+		assertTimerFired(),
+	}
+	opts = append(opts, optionalAsserts...)
+	return assertSpan("timer", opts...)
 }
 
 func assertSpanEvents(eventAsserts ...spanEventValidator) spanAttributeValidator {
