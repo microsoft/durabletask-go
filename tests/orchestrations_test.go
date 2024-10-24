@@ -282,6 +282,8 @@ func Test_ActivityRetries(t *testing.T) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+			// With 3 max attempts there will be two retries with 10 millis delay before each
+			require.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt.Add(2*10*time.Millisecond))
 		}
 	}
 
