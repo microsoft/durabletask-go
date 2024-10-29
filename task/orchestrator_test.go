@@ -10,7 +10,7 @@ func Test_computeNextDelay(t *testing.T) {
 	time2 := time.Now().Add(1 * time.Minute)
 	type args struct {
 		currentTimeUtc time.Time
-		policy         ActivityRetryPolicy
+		policy         RetryPolicy
 		attempt        int
 		firstAttempt   time.Time
 		err            error
@@ -24,7 +24,7 @@ func Test_computeNextDelay(t *testing.T) {
 			name: "first attempt",
 			args: args{
 				currentTimeUtc: time2,
-				policy: ActivityRetryPolicy{
+				policy: RetryPolicy{
 					MaxAttempts:          3,
 					InitialRetryInterval: 2 * time.Second,
 					BackoffCoefficient:   2,
@@ -41,7 +41,7 @@ func Test_computeNextDelay(t *testing.T) {
 			name: "second attempt",
 			args: args{
 				currentTimeUtc: time2,
-				policy: ActivityRetryPolicy{
+				policy: RetryPolicy{
 					MaxAttempts:          3,
 					InitialRetryInterval: 2 * time.Second,
 					BackoffCoefficient:   2,
@@ -58,7 +58,7 @@ func Test_computeNextDelay(t *testing.T) {
 			name: "third attempt",
 			args: args{
 				currentTimeUtc: time2,
-				policy: ActivityRetryPolicy{
+				policy: RetryPolicy{
 					MaxAttempts:          3,
 					InitialRetryInterval: 2 * time.Second,
 					BackoffCoefficient:   2,
@@ -75,7 +75,7 @@ func Test_computeNextDelay(t *testing.T) {
 			name: "fourth attempt",
 			args: args{
 				currentTimeUtc: time2,
-				policy: ActivityRetryPolicy{
+				policy: RetryPolicy{
 					MaxAttempts:          3,
 					InitialRetryInterval: 2 * time.Second,
 					BackoffCoefficient:   2,
@@ -92,7 +92,7 @@ func Test_computeNextDelay(t *testing.T) {
 			name: "expired",
 			args: args{
 				currentTimeUtc: time2,
-				policy: ActivityRetryPolicy{
+				policy: RetryPolicy{
 					MaxAttempts:          3,
 					InitialRetryInterval: 2 * time.Second,
 					BackoffCoefficient:   2,
@@ -109,7 +109,7 @@ func Test_computeNextDelay(t *testing.T) {
 			name: "fourth attempt backoff 1",
 			args: args{
 				currentTimeUtc: time2,
-				policy: ActivityRetryPolicy{
+				policy: RetryPolicy{
 					MaxAttempts:          3,
 					InitialRetryInterval: 2 * time.Second,
 					BackoffCoefficient:   1,

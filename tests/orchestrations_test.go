@@ -258,7 +258,7 @@ func Test_ActivityRetries(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("ActivityRetries", func(ctx *task.OrchestrationContext) (any, error) {
-		if err := ctx.CallActivity("FailActivity", task.WithRetryPolicy(&task.ActivityRetryPolicy{
+		if err := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
 			MaxAttempts:          3,
 			InitialRetryInterval: 10 * time.Millisecond,
 		})).Await(nil); err != nil {
@@ -427,6 +427,49 @@ func Test_SingleSubOrchestrator_Failed(t *testing.T) {
 	assertSpanSequence(t, spans,
 		assertOrchestratorCreated("Parent", id),
 		assertOrchestratorExecuted("Child", id+"_child", "FAILED"),
+		assertOrchestratorExecuted("Parent", id, "FAILED"),
+	)
+}
+
+func Test_SingleSubOrchestrator_Failed_Retries(t *testing.T) {
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+		err := ctx.CallSubOrchestrator(
+			"Child",
+			task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_child"),
+			task.WithSubOrchestrationRetryPolicy(&task.RetryPolicy{
+				MaxAttempts:          3,
+				InitialRetryInterval: 10 * time.Millisecond,
+				BackoffCoefficient:   2,
+			})).Await(nil)
+		return nil, err
+	})
+	r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
+		return nil, errors.New("Child failed")
+	})
+
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	id, err := client.ScheduleNewOrchestration(ctx, "Parent")
+	require.NoError(t, err)
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+	if assert.NotNil(t, metadata.FailureDetails) {
+		assert.Contains(t, metadata.FailureDetails.ErrorMessage, "Child failed")
+	}
+
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("Parent", id),
+		assertOrchestratorExecuted("Child", id+"_child", "FAILED", assertTaskID(0)),
+		assertTimer(id, assertTaskID(1)),
+		assertOrchestratorExecuted("Child", id+"_child", "FAILED", assertTaskID(2)),
+		assertTimer(id, assertTaskID(3)),
+		assertOrchestratorExecuted("Child", id+"_child", "FAILED", assertTaskID(4)),
 		assertOrchestratorExecuted("Parent", id, "FAILED"),
 	)
 }
