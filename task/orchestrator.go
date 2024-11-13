@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ type OrchestrationContext struct {
 	pendingTasks        map[int32]*completableTask
 	continuedAsNew      bool
 	continuedAsNewInput any
+	customStatus        string
 
 	bufferedExternalEvents     map[string]*list.List
 	pendingExternalEventTasks  map[string]*list.List
@@ -213,6 +215,10 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 	return err
 }
 
+func (octx *OrchestrationContext) SetCustomStatus(cs string) {
+	octx.customStatus = cs
+}
+
 // GetInput unmarshals the serialized orchestration input and stores it in [v].
 func (octx *OrchestrationContext) GetInput(v any) error {
 	return unmarshalData(octx.rawInput, v)
@@ -231,6 +237,16 @@ func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...call
 		}
 	}
 
+	if options.retryPolicy != nil {
+		return ctx.internalCallActivityWithRetries(ctx.CurrentTimeUtc, func() Task {
+			return ctx.internalScheduleActivity(activity, options)
+		}, *options.retryPolicy, 0)
+	}
+
+	return ctx.internalScheduleActivity(activity, options)
+}
+
+func (ctx *OrchestrationContext) internalScheduleActivity(activity interface{}, options *callActivityOptions) Task {
 	scheduleTaskAction := helpers.NewScheduleTaskAction(
 		ctx.getNextSequenceNumber(),
 		helpers.GetTaskFunctionName(activity),
@@ -241,6 +257,56 @@ func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...call
 	task := newTask(ctx)
 	ctx.pendingTasks[scheduleTaskAction.Id] = task
 	return task
+}
+
+func (ctx *OrchestrationContext) internalCallActivityWithRetries(initialAttempt time.Time, schedule func() Task, policy ActivityRetryPolicy, retryCount int) Task {
+	return &taskWrapper{
+		delegate: schedule(),
+		onAwaitResult: func(v any, err error) error {
+			if err == nil {
+				return nil
+			}
+
+			if retryCount+1 >= policy.MaxAttempts {
+				// next try will exceed the max attempts, dont continue
+				return err
+			}
+
+			nextDelay := computeNextDelay(ctx.CurrentTimeUtc, policy, retryCount, initialAttempt, err)
+			if nextDelay == 0 {
+				return err
+			}
+
+			timerErr := ctx.createTimerInternal(nextDelay).Await(nil)
+			if timerErr != nil {
+				// TODO use errors.Join when updating golang
+				return fmt.Errorf("%v %w", timerErr, err)
+			}
+
+			err = ctx.internalCallActivityWithRetries(initialAttempt, schedule, policy, retryCount+1).Await(v)
+			if err == nil {
+				return nil
+			}
+			return err
+		},
+	}
+}
+
+func computeNextDelay(currentTimeUtc time.Time, policy ActivityRetryPolicy, attempt int, firstAttempt time.Time, err error) time.Duration {
+	if policy.Handle(err) {
+		isExpired := false
+		if policy.RetryTimeout != math.MaxInt64 {
+			isExpired = currentTimeUtc.After(firstAttempt.Add(policy.RetryTimeout))
+		}
+		if !isExpired {
+			nextDelayMs := float64(policy.InitialRetryInterval.Milliseconds()) * math.Pow(policy.BackoffCoefficient, float64(attempt))
+			if nextDelayMs < float64(policy.MaxRetryInterval.Milliseconds()) {
+				return time.Duration(int64(nextDelayMs) * int64(time.Millisecond))
+			}
+			return policy.MaxRetryInterval
+		}
+	}
+	return 0
 }
 
 func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, opts ...subOrchestratorOption) Task {

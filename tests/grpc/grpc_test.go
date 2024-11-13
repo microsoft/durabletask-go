@@ -155,6 +155,7 @@ func Test_Grpc_HelloOrchestration(t *testing.T) {
 		}
 		var output string
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		ctx.SetCustomStatus("hello-test")
 		return output, err
 	})
 	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
@@ -176,6 +177,7 @@ func Test_Grpc_HelloOrchestration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, true, metadata.IsComplete())
 	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+	assert.Equal(t, "hello-test", metadata.SerializedCustomStatus)
 	time.Sleep(1 * time.Second)
 }
 
@@ -419,4 +421,35 @@ func Test_Grpc_ReuseInstanceIDError(t *testing.T) {
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}
+}
+
+func Test_Grpc_ActivityRetries(t *testing.T) {
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ActivityRetries", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CallActivity("FailActivity", task.WithRetryPolicy(&task.ActivityRetryPolicy{
+			MaxAttempts:          3,
+			InitialRetryInterval: 10 * time.Millisecond,
+		})).Await(nil); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
+		return nil, errors.New("activity failure")
+	})
+
+	cancelListener := startGrpcListener(t, r)
+	defer cancelListener()
+	instanceID := api.InstanceID("activity_retries")
+
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "ActivityRetries", api.WithInstanceID(instanceID))
+	require.NoError(t, err)
+	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelTimeout()
+	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
+	require.NoError(t, err)
+	assert.Equal(t, true, metadata.IsComplete())
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+	// With 3 max attempts there will be two retries with 10 millis delay before each
+	require.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt.Add(2*10*time.Millisecond))
 }

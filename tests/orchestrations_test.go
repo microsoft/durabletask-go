@@ -254,6 +254,52 @@ func Test_ActivityChain(t *testing.T) {
 	)
 }
 
+func Test_ActivityRetries(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("ActivityRetries", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CallActivity("FailActivity", task.WithRetryPolicy(&task.ActivityRetryPolicy{
+			MaxAttempts:          3,
+			InitialRetryInterval: 10 * time.Millisecond,
+		})).Await(nil); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
+		return nil, errors.New("activity failure")
+	})
+
+	// Initialization
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "ActivityRetries")
+	if assert.NoError(t, err) {
+		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+		if assert.NoError(t, err) {
+			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+			// With 3 max attempts there will be two retries with 10 millis delay before each
+			require.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt.Add(2*10*time.Millisecond))
+		}
+	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("ActivityRetries", id),
+		assertActivity("FailActivity", id, 0),
+		assertTimer(id, assertTaskID(1)),
+		assertActivity("FailActivity", id, 2),
+		assertTimer(id, assertTaskID(3)),
+		assertActivity("FailActivity", id, 4),
+		assertOrchestratorExecuted("ActivityRetries", id, "FAILED"),
+	)
+}
+
 func Test_ActivityFanOut(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()

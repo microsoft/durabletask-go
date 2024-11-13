@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -61,12 +62,7 @@ func (c *TaskHubGrpcClient) FetchOrchestrationMetadata(ctx context.Context, id a
 		}
 		return nil, fmt.Errorf("failed to fetch orchestration metadata: %w", err)
 	}
-	if !resp.Exists {
-		return nil, api.ErrInstanceNotFound
-	}
-
-	metadata := makeOrchestrationMetadata(resp)
-	return metadata, nil
+	return makeOrchestrationMetadata(resp)
 }
 
 // WaitForOrchestrationStart waits for an orchestration to start running and returns an [api.OrchestrationMetadata] object that contains
@@ -74,19 +70,24 @@ func (c *TaskHubGrpcClient) FetchOrchestrationMetadata(ctx context.Context, id a
 //
 // api.ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
 func (c *TaskHubGrpcClient) WaitForOrchestrationStart(ctx context.Context, id api.InstanceID, opts ...api.FetchOrchestrationMetadataOptions) (*api.OrchestrationMetadata, error) {
-	req := makeGetInstanceRequest(id, opts)
-	resp, err := c.client.WaitForInstanceStart(ctx, req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+	var resp *protos.GetInstanceResponse
+	var err error
+	err = backoff.Retry(func() error {
+		req := makeGetInstanceRequest(id, opts)
+		resp, err = c.client.WaitForInstanceStart(ctx, req)
+		if err != nil {
+			// if its context cancelled stop retrying
+			if ctx.Err() != nil {
+				return backoff.Permanent(ctx.Err())
+			}
+			return fmt.Errorf("failed to wait for orchestration start: %w", err)
 		}
-		return nil, fmt.Errorf("failed to wait for orchestration start: %w", err)
+		return nil
+	}, backoff.WithContext(newInfiniteRetries(), ctx))
+	if err != nil {
+		return nil, err
 	}
-	if !resp.Exists {
-		return nil, api.ErrInstanceNotFound
-	}
-	metadata := makeOrchestrationMetadata(resp)
-	return metadata, nil
+	return makeOrchestrationMetadata(resp)
 }
 
 // WaitForOrchestrationCompletion waits for an orchestration to complete and returns an [api.OrchestrationMetadata] object that contains
@@ -94,19 +95,24 @@ func (c *TaskHubGrpcClient) WaitForOrchestrationStart(ctx context.Context, id ap
 //
 // api.ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
 func (c *TaskHubGrpcClient) WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID, opts ...api.FetchOrchestrationMetadataOptions) (*api.OrchestrationMetadata, error) {
-	req := makeGetInstanceRequest(id, opts)
-	resp, err := c.client.WaitForInstanceCompletion(ctx, req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+	var resp *protos.GetInstanceResponse
+	var err error
+	err = backoff.Retry(func() error {
+		req := makeGetInstanceRequest(id, opts)
+		resp, err = c.client.WaitForInstanceCompletion(ctx, req)
+		if err != nil {
+			// if its context cancelled stop retrying
+			if ctx.Err() != nil {
+				return backoff.Permanent(ctx.Err())
+			}
+			return fmt.Errorf("failed to wait for orchestration completion: %w", err)
 		}
-		return nil, fmt.Errorf("failed to wait for orchestration completion: %w", err)
+		return nil
+	}, backoff.WithContext(newInfiniteRetries(), ctx))
+	if err != nil {
+		return nil, err
 	}
-	if !resp.Exists {
-		return nil, api.ErrInstanceNotFound
-	}
-	metadata := makeOrchestrationMetadata(resp)
-	return metadata, nil
+	return makeOrchestrationMetadata(resp)
 }
 
 // TerminateOrchestration terminates a running orchestration by causing it to stop receiving new events and
@@ -182,9 +188,14 @@ func (c *TaskHubGrpcClient) ResumeOrchestration(ctx context.Context, id api.Inst
 // PurgeOrchestrationState deletes the state of the specified orchestration instance.
 //
 // [api.api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
-func (c *TaskHubGrpcClient) PurgeOrchestrationState(ctx context.Context, id api.InstanceID) error {
+func (c *TaskHubGrpcClient) PurgeOrchestrationState(ctx context.Context, id api.InstanceID, opts ...api.PurgeOptions) error {
 	req := &protos.PurgeInstancesRequest{
 		Request: &protos.PurgeInstancesRequest_InstanceId{InstanceId: string(id)},
+	}
+	for _, configure := range opts {
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure purge request: %w", err)
+		}
 	}
 
 	res, err := c.client.PurgeInstances(ctx, req)
@@ -210,16 +221,28 @@ func makeGetInstanceRequest(id api.InstanceID, opts []api.FetchOrchestrationMeta
 	return req
 }
 
-func makeOrchestrationMetadata(resp *protos.GetInstanceResponse) *api.OrchestrationMetadata {
+// makeOrchestrationMetadata validates and converts protos.GetInstanceResponse to api.OrchestrationMetadata
+// api.ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
+func makeOrchestrationMetadata(resp *protos.GetInstanceResponse) (*api.OrchestrationMetadata, error) {
+	if !resp.Exists {
+		return nil, api.ErrInstanceNotFound
+	}
+	if resp.OrchestrationState == nil {
+		return nil, fmt.Errorf("orchestration state is nil")
+	}
 	metadata := &api.OrchestrationMetadata{
 		InstanceID:             api.InstanceID(resp.OrchestrationState.InstanceId),
 		Name:                   resp.OrchestrationState.Name,
 		RuntimeStatus:          resp.OrchestrationState.OrchestrationStatus,
-		CreatedAt:              resp.OrchestrationState.CreatedTimestamp.AsTime(),
-		LastUpdatedAt:          resp.OrchestrationState.LastUpdatedTimestamp.AsTime(),
 		SerializedInput:        resp.OrchestrationState.Input.GetValue(),
 		SerializedCustomStatus: resp.OrchestrationState.CustomStatus.GetValue(),
 		SerializedOutput:       resp.OrchestrationState.Output.GetValue(),
 	}
-	return metadata
+	if resp.OrchestrationState.CreatedTimestamp != nil {
+		metadata.CreatedAt = resp.OrchestrationState.CreatedTimestamp.AsTime()
+	}
+	if resp.OrchestrationState.LastUpdatedTimestamp != nil {
+		metadata.LastUpdatedAt = resp.OrchestrationState.LastUpdatedTimestamp.AsTime()
+	}
+	return metadata, nil
 }

@@ -2,6 +2,9 @@ package task
 
 import (
 	"context"
+	"fmt"
+	"math"
+	"time"
 
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -10,7 +13,23 @@ import (
 type callActivityOption func(*callActivityOptions) error
 
 type callActivityOptions struct {
-	rawInput *wrapperspb.StringValue
+	rawInput    *wrapperspb.StringValue
+	retryPolicy *ActivityRetryPolicy
+}
+
+type ActivityRetryPolicy struct {
+	// Max number of attempts to try the activity call, first execution inclusive
+	MaxAttempts int
+	// Timespan to wait for the first retry
+	InitialRetryInterval time.Duration
+	// Used to determine rate of increase of back-off
+	BackoffCoefficient float64
+	// Max timespan to wait for a retry
+	MaxRetryInterval time.Duration
+	// Total timeout across all the retries performed
+	RetryTimeout time.Duration
+	// Optional function to control if retries should proceed
+	Handle func(error) bool
 }
 
 // WithActivityInput configures an input for an activity invocation.
@@ -30,6 +49,37 @@ func WithActivityInput(input any) callActivityOption {
 func WithRawActivityInput(input string) callActivityOption {
 	return func(opt *callActivityOptions) error {
 		opt.rawInput = wrapperspb.String(input)
+		return nil
+	}
+}
+
+func WithRetryPolicy(policy *ActivityRetryPolicy) callActivityOption {
+	return func(opt *callActivityOptions) error {
+		if policy == nil {
+			return nil
+		}
+		if policy.InitialRetryInterval <= 0 {
+			return fmt.Errorf("InitialRetryInterval must be greater than 0")
+		}
+		if policy.MaxAttempts <= 0 {
+			// setting 1 max attempt is equivalent to not retrying
+			policy.MaxAttempts = 1
+		}
+		if policy.BackoffCoefficient <= 0 {
+			policy.BackoffCoefficient = 1
+		}
+		if policy.MaxRetryInterval <= 0 {
+			policy.MaxRetryInterval = math.MaxInt64
+		}
+		if policy.RetryTimeout <= 0 {
+			policy.RetryTimeout = math.MaxInt64
+		}
+		if policy.Handle == nil {
+			policy.Handle = func(err error) bool {
+				return true
+			}
+		}
+		opt.retryPolicy = policy
 		return nil
 	}
 }

@@ -85,7 +85,7 @@ func (te *taskExecutor) ExecuteOrchestrator(ctx context.Context, id api.Instance
 		Response: &protos.OrchestratorResponse{
 			InstanceId:   string(id),
 			Actions:      actions,
-			CustomStatus: nil,
+			CustomStatus: wrapperspb.String(orchestrationCtx.customStatus),
 		},
 	}
 	return results, nil
