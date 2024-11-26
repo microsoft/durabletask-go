@@ -53,6 +53,7 @@ type grpcExecutor struct {
 	backend              Backend
 	logger               Logger
 	onWorkItemConnection func(context.Context) error
+	onWorkItemDisconnect func(context.Context) error
 	streamShutdownChan   <-chan any
 }
 
@@ -70,6 +71,15 @@ func IsDurableTaskGrpcRequest(fullMethodName string) bool {
 func WithOnGetWorkItemsConnectionCallback(callback func(context.Context) error) grpcExecutorOptions {
 	return func(g *grpcExecutor) {
 		g.onWorkItemConnection = callback
+	}
+}
+
+// WithOnGetWorkItemsDisconnectCallback allows the caller to get a notification when an external process
+// disconnects from the GetWorkItems operation. This can be useful for doing things like shutting down
+// the task hub worker when the client disconnects.
+func WithOnGetWorkItemsDisconnectCallback(callback func(context.Context) error) grpcExecutorOptions {
+	return func(g *grpcExecutor) {
+		g.onWorkItemDisconnect = callback
 	}
 }
 
@@ -256,6 +266,12 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 			if ok {
 				pending := p.(*ExecutionResults)
 				close(pending.complete)
+			}
+		}
+
+		if callback := g.onWorkItemDisconnect; callback != nil {
+			if err := callback(stream.Context()); err != nil {
+				g.logger.Warnf("error while disconnecting work item stream: %v", err)
 			}
 		}
 	}()
