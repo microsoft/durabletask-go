@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/microsoft/durabletask-go/api"
+	"github.com/dapr/durabletask-go/api"
 )
 
 var ErrNoWorkItems = errors.New("no work items were found")

@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	backend "github.com/microsoft/durabletask-go/backend"
+	backend "github.com/dapr/durabletask-go/backend"
 )
 
 var _ backend.TaskProcessor = &TestTaskProcessor{}

@@ -9,9 +9,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/backend"
-	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/internal/protos"
 )
 
 // REVIEW: Can this be merged with backend/client.go somehow?

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/internal/helpers"
-	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/internal/helpers"
+	"github.com/dapr/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/proto"
 )
 

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/microsoft/durabletask-go/task"
+	"github.com/dapr/durabletask-go/task"
 )
 
 // HelloCities is an orchestrator function that generates a "hello" message for several cities.

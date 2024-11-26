@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/internal/protos"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )

@@ -1,4 +1,4 @@
-module github.com/microsoft/durabletask-go
+module github.com/dapr/durabletask-go
 
 go 1.19
 

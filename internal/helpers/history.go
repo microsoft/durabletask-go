@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/internal/protos"
 )
 
 func NewExecutionStartedEvent(

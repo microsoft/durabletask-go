@@ -10,10 +10,10 @@ import (
 
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/backend"
-	"github.com/microsoft/durabletask-go/internal/helpers"
-	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/internal/helpers"
+	"github.com/dapr/durabletask-go/internal/protos"
 )
 
 // Orchestrator is the functional interface for orchestrator functions.

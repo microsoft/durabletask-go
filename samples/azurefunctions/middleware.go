@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/internal/helpers"
-	"github.com/microsoft/durabletask-go/internal/protos"
-	"github.com/microsoft/durabletask-go/task"
+	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/internal/helpers"
+	"github.com/dapr/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/task"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )

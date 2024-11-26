@@ -3,7 +3,7 @@ package task
 import (
 	"fmt"
 
-	"github.com/microsoft/durabletask-go/internal/helpers"
+	"github.com/dapr/durabletask-go/internal/helpers"
 )
 
 // TaskRegistry contains maps of names to corresponding orchestrator and activity functions.

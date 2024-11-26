@@ -6,7 +6,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
