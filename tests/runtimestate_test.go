@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
 	"github.com/google/uuid"
@@ -137,12 +136,16 @@ func Test_CompletedSubOrchestration(t *testing.T) {
 	})
 
 	actions := []*protos.OrchestratorAction{
-		helpers.NewCompleteOrchestrationAction(
-			expectedTaskID,
-			status,
-			wrapperspb.String(expectedOutput),
-			[]*protos.HistoryEvent{},
-			nil),
+		{
+			Id: expectedTaskID,
+			OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
+				CompleteOrchestration: &protos.CompleteOrchestrationAction{
+					OrchestrationStatus: status,
+					Result:              wrapperspb.String(expectedOutput),
+					CarryoverEvents:     []*protos.HistoryEvent{},
+				},
+			},
+		},
 	}
 
 	continuedAsNew, err := s.ApplyActions(actions, nil)
@@ -192,14 +195,26 @@ func Test_RuntimeState_ContinueAsNew(t *testing.T) {
 		},
 	})
 
-	carryoverEvents := []*protos.HistoryEvent{helpers.NewEventRaisedEvent(eventName, wrapperspb.String(eventPayload))}
+	carryoverEvents := []*protos.HistoryEvent{
+		{
+			EventId:   -1,
+			Timestamp: timestamppb.New(time.Now()),
+			EventType: &protos.HistoryEvent_EventRaised{
+				EventRaised: &protos.EventRaisedEvent{Name: eventName, Input: wrapperspb.String(eventPayload)},
+			},
+		},
+	}
 	actions := []*protos.OrchestratorAction{
-		helpers.NewCompleteOrchestrationAction(
-			expectedTaskID,
-			protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
-			wrapperspb.String(continueAsNewInput),
-			carryoverEvents,
-			nil),
+		{
+			Id: expectedTaskID,
+			OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
+				CompleteOrchestration: &protos.CompleteOrchestrationAction{
+					OrchestrationStatus: protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
+					Result:              wrapperspb.String(continueAsNewInput),
+					CarryoverEvents:     carryoverEvents,
+				},
+			},
+		},
 	}
 
 	continuedAsNew, err := state.ApplyActions(actions, nil)
@@ -254,7 +269,13 @@ func Test_CreateTimer(t *testing.T) {
 	var actions []*protos.OrchestratorAction
 	timerCount := 3
 	for i := 1; i <= timerCount; i++ {
-		actions = append(actions, helpers.NewCreateTimerAction(int32(i), expectedFireAt))
+		actions = append(actions, &protos.OrchestratorAction{
+			Id: int32(i),
+			OrchestratorActionType: &protos.OrchestratorAction_CreateTimer{
+				CreateTimer: &protos.CreateTimerAction{FireAt: timestamppb.New(expectedFireAt)},
+			},
+		})
+
 	}
 
 	continuedAsNew, err := s.ApplyActions(actions, nil)
@@ -304,7 +325,12 @@ func Test_ScheduleTask(t *testing.T) {
 	})
 
 	actions := []*protos.OrchestratorAction{
-		helpers.NewScheduleTaskAction(expectedTaskID, expectedName, wrapperspb.String(expectedInput)),
+		{
+			Id: expectedTaskID,
+			OrchestratorActionType: &protos.OrchestratorAction_ScheduleTask{
+				ScheduleTask: &protos.ScheduleTaskAction{Name: expectedName, Input: wrapperspb.String(expectedInput)},
+			},
+		},
 	}
 
 	tc := &protos.TraceContext{TraceParent: "trace", TraceState: wrapperspb.String("state")}
@@ -363,7 +389,16 @@ func Test_CreateSubOrchestration(t *testing.T) {
 	})
 
 	actions := []*protos.OrchestratorAction{
-		helpers.NewCreateSubOrchestrationAction(expectedTaskID, expectedName, expectedInstanceID, expectedInput),
+		{
+			Id: expectedTaskID,
+			OrchestratorActionType: &protos.OrchestratorAction_CreateSubOrchestration{
+				CreateSubOrchestration: &protos.CreateSubOrchestrationAction{
+					Name:       expectedName,
+					Input:      expectedInput,
+					InstanceId: expectedInstanceID,
+				},
+			},
+		},
 	}
 
 	tc := &protos.TraceContext{
@@ -432,7 +467,16 @@ func Test_SendEvent(t *testing.T) {
 	})
 
 	actions := []*protos.OrchestratorAction{
-		helpers.NewSendEventAction(expectedInstanceID, expectedEventName, wrapperspb.String(expectedInput)),
+		{
+			Id: -1,
+			OrchestratorActionType: &protos.OrchestratorAction_SendEvent{
+				SendEvent: &protos.SendEventAction{
+					Instance: &protos.OrchestrationInstance{InstanceId: expectedInstanceID},
+					Name:     expectedEventName,
+					Data:     wrapperspb.String(expectedInput),
+				},
+			},
+		},
 	}
 
 	continuedAsNew, err := s.ApplyActions(actions, nil)
@@ -476,7 +520,15 @@ func Test_StateIsValid(t *testing.T) {
 	})
 	assert.True(t, s.IsValid())
 	s = backend.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
-		helpers.NewTaskCompletedEvent(1, nil),
+		{
+			EventId:   -1,
+			Timestamp: timestamppb.New(time.Now()),
+			EventType: &protos.HistoryEvent_TaskCompleted{
+				TaskCompleted: &protos.TaskCompletedEvent{
+					TaskScheduledId: 1,
+				},
+			},
+		},
 	})
 	assert.False(t, s.IsValid())
 }

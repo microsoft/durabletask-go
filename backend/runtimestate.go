@@ -183,16 +183,37 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 				}
 			}
 		} else if createtimer := action.GetCreateTimer(); createtimer != nil {
-			s.AddEvent(helpers.NewTimerCreatedEvent(action.Id, createtimer.FireAt))
-			s.pendingTimers = append(s.pendingTimers, helpers.NewTimerFiredEvent(action.Id, createtimer.FireAt, currentTraceContext))
+			s.AddEvent(&protos.HistoryEvent{
+				EventId:   action.Id,
+				Timestamp: timestamppb.New(time.Now()),
+				EventType: &protos.HistoryEvent_TimerCreated{
+					TimerCreated: &protos.TimerCreatedEvent{FireAt: createtimer.FireAt},
+				},
+			})
+			// TODO cant pass trace context
+			s.pendingTimers = append(s.pendingTimers, &protos.HistoryEvent{
+				EventId:   -1,
+				Timestamp: timestamppb.New(time.Now()),
+				EventType: &protos.HistoryEvent_TimerFired{
+					TimerFired: &protos.TimerFiredEvent{
+						TimerId: action.Id,
+						FireAt:  createtimer.FireAt,
+					},
+				},
+			})
 		} else if scheduleTask := action.GetScheduleTask(); scheduleTask != nil {
-			scheduledEvent := helpers.NewTaskScheduledEvent(
-				action.Id,
-				scheduleTask.Name,
-				scheduleTask.Version,
-				scheduleTask.Input,
-				currentTraceContext,
-			)
+			scheduledEvent := &protos.HistoryEvent{
+				EventId:   action.Id,
+				Timestamp: timestamppb.New(time.Now()),
+				EventType: &protos.HistoryEvent_TaskScheduled{
+					TaskScheduled: &protos.TaskScheduledEvent{
+						Name:               scheduleTask.Name,
+						Version:            scheduleTask.Version,
+						Input:              scheduleTask.Input,
+						ParentTraceContext: currentTraceContext,
+					},
+				},
+			}
 			s.AddEvent(scheduledEvent)
 			s.pendingTasks = append(s.pendingTasks, scheduledEvent)
 		} else if createSO := action.GetCreateSubOrchestration(); createSO != nil {
@@ -201,13 +222,19 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 			if createSO.InstanceId == "" {
 				createSO.InstanceId = fmt.Sprintf("%s:%04x", s.instanceID, action.Id)
 			}
-			s.AddEvent(helpers.NewSubOrchestrationCreatedEvent(
-				action.Id,
-				createSO.Name,
-				createSO.Version,
-				createSO.Input,
-				createSO.InstanceId,
-				currentTraceContext))
+			s.AddEvent(&protos.HistoryEvent{
+				EventId:   action.Id,
+				Timestamp: timestamppb.New(time.Now()),
+				EventType: &protos.HistoryEvent_SubOrchestrationInstanceCreated{
+					SubOrchestrationInstanceCreated: &protos.SubOrchestrationInstanceCreatedEvent{
+						Name:               createSO.Name,
+						Version:            createSO.Version,
+						Input:              createSO.Input,
+						InstanceId:         createSO.InstanceId,
+						ParentTraceContext: currentTraceContext,
+					},
+				},
+			})
 			startEvent := &protos.HistoryEvent{
 				EventId:   -1,
 				Timestamp: timestamppb.New(time.Now()),
@@ -231,14 +258,33 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 
 			s.pendingMessages = append(s.pendingMessages, OrchestratorMessage{HistoryEvent: startEvent, TargetInstanceID: createSO.InstanceId})
 		} else if sendEvent := action.GetSendEvent(); sendEvent != nil {
-			e := helpers.NewSendEventEvent(action.Id, sendEvent.Instance.InstanceId, sendEvent.Name, sendEvent.Data)
+			e := &protos.HistoryEvent{
+				EventId:   action.Id,
+				Timestamp: timestamppb.New(time.Now()),
+				EventType: &protos.HistoryEvent_EventSent{
+					EventSent: &protos.EventSentEvent{
+						InstanceId: sendEvent.Instance.InstanceId,
+						Name:       sendEvent.Name,
+						Input:      sendEvent.Data,
+					},
+				},
+			}
 			s.AddEvent(e)
 			s.pendingMessages = append(s.pendingMessages, OrchestratorMessage{HistoryEvent: e, TargetInstanceID: sendEvent.Instance.InstanceId})
 		} else if terminate := action.GetTerminateOrchestration(); terminate != nil {
 			// Send a message to terminate the target orchestration
 			msg := OrchestratorMessage{
 				TargetInstanceID: terminate.InstanceId,
-				HistoryEvent:     helpers.NewExecutionTerminatedEvent(terminate.Reason, terminate.Recurse),
+				HistoryEvent: &protos.HistoryEvent{
+					EventId:   -1,
+					Timestamp: timestamppb.Now(),
+					EventType: &protos.HistoryEvent_ExecutionTerminated{
+						ExecutionTerminated: &protos.ExecutionTerminatedEvent{
+							Input:   terminate.Reason,
+							Recurse: terminate.Recurse,
+						},
+					},
+				},
 			}
 			s.pendingMessages = append(s.pendingMessages, msg)
 		} else {

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/dapr/durabletask-go/api"
@@ -232,7 +234,10 @@ func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...call
 	for _, configure := range opts {
 		if err := configure(options); err != nil {
 			failedTask := newTask(ctx)
-			failedTask.fail(helpers.NewTaskFailureDetails(err))
+			failedTask.fail(&protos.TaskFailureDetails{
+				ErrorType:    reflect.TypeOf(err).String(),
+				ErrorMessage: err.Error(),
+			})
 			return failedTask
 		}
 	}
@@ -247,10 +252,12 @@ func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...call
 }
 
 func (ctx *OrchestrationContext) internalScheduleActivity(activity interface{}, options *callActivityOptions) Task {
-	scheduleTaskAction := helpers.NewScheduleTaskAction(
-		ctx.getNextSequenceNumber(),
-		helpers.GetTaskFunctionName(activity),
-		options.rawInput)
+	scheduleTaskAction := &protos.OrchestratorAction{
+		Id: ctx.getNextSequenceNumber(),
+		OrchestratorActionType: &protos.OrchestratorAction_ScheduleTask{
+			ScheduleTask: &protos.ScheduleTaskAction{Name: helpers.GetTaskFunctionName(activity), Input: options.rawInput},
+		},
+	}
 
 	ctx.pendingActions[scheduleTaskAction.Id] = scheduleTaskAction
 
@@ -314,17 +321,24 @@ func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, o
 	for _, configure := range opts {
 		if err := configure(options); err != nil {
 			failedTask := newTask(ctx)
-			failedTask.fail(helpers.NewTaskFailureDetails(err))
+			failedTask.fail(&protos.TaskFailureDetails{
+				ErrorType:    reflect.TypeOf(err).String(),
+				ErrorMessage: err.Error(),
+			})
 			return failedTask
 		}
 	}
 
-	createSubOrchestrationAction := helpers.NewCreateSubOrchestrationAction(
-		ctx.getNextSequenceNumber(),
-		helpers.GetTaskFunctionName(orchestrator),
-		options.instanceID,
-		options.rawInput,
-	)
+	createSubOrchestrationAction := &protos.OrchestratorAction{
+		Id: ctx.getNextSequenceNumber(),
+		OrchestratorActionType: &protos.OrchestratorAction_CreateSubOrchestration{
+			CreateSubOrchestration: &protos.CreateSubOrchestrationAction{
+				Name:       helpers.GetTaskFunctionName(orchestrator),
+				Input:      options.rawInput,
+				InstanceId: options.instanceID,
+			},
+		},
+	}
 	ctx.pendingActions[createSubOrchestrationAction.Id] = createSubOrchestrationAction
 
 	task := newTask(ctx)
@@ -339,7 +353,12 @@ func (ctx *OrchestrationContext) CreateTimer(delay time.Duration) Task {
 
 func (ctx *OrchestrationContext) createTimerInternal(delay time.Duration) *completableTask {
 	fireAt := ctx.CurrentTimeUtc.Add(delay)
-	timerAction := helpers.NewCreateTimerAction(ctx.getNextSequenceNumber(), fireAt)
+	timerAction := &protos.OrchestratorAction{
+		Id: ctx.getNextSequenceNumber(),
+		OrchestratorActionType: &protos.OrchestratorAction_CreateTimer{
+			CreateTimer: &protos.CreateTimerAction{FireAt: timestamppb.New(fireAt)},
+		},
+	}
 	ctx.pendingActions[timerAction.Id] = timerAction
 
 	task := newTask(ctx)
@@ -631,7 +650,10 @@ func (ctx *OrchestrationContext) setComplete(output any) error {
 }
 
 func (ctx *OrchestrationContext) setFailed(appError error) error {
-	fd := helpers.NewTaskFailureDetails(appError)
+	fd := &protos.TaskFailureDetails{
+		ErrorType:    reflect.TypeOf(appError).String(),
+		ErrorMessage: appError.Error(),
+	}
 	failedStatus := protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED
 	if err := ctx.setCompleteInternal(nil, failedStatus, fd); err != nil {
 		return err
@@ -661,13 +683,16 @@ func (ctx *OrchestrationContext) setCompleteInternal(
 	failureDetails *protos.TaskFailureDetails,
 ) error {
 	sequenceNumber := ctx.getNextSequenceNumber()
-	completedAction := helpers.NewCompleteOrchestrationAction(
-		sequenceNumber,
-		status,
-		rawResult,
-		nil, // carryoverEvents is assigned later
-		failureDetails,
-	)
+	completedAction := &protos.OrchestratorAction{
+		Id: sequenceNumber,
+		OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
+			CompleteOrchestration: &protos.CompleteOrchestrationAction{
+				OrchestrationStatus: status,
+				Result:              rawResult,
+				FailureDetails:      failureDetails,
+			},
+		},
+	}
 	ctx.pendingActions[sequenceNumber] = completedAction
 	return nil
 }

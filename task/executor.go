@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -110,7 +110,16 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 	if len(bytes) > 0 {
 		rawResult = wrapperspb.String(string(bytes))
 	}
-	return helpers.NewTaskCompletedEvent(e.EventId, rawResult), nil
+	return &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_TaskCompleted{
+			TaskCompleted: &protos.TaskCompletedEvent{
+				TaskScheduledId: e.EventId,
+				Result:          rawResult,
+			},
+		},
+	}, nil
 }
 
 // ExecuteOrchestrator implements backend.Executor and executes an orchestrator function in the current goroutine.

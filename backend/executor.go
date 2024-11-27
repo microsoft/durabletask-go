@@ -202,7 +202,16 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 			},
 		}
 	} else {
-		responseEvent = helpers.NewTaskCompletedEvent(result.response.TaskId, result.response.Result)
+		responseEvent = &protos.HistoryEvent{
+			EventId:   -1,
+			Timestamp: timestamppb.New(time.Now()),
+			EventType: &protos.HistoryEvent_TaskCompleted{
+				TaskCompleted: &protos.TaskCompletedEvent{
+					TaskScheduledId: result.response.TaskId,
+					Result:          result.response.Result,
+				},
+			},
+		}
 	}
 
 	return responseEvent, nil
@@ -426,7 +435,13 @@ func (grpcExecutor) QueryInstances(context.Context, *protos.QueryInstancesReques
 
 // RaiseEvent implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) RaiseEvent(ctx context.Context, req *protos.RaiseEventRequest) (*protos.RaiseEventResponse, error) {
-	e := helpers.NewEventRaisedEvent(req.Name, req.Input)
+	e := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_EventRaised{
+			EventRaised: &protos.EventRaisedEvent{Name: req.Name, Input: req.Input},
+		},
+	}
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
 		return nil, err
 	}
@@ -465,7 +480,16 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 
 // TerminateInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
-	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
+	e := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.Now(),
+		EventType: &protos.HistoryEvent_ExecutionTerminated{
+			ExecutionTerminated: &protos.ExecutionTerminatedEvent{
+				Input:   req.Output,
+				Recurse: req.Recursive,
+			},
+		},
+	}
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
 		return nil, fmt.Errorf("failed to submit termination request: %w", err)
 	}
@@ -474,7 +498,19 @@ func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.Termin
 
 // SuspendInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) SuspendInstance(ctx context.Context, req *protos.SuspendRequest) (*protos.SuspendResponse, error) {
-	e := helpers.NewSuspendOrchestrationEvent(req.Reason.GetValue())
+	var input *wrapperspb.StringValue
+	if req.Reason.GetValue() != "" {
+		input = wrapperspb.String(req.Reason.GetValue())
+	}
+	e := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_ExecutionSuspended{
+			ExecutionSuspended: &protos.ExecutionSuspendedEvent{
+				Input: input,
+			},
+		},
+	}
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
 		return nil, err
 	}
@@ -484,7 +520,19 @@ func (g *grpcExecutor) SuspendInstance(ctx context.Context, req *protos.SuspendR
 
 // ResumeInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) ResumeInstance(ctx context.Context, req *protos.ResumeRequest) (*protos.ResumeResponse, error) {
-	e := helpers.NewResumeOrchestrationEvent(req.Reason.GetValue())
+	var input *wrapperspb.StringValue
+	if req.Reason.GetValue() != "" {
+		input = wrapperspb.String(req.Reason.GetValue())
+	}
+	e := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_ExecutionResumed{
+			ExecutionResumed: &protos.ExecutionResumedEvent{
+				Input: input,
+			},
+		},
+	}
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
 		return nil, err
 	}

@@ -9,13 +9,13 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
 	"github.com/dapr/durabletask-go/task"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -140,16 +140,21 @@ func (c *TaskHubGrpcClient) processOrchestrationWorkItem(
 	if err != nil {
 		// NOTE: At the time of writing, there's no known case where this error is returned.
 		//       We add error handling here anyways, just in case.
-		failureAction := helpers.NewCompleteOrchestrationAction(
-			-1,
-			protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,
-			wrapperspb.String("An internal error occured while executing the orchestration."),
-			nil,
-			&protos.TaskFailureDetails{
-				ErrorType:    fmt.Sprintf("%T", err),
-				ErrorMessage: err.Error(),
-			})
-		resp.Actions = []*protos.OrchestratorAction{failureAction}
+		resp.Actions = []*protos.OrchestratorAction{
+			{
+				Id: -1,
+				OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
+					CompleteOrchestration: &protos.CompleteOrchestrationAction{
+						OrchestrationStatus: protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,
+						Result:              wrapperspb.String("An internal error occured while executing the orchestration."),
+						FailureDetails: &protos.TaskFailureDetails{
+							ErrorType:    fmt.Sprintf("%T", err),
+							ErrorMessage: err.Error(),
+						},
+					},
+				},
+			},
+		}
 	} else {
 		resp.Actions = results.Response.Actions
 		resp.CustomStatus = results.Response.GetCustomStatus()
@@ -170,7 +175,18 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 	req *protos.ActivityRequest,
 ) {
 	var tc *protos.TraceContext = nil // TODO: How to populate trace context?
-	event := helpers.NewTaskScheduledEvent(req.TaskId, req.Name, req.Version, req.Input, tc)
+	event := &protos.HistoryEvent{
+		EventId:   req.TaskId,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_TaskScheduled{
+			TaskScheduled: &protos.TaskScheduledEvent{
+				Name:               req.Name,
+				Version:            req.Version,
+				Input:              req.Input,
+				ParentTraceContext: tc,
+			},
+		},
+	}
 	result, err := executor.ExecuteActivity(ctx, api.InstanceID(req.OrchestrationInstance.InstanceId), event)
 
 	resp := protos.ActivityResponse{InstanceId: req.OrchestrationInstance.InstanceId, TaskId: req.TaskId}

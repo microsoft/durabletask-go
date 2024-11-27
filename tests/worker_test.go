@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
 	"github.com/dapr/durabletask-go/tests/mocks"
@@ -123,12 +122,15 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	result := &backend.ExecutionResults{
 		Response: &protos.OrchestratorResponse{
 			Actions: []*protos.OrchestratorAction{
-				helpers.NewCompleteOrchestrationAction(
-					-1,
-					protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
-					wrapperspb.String(resultValue),
-					nil,
-					nil),
+				{
+					Id: -1,
+					OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
+						CompleteOrchestration: &protos.CompleteOrchestrationAction{
+							OrchestrationStatus: protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
+							Result:              wrapperspb.String(resultValue),
+						},
+					},
+				},
 			},
 		},
 	}

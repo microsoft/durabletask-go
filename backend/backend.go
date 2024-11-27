@@ -6,9 +6,9 @@ import (
 	"fmt"
 
 	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -169,7 +169,16 @@ func terminateSubOrchestrationInstances(ctx context.Context, be Backend, iid api
 	}
 	subOrchestrationInstances := getSubOrchestrationInstances(state.OldEvents(), state.NewEvents())
 	for _, subOrchestrationInstance := range subOrchestrationInstances {
-		e := helpers.NewExecutionTerminatedEvent(et.Input, et.Recurse)
+		e := &protos.HistoryEvent{
+			EventId:   -1,
+			Timestamp: timestamppb.Now(),
+			EventType: &protos.HistoryEvent_ExecutionTerminated{
+				ExecutionTerminated: &protos.ExecutionTerminatedEvent{
+					Input:   et.Input,
+					Recurse: et.Recurse,
+				},
+			},
+		}
 		// Adding terminate event to sub-orchestration instance
 		if err := be.AddNewOrchestrationEvent(ctx, subOrchestrationInstance, e); err != nil {
 			return fmt.Errorf("failed to submit termination request to sub-orchestration: %w", err)

@@ -6,12 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/task"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -115,7 +116,16 @@ func MapActivity(a task.Activity) func(http.ResponseWriter, *http.Request) {
 			rawInput = wrapperspb.String(rawInputStr)
 		}
 
-		ts := helpers.NewTaskScheduledEvent(-1, name, nil, rawInput, nil)
+		ts := &protos.HistoryEvent{
+			EventId:   -1,
+			Timestamp: timestamppb.New(time.Now()),
+			EventType: &protos.HistoryEvent_TaskScheduled{
+				TaskScheduled: &protos.TaskScheduledEvent{
+					Name:  name,
+					Input: rawInput,
+				},
+			},
+		}
 		e, err := executor.ExecuteActivity(context.TODO(), api.InstanceID(instanceID), ts)
 		if err != nil {
 			panic(fmt.Errorf("ERROR: Activity execution failed with an error: %w", err))

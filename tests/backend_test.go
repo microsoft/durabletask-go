@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
 	"github.com/dapr/durabletask-go/backend/sqlite"
@@ -192,7 +191,12 @@ func Test_ScheduleActivityTasks(t *testing.T) {
 		// Produce a TaskScheduled event with a particular input
 		getOrchestratorActions := func() []*protos.OrchestratorAction {
 			return []*protos.OrchestratorAction{
-				helpers.NewScheduleTaskAction(expectedTaskID, expectedName, wrapperspb.String(expectedInput)),
+				{
+					Id: expectedTaskID,
+					OrchestratorActionType: &protos.OrchestratorAction_ScheduleTask{
+						ScheduleTask: &protos.ScheduleTaskAction{Name: expectedName, Input: wrapperspb.String(expectedInput)},
+					},
+				},
 			}
 		}
 
@@ -220,7 +224,16 @@ func Test_ScheduleActivityTasks(t *testing.T) {
 		assert.ErrorIs(t, err, backend.ErrNoWorkItems)
 
 		// Complete the fetched activity work item
-		wi.Result = helpers.NewTaskCompletedEvent(expectedTaskID, wrapperspb.String(expectedResult))
+		wi.Result = &protos.HistoryEvent{
+			EventId:   -1,
+			Timestamp: timestamppb.New(time.Now()),
+			EventType: &protos.HistoryEvent_TaskCompleted{
+				TaskCompleted: &protos.TaskCompletedEvent{
+					TaskScheduledId: expectedTaskID,
+					Result:          wrapperspb.String(expectedResult),
+				},
+			},
+		}
 		err = be.CompleteActivityWorkItem(ctx, wi)
 		if assert.NoError(t, err) {
 			// Completing the activity work item should create a new TaskCompleted event
@@ -299,7 +312,12 @@ func Test_AbandonActivityWorkItem(t *testing.T) {
 
 		getOrchestratorActions := func() []*protos.OrchestratorAction {
 			return []*protos.OrchestratorAction{
-				helpers.NewScheduleTaskAction(123, "MyActivity", nil),
+				{
+					Id: 123,
+					OrchestratorActionType: &protos.OrchestratorAction_ScheduleTask{
+						ScheduleTask: &protos.ScheduleTaskAction{Name: "MyActivity"},
+					},
+				},
 			}
 		}
 

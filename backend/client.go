@@ -156,7 +156,16 @@ func (c *backendClient) TerminateOrchestration(ctx context.Context, id api.Insta
 			return fmt.Errorf("failed to configure termination request: %w", err)
 		}
 	}
-	e := helpers.NewExecutionTerminatedEvent(req.Output, req.Recursive)
+	e := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.Now(),
+		EventType: &protos.HistoryEvent_ExecutionTerminated{
+			ExecutionTerminated: &protos.ExecutionTerminatedEvent{
+				Input:   req.Output,
+				Recurse: req.Recursive,
+			},
+		},
+	}
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
 		return fmt.Errorf("failed to submit termination request:: %w", err)
 	}
@@ -179,7 +188,13 @@ func (c *backendClient) RaiseEvent(ctx context.Context, id api.InstanceID, event
 		}
 	}
 
-	e := helpers.NewEventRaisedEvent(req.Name, req.Input)
+	e := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_EventRaised{
+			EventRaised: &protos.EventRaisedEvent{Name: req.Name, Input: req.Input},
+		},
+	}
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
 		return fmt.Errorf("failed to raise event: %w", err)
 	}
@@ -190,7 +205,19 @@ func (c *backendClient) RaiseEvent(ctx context.Context, id api.InstanceID, event
 //
 // Note that suspended orchestrations are still considered to be "running" even though they will not process events.
 func (c *backendClient) SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error {
-	e := helpers.NewSuspendOrchestrationEvent(reason)
+	var input *wrapperspb.StringValue
+	if reason != "" {
+		input = wrapperspb.String(reason)
+	}
+	e := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_ExecutionSuspended{
+			ExecutionSuspended: &protos.ExecutionSuspendedEvent{
+				Input: input,
+			},
+		},
+	}
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
 		return fmt.Errorf("failed to suspend orchestration: %w", err)
 	}
@@ -199,7 +226,19 @@ func (c *backendClient) SuspendOrchestration(ctx context.Context, id api.Instanc
 
 // ResumeOrchestration resumes an orchestration instance that was previously suspended.
 func (c *backendClient) ResumeOrchestration(ctx context.Context, id api.InstanceID, reason string) error {
-	e := helpers.NewResumeOrchestrationEvent(reason)
+	var input *wrapperspb.StringValue
+	if reason != "" {
+		input = wrapperspb.String(reason)
+	}
+	e := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_ExecutionResumed{
+			ExecutionResumed: &protos.ExecutionResumedEvent{
+				Input: input,
+			},
+		},
+	}
 	if err := c.be.AddNewOrchestrationEvent(ctx, id, e); err != nil {
 		return fmt.Errorf("failed to resume orchestration: %w", err)
 	}
