@@ -17,7 +17,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -41,24 +40,17 @@ type postgresBackend struct {
 
 // NewPostgresOptions creates a new options object for the postgres backend provider.
 func NewPostgresOptions(host string, port uint16, database string, user string, password string) *PostgresOptions {
-	conf := pgxpool.Config{
-		ConnConfig: &pgx.ConnConfig{
-			Config: pgconn.Config{
-				Host:           host,
-				Port:           port,
-				Database:       database,
-				User:           user,
-				Password:       password,
-				ConnectTimeout: 2 * time.Minute,
-			},
-		},
-		MaxConnLifetime: 2 * time.Minute,
-		MaxConnIdleTime: 2 * time.Minute,
-		MaxConns:        1,
+	conf, err := pgxpool.ParseConfig(fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", user, password, host, port, database))
+	if err != nil {
+		panic(fmt.Errorf("failed to parse the postgres connection string: %w", err))
 	}
+	conf.ConnConfig.Config.ConnectTimeout = 2 * time.Minute
+	conf.MaxConnLifetime = 2 * time.Minute
+	conf.MaxConnIdleTime = 2 * time.Minute
+	conf.MaxConns = 1
 
 	return &PostgresOptions{
-		PgOptions:                &conf,
+		PgOptions:                conf,
 		OrchestrationLockTimeout: 2 * time.Minute,
 		ActivityLockTimeout:      2 * time.Minute,
 	}
@@ -103,6 +95,10 @@ func (be *postgresBackend) CreateTaskHub(context.Context) error {
 }
 
 func (be *postgresBackend) DeleteTaskHub(ctx context.Context) error {
+	if be.db == nil {
+		return nil
+	}
+
 	_, err := be.db.Exec(ctx, "DROP TABLE IF EXISTS Instances CASCADE")
 	if err != nil {
 		be.logger.Error("DeleteTaskHub", "failed to drop Instances table", err)
@@ -150,7 +146,7 @@ func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi 
 
 	dbResult, err := tx.Exec(
 		ctx,
-		"UPDATE NewEvents SET LockedBy = NULL, VisibleTime = ? WHERE InstanceID = ? AND LockedBy = ?",
+		"UPDATE NewEvents SET LockedBy = NULL, VisibleTime = $1 WHERE InstanceID = $2 AND LockedBy = $3",
 		visibleTime,
 		string(wi.InstanceID),
 		wi.LockedBy,
@@ -168,7 +164,7 @@ func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi 
 
 	dbResult, err = tx.Exec(
 		ctx,
-		"UPDATE Instances SET LockedBy = NULL, LockExpiration = NULL WHERE InstanceID = ? AND LockedBy = ?",
+		"UPDATE Instances SET LockedBy = NULL, LockExpiration = NULL WHERE InstanceID = $1 AND LockedBy = $2",
 		string(wi.InstanceID),
 		wi.LockedBy,
 	)
@@ -213,6 +209,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	isCreated := false
 	isCompleted := false
 
+	currIndex := 1
 	for _, e := range wi.State.NewEvents() {
 		if es := e.GetExecutionStarted(); es != nil {
 			if isCreated {
@@ -220,7 +217,8 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 				continue
 			}
 			isCreated = true
-			sqlSB.WriteString("CreatedTime = ?, Input = ?, ")
+			sqlSB.WriteString(fmt.Sprintf("CreatedTime = $%d, Input = $%d, ", currIndex, currIndex+1))
+			currIndex += 2
 			sqlUpdateArgs = append(sqlUpdateArgs, e.Timestamp.AsTime())
 			sqlUpdateArgs = append(sqlUpdateArgs, es.Input.GetValue())
 		} else if ec := e.GetExecutionCompleted(); ec != nil {
@@ -229,7 +227,8 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 				continue
 			}
 			isCompleted = true
-			sqlSB.WriteString("CompletedTime = ?, Output = ?, FailureDetails = ?, ")
+			sqlSB.WriteString(fmt.Sprintf("CompletedTime = $%d, Output = $%d, FailureDetails = $%d, ", currIndex, currIndex+1, currIndex+2))
+			currIndex += 3
 			sqlUpdateArgs = append(sqlUpdateArgs, now)
 			sqlUpdateArgs = append(sqlUpdateArgs, ec.Result.GetValue())
 			if ec.FailureDetails != nil {
@@ -246,12 +245,14 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	}
 
 	if wi.State.CustomStatus != nil {
-		sqlSB.WriteString("CustomStatus = ?, ")
+		sqlSB.WriteString(fmt.Sprintf("CustomStatus = $%d, ", currIndex))
+		currIndex++
 		sqlUpdateArgs = append(sqlUpdateArgs, wi.State.CustomStatus.Value)
 	}
 
 	// TODO: Support for stickiness, which would extend the LockExpiration
-	sqlSB.WriteString("RuntimeStatus = ?, LastUpdatedTime = ?, LockExpiration = NULL WHERE InstanceID = ? AND LockedBy = ?")
+	sqlSB.WriteString(fmt.Sprintf("RuntimeStatus = $%d, LastUpdatedTime = $%d, LockExpiration = NULL WHERE InstanceID = $%d AND LockedBy = $%d", currIndex, currIndex+1, currIndex+2, currIndex+3))
+	currIndex += 4
 	sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()), now, string(wi.InstanceID), wi.LockedBy)
 
 	result, err := tx.Exec(ctx, sqlSB.String(), sqlUpdateArgs...)
@@ -268,7 +269,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 
 	// If continue-as-new, delete all existing history
 	if wi.State.ContinuedAsNew() {
-		if _, err := tx.Exec(ctx, "DELETE FROM History WHERE InstanceID = ?", string(wi.InstanceID)); err != nil {
+		if _, err := tx.Exec(ctx, "DELETE FROM History WHERE InstanceID = $1", string(wi.InstanceID)); err != nil {
 			return fmt.Errorf("failed to delete from History table: %w", err)
 		}
 	}
@@ -276,8 +277,15 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	// Save new history events
 	newHistoryCount := len(wi.State.NewEvents())
 	if newHistoryCount > 0 {
-		query := "INSERT INTO History (InstanceID, SequenceNumber, EventPayload) VALUES (?, ?, ?)" +
-			strings.Repeat(", (?, ?, ?)", newHistoryCount-1)
+		builder := strings.Builder{}
+		builder.WriteString("INSERT INTO History (InstanceID, SequenceNumber, EventPayload) VALUES ")
+		for i := 0; i < newHistoryCount; i++ {
+			builder.WriteString(fmt.Sprintf("($%d, $%d, $%d)", 3*i+1, 3*i+2, 3*i+3))
+			if i < newHistoryCount-1 {
+				builder.WriteString(", ")
+			}
+		}
+		query := builder.String()
 
 		args := make([]interface{}, 0, newHistoryCount*3)
 		nextSequenceNumber := len(wi.State.OldEvents())
@@ -300,8 +308,15 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	// Save outbound activity tasks
 	newActivityCount := len(wi.State.PendingTasks())
 	if newActivityCount > 0 {
-		insertSql := "INSERT INTO NewTasks (InstanceID, EventPayload) VALUES (?, ?)" +
-			strings.Repeat(", (?, ?)", newActivityCount-1)
+		builder := strings.Builder{}
+		builder.WriteString("INSERT INTO NewTasks (InstanceID, EventPayload) VALUES ")
+		for i := 0; i < newActivityCount; i++ {
+			builder.WriteString(fmt.Sprintf("($%d, $%d)", 3*i+1, 3*i+2))
+			if i < newActivityCount-1 {
+				builder.WriteString(", ")
+			}
+		}
+		insertSql := builder.String()
 
 		sqlInsertArgs := make([]interface{}, 0, newActivityCount*2)
 		for _, e := range wi.State.PendingTasks() {
@@ -322,8 +337,15 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	// Save outbound orchestrator events
 	newEventCount := len(wi.State.PendingTimers()) + len(wi.State.PendingMessages())
 	if newEventCount > 0 {
-		insertSql := "INSERT INTO NewEvents (InstanceID, EventPayload, VisibleTime) VALUES (?, ?, ?)" +
-			strings.Repeat(", (?, ?, ?)", newEventCount-1)
+		builder := strings.Builder{}
+		builder.WriteString("INSERT INTO NewEvents (InstanceID, EventPayload, VisibleTime) VALUES ")
+		for i := 0; i < newEventCount; i++ {
+			builder.WriteString(fmt.Sprintf("($%d, $%d, $%d)", 3*i+1, 3*i+2, 3*i+3))
+			if i < newEventCount-1 {
+				builder.WriteString(", ")
+			}
+		}
+		insertSql := builder.String()
 
 		sqlInsertArgs := make([]interface{}, 0, newEventCount*3)
 		for _, e := range wi.State.PendingTimers() {
@@ -368,7 +390,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	// Delete inbound events
 	dbResult, err := tx.Exec(
 		ctx,
-		"DELETE FROM NewEvents WHERE InstanceID = ? AND LockedBy = ?",
+		"DELETE FROM NewEvents WHERE InstanceID = $1 AND LockedBy = $2",
 		string(wi.InstanceID),
 		wi.LockedBy,
 	)
@@ -421,7 +443,7 @@ func (be *postgresBackend) CreateOrchestrationInstance(ctx context.Context, e *b
 
 	_, err = tx.Exec(
 		ctx,
-		`INSERT INTO NewEvents (InstanceID, EventPayload) VALUES (?, ?)`,
+		`INSERT INTO NewEvents (InstanceID, EventPayload) VALUES ($1, $2)`,
 		instanceID,
 		eventPayload,
 	)
@@ -479,7 +501,7 @@ func insertOrIgnoreInstanceTableInternal(ctx context.Context, tx pgx.Tx, e *back
 			Input,
 			RuntimeStatus,
 			CreatedTime
-		) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
 		startEvent.Name,
 		startEvent.Version.GetValue(),
 		startEvent.OrchestrationInstance.InstanceId,
@@ -503,7 +525,7 @@ func (be *postgresBackend) handleInstanceExists(ctx context.Context, tx pgx.Tx, 
 	// query RuntimeStatus for the existing instance
 	queryRow := tx.QueryRow(
 		ctx,
-		`SELECT RuntimeStatus FROM Instances WHERE InstanceID = ?`,
+		`SELECT RuntimeStatus FROM Instances WHERE InstanceID = $1`,
 		startEvent.OrchestrationInstance.InstanceId,
 	)
 	var runtimeStatus *string
@@ -556,7 +578,7 @@ func isStatusMatch(statuses []protos.OrchestrationStatus, runtimeStatus protos.O
 }
 
 func (be *postgresBackend) cleanupOrchestrationStateInternal(ctx context.Context, tx pgx.Tx, id api.InstanceID, requireCompleted bool) error {
-	row := tx.QueryRow(ctx, "SELECT 1 FROM Instances WHERE InstanceID = ?", string(id))
+	row := tx.QueryRow(ctx, "SELECT 1 FROM Instances WHERE InstanceID = $1", string(id))
 	var unused int
 	if err := row.Scan(&unused); errors.Is(err, pgx.ErrNoRows) {
 		return api.ErrInstanceNotFound
@@ -566,7 +588,7 @@ func (be *postgresBackend) cleanupOrchestrationStateInternal(ctx context.Context
 
 	if requireCompleted {
 		// purge orchestration in ['COMPLETED', 'FAILED', 'TERMINATED']
-		dbResult, err := tx.Exec(ctx, "DELETE FROM Instances WHERE InstanceID = ? AND RuntimeStatus IN ('COMPLETED', 'FAILED', 'TERMINATED')", string(id))
+		dbResult, err := tx.Exec(ctx, "DELETE FROM Instances WHERE InstanceID = $1 AND RuntimeStatus IN ('COMPLETED', 'FAILED', 'TERMINATED')", string(id))
 		if err != nil {
 			return fmt.Errorf("failed to delete from the Instances table: %w", err)
 		}
@@ -580,23 +602,23 @@ func (be *postgresBackend) cleanupOrchestrationStateInternal(ctx context.Context
 		}
 	} else {
 		// clean up orchestration in all RuntimeStatus
-		_, err := tx.Exec(ctx, "DELETE FROM Instances WHERE InstanceID = ?", string(id))
+		_, err := tx.Exec(ctx, "DELETE FROM Instances WHERE InstanceID = $1", string(id))
 		if err != nil {
 			return fmt.Errorf("failed to delete from the Instances table: %w", err)
 		}
 	}
 
-	_, err := tx.Exec(ctx, "DELETE FROM History WHERE InstanceID = ?", string(id))
+	_, err := tx.Exec(ctx, "DELETE FROM History WHERE InstanceID = $1", string(id))
 	if err != nil {
 		return fmt.Errorf("failed to delete from History table: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, "DELETE FROM NewEvents WHERE InstanceID = ?", string(id))
+	_, err = tx.Exec(ctx, "DELETE FROM NewEvents WHERE InstanceID = $1", string(id))
 	if err != nil {
 		return fmt.Errorf("failed to delete from NewEvents table: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, "DELETE FROM NewTasks WHERE InstanceID = ?", string(id))
+	_, err = tx.Exec(ctx, "DELETE FROM NewTasks WHERE InstanceID = $1", string(id))
 	if err != nil {
 		return fmt.Errorf("failed to delete from NewTasks table: %w", err)
 	}
@@ -617,7 +639,7 @@ func (be *postgresBackend) AddNewOrchestrationEvent(ctx context.Context, iid api
 
 	_, err = be.db.Exec(
 		ctx,
-		`INSERT INTO NewEvents (InstanceID, EventPayload) VALUES (?, ?)`,
+		`INSERT INTO NewEvents (InstanceID, EventPayload) VALUES ($1, $2)`,
 		string(iid),
 		eventPayload,
 	)
@@ -638,7 +660,7 @@ func (be *postgresBackend) GetOrchestrationMetadata(ctx context.Context, iid api
 	row := be.db.QueryRow(
 		ctx,
 		`SELECT InstanceID, Name, RuntimeStatus, CreatedTime, LastUpdatedTime, Input, Output, CustomStatus, FailureDetails
-		FROM Instances WHERE InstanceID = ?`,
+		FROM Instances WHERE InstanceID = $1`,
 		string(iid),
 	)
 
@@ -701,7 +723,7 @@ func (be *postgresBackend) GetOrchestrationRuntimeState(ctx context.Context, wi 
 
 	rows, err := be.db.Query(
 		ctx,
-		"SELECT EventPayload FROM History WHERE InstanceID = ? ORDER BY SequenceNumber ASC",
+		"SELECT EventPayload FROM History WHERE InstanceID = $1 ORDER BY SequenceNumber ASC",
 		string(wi.InstanceID),
 	)
 	if err != nil {
@@ -746,12 +768,12 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	// Place a lock on an orchestration instance that has new events that are ready to be executed.
 	row := tx.QueryRow(
 		ctx,
-		`UPDATE Instances SET LockedBy = ?, LockExpiration = ?
-		WHERE rowid = (
-			SELECT rowid FROM Instances I
-			WHERE (I.LockExpiration IS NULL OR I.LockExpiration < ?) AND EXISTS (
+		`UPDATE Instances SET LockedBy = $1, LockExpiration = $2
+		WHERE SequenceNumber = (
+			SELECT SequenceNumber FROM Instances I
+			WHERE (I.LockExpiration IS NULL OR I.LockExpiration < $3) AND EXISTS (
 				SELECT 1 FROM NewEvents E
-				WHERE E.InstanceID = I.InstanceID AND (E.VisibleTime IS NULL OR E.VisibleTime < ?)
+				WHERE E.InstanceID = I.InstanceID AND (E.VisibleTime IS NULL OR E.VisibleTime < $4)
 			)
 			LIMIT 1
 		) RETURNING InstanceID`,
@@ -774,9 +796,9 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	// TODO: Get all the unprocessed events associated with the locked instance
 	events, err := tx.Query(
 		ctx,
-		`UPDATE NewEvents SET DequeueCount = DequeueCount + 1, LockedBy = ? WHERE rowid IN (
-			SELECT rowid FROM NewEvents
-			WHERE InstanceID = ? AND (VisibleTime IS NULL OR VisibleTime <= ?)
+		`UPDATE NewEvents SET DequeueCount = DequeueCount + 1, LockedBy = $1 WHERE SequenceNumber IN (
+			SELECT SequenceNumber FROM NewEvents
+			WHERE InstanceID = $2 AND (VisibleTime IS NULL OR VisibleTime <= $3)
 			LIMIT 1000
 		)
 		RETURNING EventPayload, DequeueCount`,
@@ -835,10 +857,10 @@ func (be *postgresBackend) GetActivityWorkItem(ctx context.Context) (*backend.Ac
 
 	row := be.db.QueryRow(
 		ctx,
-		`UPDATE NewTasks SET LockedBy = ?, LockExpiration = ?, DequeueCount = DequeueCount + 1
+		`UPDATE NewTasks SET LockedBy = $1, LockExpiration = $2, DequeueCount = DequeueCount + 1
 		WHERE SequenceNumber = (
 			SELECT SequenceNumber FROM NewTasks T
-			WHERE T.LockExpiration IS NULL OR T.LockExpiration < ?
+			WHERE T.LockExpiration IS NULL OR T.LockExpiration < $3
 			LIMIT 1
 		) RETURNING SequenceNumber, InstanceID, EventPayload`,
 		be.workerName,
@@ -889,12 +911,12 @@ func (be *postgresBackend) CompleteActivityWorkItem(ctx context.Context, wi *bac
 		return err
 	}
 
-	_, err = tx.Exec(ctx, "INSERT INTO NewEvents (InstanceID, EventPayload) VALUES (?, ?)", string(wi.InstanceID), bytes)
+	_, err = tx.Exec(ctx, "INSERT INTO NewEvents (InstanceID, EventPayload) VALUES ($1, $2)", string(wi.InstanceID), bytes)
 	if err != nil {
 		return fmt.Errorf("failed to insert into NewEvents table: %w", err)
 	}
 
-	dbResult, err := tx.Exec(ctx, "DELETE FROM NewTasks WHERE SequenceNumber = ? AND LockedBy = ?", wi.SequenceNumber, wi.LockedBy)
+	dbResult, err := tx.Exec(ctx, "DELETE FROM NewTasks WHERE SequenceNumber = $1 AND LockedBy = $2", wi.SequenceNumber, wi.LockedBy)
 	if err != nil {
 		return fmt.Errorf("failed to delete from NewTasks table: %w", err)
 	}
@@ -920,7 +942,7 @@ func (be *postgresBackend) AbandonActivityWorkItem(ctx context.Context, wi *back
 
 	dbResult, err := be.db.Exec(
 		ctx,
-		"UPDATE NewTasks SET LockedBy = NULL, LockExpiration = NULL WHERE SequenceNumber = ? AND LockedBy = ?",
+		"UPDATE NewTasks SET LockedBy = NULL, LockExpiration = NULL WHERE SequenceNumber = $1 AND LockedBy = $2",
 		wi.SequenceNumber,
 		wi.LockedBy,
 	)
@@ -977,6 +999,6 @@ func (be *postgresBackend) ensureDB() error {
 }
 
 func (be *postgresBackend) String() string {
-	connectionURI := fmt.Sprintf("postgres://%s:%s@%s:%d/%s", be.options.PgOptions.ConnConfig.User, be.options.PgOptions.ConnConfig.Password, be.options.PgOptions.ConnConfig.Host, be.options.PgOptions.ConnConfig.Port, be.options.PgOptions.ConnConfig.Database)
+	connectionURI := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", be.options.PgOptions.ConnConfig.User, be.options.PgOptions.ConnConfig.Password, be.options.PgOptions.ConnConfig.Host, be.options.PgOptions.ConnConfig.Port, be.options.PgOptions.ConnConfig.Database)
 	return connectionURI
 }
