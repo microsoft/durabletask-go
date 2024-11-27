@@ -74,7 +74,7 @@ func Init(ctx context.Context, r *task.TaskRegistry) (backend.TaskHubClient, bac
 }
 
 func RetryActivityOrchestrator(ctx *task.OrchestrationContext) (any, error) {
-	if err := ctx.CallActivity(RandomFailActivity, task.WithRetryPolicy(&task.ActivityRetryPolicy{
+	if err := ctx.CallActivity(RandomFailActivity, task.WithActivityRetryPolicy(&task.RetryPolicy{
 		MaxAttempts:          10,
 		InitialRetryInterval: 100 * time.Millisecond,
 		BackoffCoefficient:   2,

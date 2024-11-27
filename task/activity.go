@@ -14,10 +14,10 @@ type callActivityOption func(*callActivityOptions) error
 
 type callActivityOptions struct {
 	rawInput    *wrapperspb.StringValue
-	retryPolicy *ActivityRetryPolicy
+	retryPolicy *RetryPolicy
 }
 
-type ActivityRetryPolicy struct {
+type RetryPolicy struct {
 	// Max number of attempts to try the activity call, first execution inclusive
 	MaxAttempts int
 	// Timespan to wait for the first retry
@@ -30,6 +30,31 @@ type ActivityRetryPolicy struct {
 	RetryTimeout time.Duration
 	// Optional function to control if retries should proceed
 	Handle func(error) bool
+}
+
+func (policy *RetryPolicy) Validate() error {
+	if policy.InitialRetryInterval <= 0 {
+		return fmt.Errorf("InitialRetryInterval must be greater than 0")
+	}
+	if policy.MaxAttempts <= 0 {
+		// setting 1 max attempt is equivalent to not retrying
+		policy.MaxAttempts = 1
+	}
+	if policy.BackoffCoefficient <= 0 {
+		policy.BackoffCoefficient = 1
+	}
+	if policy.MaxRetryInterval <= 0 {
+		policy.MaxRetryInterval = math.MaxInt64
+	}
+	if policy.RetryTimeout <= 0 {
+		policy.RetryTimeout = math.MaxInt64
+	}
+	if policy.Handle == nil {
+		policy.Handle = func(err error) bool {
+			return true
+		}
+	}
+	return nil
 }
 
 // WithActivityInput configures an input for an activity invocation.
@@ -53,31 +78,14 @@ func WithRawActivityInput(input string) callActivityOption {
 	}
 }
 
-func WithRetryPolicy(policy *ActivityRetryPolicy) callActivityOption {
+func WithActivityRetryPolicy(policy *RetryPolicy) callActivityOption {
 	return func(opt *callActivityOptions) error {
 		if policy == nil {
 			return nil
 		}
-		if policy.InitialRetryInterval <= 0 {
-			return fmt.Errorf("InitialRetryInterval must be greater than 0")
-		}
-		if policy.MaxAttempts <= 0 {
-			// setting 1 max attempt is equivalent to not retrying
-			policy.MaxAttempts = 1
-		}
-		if policy.BackoffCoefficient <= 0 {
-			policy.BackoffCoefficient = 1
-		}
-		if policy.MaxRetryInterval <= 0 {
-			policy.MaxRetryInterval = math.MaxInt64
-		}
-		if policy.RetryTimeout <= 0 {
-			policy.RetryTimeout = math.MaxInt64
-		}
-		if policy.Handle == nil {
-			policy.Handle = func(err error) bool {
-				return true
-			}
+		err := policy.Validate()
+		if err != nil {
+			return err
 		}
 		opt.retryPolicy = policy
 		return nil

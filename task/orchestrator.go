@@ -49,6 +49,8 @@ type OrchestrationContext struct {
 type callSubOrchestratorOptions struct {
 	instanceID string
 	rawInput   *wrapperspb.StringValue
+
+	retryPolicy *RetryPolicy
 }
 
 // subOrchestratorOption is a functional option type for the CallSubOrchestrator orchestrator method.
@@ -92,6 +94,20 @@ func WithRawSubOrchestratorInput(input string) subOrchestratorOption {
 func WithSubOrchestrationInstanceID(instanceID string) subOrchestratorOption {
 	return func(opts *callSubOrchestratorOptions) error {
 		opts.instanceID = instanceID
+		return nil
+	}
+}
+
+func WithSubOrchestrationRetryPolicy(policy *RetryPolicy) subOrchestratorOption {
+	return func(opt *callSubOrchestratorOptions) error {
+		if policy == nil {
+			return nil
+		}
+		err := policy.Validate()
+		if err != nil {
+			return err
+		}
+		opt.retryPolicy = policy
 		return nil
 	}
 }
@@ -238,7 +254,7 @@ func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...call
 	}
 
 	if options.retryPolicy != nil {
-		return ctx.internalCallActivityWithRetries(ctx.CurrentTimeUtc, func() Task {
+		return ctx.internalScheduleTaskWithRetries(ctx.CurrentTimeUtc, func() Task {
 			return ctx.internalScheduleActivity(activity, options)
 		}, *options.retryPolicy, 0)
 	}
@@ -259,7 +275,40 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activity interface{}, 
 	return task
 }
 
-func (ctx *OrchestrationContext) internalCallActivityWithRetries(initialAttempt time.Time, schedule func() Task, policy ActivityRetryPolicy, retryCount int) Task {
+func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, opts ...subOrchestratorOption) Task {
+	options := new(callSubOrchestratorOptions)
+	for _, configure := range opts {
+		if err := configure(options); err != nil {
+			failedTask := newTask(ctx)
+			failedTask.fail(helpers.NewTaskFailureDetails(err))
+			return failedTask
+		}
+	}
+
+	if options.retryPolicy != nil {
+		return ctx.internalScheduleTaskWithRetries(ctx.CurrentTimeUtc, func() Task {
+			return ctx.internalCallSubOrchestrator(orchestrator, options)
+		}, *options.retryPolicy, 0)
+	}
+
+	return ctx.internalCallSubOrchestrator(orchestrator, options)
+}
+
+func (ctx *OrchestrationContext) internalCallSubOrchestrator(orchestrator interface{}, options *callSubOrchestratorOptions) Task {
+	createSubOrchestrationAction := helpers.NewCreateSubOrchestrationAction(
+		ctx.getNextSequenceNumber(),
+		helpers.GetTaskFunctionName(orchestrator),
+		options.instanceID,
+		options.rawInput,
+	)
+	ctx.pendingActions[createSubOrchestrationAction.Id] = createSubOrchestrationAction
+
+	task := newTask(ctx)
+	ctx.pendingTasks[createSubOrchestrationAction.Id] = task
+	return task
+}
+
+func (ctx *OrchestrationContext) internalScheduleTaskWithRetries(initialAttempt time.Time, schedule func() Task, policy RetryPolicy, retryCount int) Task {
 	return &taskWrapper{
 		delegate: schedule(),
 		onAwaitResult: func(v any, err error) error {
@@ -283,7 +332,7 @@ func (ctx *OrchestrationContext) internalCallActivityWithRetries(initialAttempt 
 				return fmt.Errorf("%v %w", timerErr, err)
 			}
 
-			err = ctx.internalCallActivityWithRetries(initialAttempt, schedule, policy, retryCount+1).Await(v)
+			err = ctx.internalScheduleTaskWithRetries(initialAttempt, schedule, policy, retryCount+1).Await(v)
 			if err == nil {
 				return nil
 			}
@@ -292,7 +341,7 @@ func (ctx *OrchestrationContext) internalCallActivityWithRetries(initialAttempt 
 	}
 }
 
-func computeNextDelay(currentTimeUtc time.Time, policy ActivityRetryPolicy, attempt int, firstAttempt time.Time, err error) time.Duration {
+func computeNextDelay(currentTimeUtc time.Time, policy RetryPolicy, attempt int, firstAttempt time.Time, err error) time.Duration {
 	if policy.Handle(err) {
 		isExpired := false
 		if policy.RetryTimeout != math.MaxInt64 {
@@ -307,29 +356,6 @@ func computeNextDelay(currentTimeUtc time.Time, policy ActivityRetryPolicy, atte
 		}
 	}
 	return 0
-}
-
-func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, opts ...subOrchestratorOption) Task {
-	options := new(callSubOrchestratorOptions)
-	for _, configure := range opts {
-		if err := configure(options); err != nil {
-			failedTask := newTask(ctx)
-			failedTask.fail(helpers.NewTaskFailureDetails(err))
-			return failedTask
-		}
-	}
-
-	createSubOrchestrationAction := helpers.NewCreateSubOrchestrationAction(
-		ctx.getNextSequenceNumber(),
-		helpers.GetTaskFunctionName(orchestrator),
-		options.instanceID,
-		options.rawInput,
-	)
-	ctx.pendingActions[createSubOrchestrationAction.Id] = createSubOrchestrationAction
-
-	task := newTask(ctx)
-	ctx.pendingTasks[createSubOrchestrationAction.Id] = task
-	return task
 }
 
 // CreateTimer schedules a durable timer that expires after the specified delay.
