@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
 	"github.com/dapr/durabletask-go/backend/sqlite"
 	"github.com/dapr/durabletask-go/client"
-	"github.com/dapr/durabletask-go/internal/protos"
 	"github.com/dapr/durabletask-go/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
 	"github.com/dapr/durabletask-go/backend/sqlite"
-	"github.com/dapr/durabletask-go/internal/protos"
 	"github.com/dapr/durabletask-go/task"
 )
 

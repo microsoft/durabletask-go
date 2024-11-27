@@ -262,7 +262,8 @@ This project requires go v1.19.x or greater. You can build a standalone executab
 Use the following command to regenerate the protobuf from the submodule. Use this whenever updating the submodule reference.
 
 ```bash
-# NOTE: assumes the .proto file defines: option go_package = "/internal/protos"
+# NOTE: assumes the .proto file defines: option go_package = "/api/protos"
+# NOTE: currently the .proto file actually defines: option go_package = "/internal/protos"; , we are manually changing that to be /api/protos
 protoc --go_out=. --go-grpc_out=. -I submodules/durabletask-protobuf/protos orchestrator_service.proto
 ```
 
@@ -281,7 +282,7 @@ All automated tests are under `./tests`. A separate test package hierarchy was c
 Run tests with the following command.
 
 ```bash
-go test ./tests/... -coverpkg ./api,./task,./client,./backend/...,./internal/helpers
+go test ./tests/... -coverpkg ./api,./task,./client,./backend/...,./api/helpers
 ```
 
 ## Running integration tests

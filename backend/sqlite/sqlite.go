@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/api/helpers"
+	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
-	"github.com/dapr/durabletask-go/internal/helpers"
-	"github.com/dapr/durabletask-go/internal/protos"
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 
 	_ "modernc.org/sqlite"

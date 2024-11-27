@@ -7,13 +7,15 @@ import (
 	"time"
 
 	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/api/helpers"
+	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
-	"github.com/dapr/durabletask-go/internal/helpers"
-	"github.com/dapr/durabletask-go/internal/protos"
 	"github.com/dapr/durabletask-go/tests/mocks"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -26,7 +28,21 @@ func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 	ctx := context.Background()
 	wi := &backend.OrchestrationWorkItem{
 		InstanceID: "test123",
-		NewEvents:  []*protos.HistoryEvent{helpers.NewExecutionStartedEvent("MyOrch", "test123", nil, nil, nil, nil)},
+		NewEvents: []*protos.HistoryEvent{
+			{
+				EventId:   -1,
+				Timestamp: timestamppb.New(time.Now()),
+				EventType: &protos.HistoryEvent_ExecutionStarted{
+					ExecutionStarted: &protos.ExecutionStartedEvent{
+						Name: "MyOrch",
+						OrchestrationInstance: &protos.OrchestrationInstance{
+							InstanceId:  "test123",
+							ExecutionId: wrapperspb.String(uuid.New().String()),
+						},
+					},
+				},
+			},
+		},
 	}
 	state := &backend.OrchestrationRuntimeState{}
 	result := &backend.ExecutionResults{Response: &protos.OrchestratorResponse{}}
@@ -74,10 +90,23 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	iid := api.InstanceID("test123")
 
 	// Simulate getting an ExecutionStarted message from the orchestration queue
-	startEvent := helpers.NewExecutionStartedEvent("MyOrchestration", string(iid), nil, nil, nil, nil)
 	wi := &backend.OrchestrationWorkItem{
 		InstanceID: iid,
-		NewEvents:  []*protos.HistoryEvent{startEvent},
+		NewEvents: []*protos.HistoryEvent{
+			{
+				EventId:   -1,
+				Timestamp: timestamppb.New(time.Now()),
+				EventType: &protos.HistoryEvent_ExecutionStarted{
+					ExecutionStarted: &protos.ExecutionStartedEvent{
+						Name: "MyOrchestration",
+						OrchestrationInstance: &protos.OrchestrationInstance{
+							InstanceId:  string(iid),
+							ExecutionId: wrapperspb.String(uuid.New().String()),
+						},
+					},
+				},
+			},
+		},
 	}
 
 	// Empty orchestration runtime state since we're starting a new execution from scratch

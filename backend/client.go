@@ -9,10 +9,12 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/internal/helpers"
-	"github.com/dapr/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/api/helpers"
+	"github.com/dapr/durabletask-go/api/protos"
 )
 
 type TaskHubClient interface {
@@ -58,7 +60,22 @@ func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrat
 	defer span.End()
 
 	tc := helpers.TraceContextFromSpan(span)
-	e := helpers.NewExecutionStartedEvent(req.Name, req.InstanceId, req.Input, nil, tc, req.ScheduledStartTimestamp)
+	e := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_ExecutionStarted{
+			ExecutionStarted: &protos.ExecutionStartedEvent{
+				Name:  req.Name,
+				Input: req.Input,
+				OrchestrationInstance: &protos.OrchestrationInstance{
+					InstanceId:  req.InstanceId,
+					ExecutionId: wrapperspb.String(uuid.New().String()),
+				},
+				ParentTraceContext:      tc,
+				ScheduledStartTimestamp: req.ScheduledStartTimestamp,
+			},
+		},
+	}
 	if err := c.be.CreateOrchestrationInstance(ctx, e, WithOrchestrationIdReusePolicy(req.OrchestrationIdReusePolicy)); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

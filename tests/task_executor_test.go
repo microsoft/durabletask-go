@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/internal/helpers"
-	"github.com/dapr/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/task"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // Verifies that the WaitForSingleEvent API implicitly creates a timer when the timeout is non-zero.
@@ -23,11 +25,29 @@ func Test_Executor_WaitForEventSchedulesTimer(t *testing.T) {
 	})
 
 	iid := api.InstanceID("abc123")
-	startEvent := helpers.NewOrchestratorStartedEvent() // determines the current orchestrator time
+	startEvent := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.Now(),
+		EventType: &protos.HistoryEvent_OrchestratorStarted{
+			OrchestratorStarted: &protos.OrchestratorStartedEvent{},
+		},
+	}
 	oldEvents := []*protos.HistoryEvent{}
 	newEvents := []*protos.HistoryEvent{
 		startEvent,
-		helpers.NewExecutionStartedEvent("Orchestration", string(iid), nil, nil, nil, nil),
+		{
+			EventId:   -1,
+			Timestamp: timestamppb.New(time.Now()),
+			EventType: &protos.HistoryEvent_ExecutionStarted{
+				ExecutionStarted: &protos.ExecutionStartedEvent{
+					Name: "Orchestration",
+					OrchestrationInstance: &protos.OrchestrationInstance{
+						InstanceId:  string(iid),
+						ExecutionId: wrapperspb.String(uuid.New().String()),
+					},
+				},
+			},
+		},
 	}
 
 	// Execute the orchestrator function and expect to get back a single timer action
@@ -56,9 +76,33 @@ func Test_Executor_SuspendStopsAllActions(t *testing.T) {
 	iid := api.InstanceID("abc123")
 	oldEvents := []*protos.HistoryEvent{}
 	newEvents := []*protos.HistoryEvent{
-		helpers.NewOrchestratorStartedEvent(),
-		helpers.NewExecutionStartedEvent("SuspendResumeOrchestration", string(iid), nil, nil, nil, nil),
-		helpers.NewSuspendOrchestrationEvent(""),
+		{
+			EventId:   -1,
+			Timestamp: timestamppb.Now(),
+			EventType: &protos.HistoryEvent_OrchestratorStarted{
+				OrchestratorStarted: &protos.OrchestratorStartedEvent{},
+			},
+		},
+		{
+			EventId:   -1,
+			Timestamp: timestamppb.New(time.Now()),
+			EventType: &protos.HistoryEvent_ExecutionStarted{
+				ExecutionStarted: &protos.ExecutionStartedEvent{
+					Name: "SuspendResumeOrchestration",
+					OrchestrationInstance: &protos.OrchestrationInstance{
+						InstanceId:  string(iid),
+						ExecutionId: wrapperspb.String(uuid.New().String()),
+					},
+				},
+			},
+		},
+		{
+			EventId:   -1,
+			Timestamp: timestamppb.New(time.Now()),
+			EventType: &protos.HistoryEvent_ExecutionSuspended{
+				ExecutionSuspended: &protos.ExecutionSuspendedEvent{},
+			},
+		},
 	}
 
 	// Execute the orchestrator function and expect to get back no actions

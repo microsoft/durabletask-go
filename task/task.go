@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/dapr/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/api/protos"
 )
 
 // ErrTaskBlocked is not an error, but rather a control flow signal indicating that an orchestrator

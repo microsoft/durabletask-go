@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -19,8 +20,8 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/internal/helpers"
-	"github.com/dapr/durabletask-go/internal/protos"
+	"github.com/dapr/durabletask-go/api/helpers"
+	"github.com/dapr/durabletask-go/api/protos"
 )
 
 var emptyCompleteTaskResponse = &protos.CompleteTaskResponse{}
@@ -190,7 +191,16 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 
 	var responseEvent *protos.HistoryEvent
 	if failureDetails := result.response.GetFailureDetails(); failureDetails != nil {
-		responseEvent = helpers.NewTaskFailedEvent(result.response.TaskId, result.response.FailureDetails)
+		responseEvent = &protos.HistoryEvent{
+			EventId:   -1,
+			Timestamp: timestamppb.Now(),
+			EventType: &protos.HistoryEvent_TaskFailed{
+				TaskFailed: &protos.TaskFailedEvent{
+					TaskScheduledId: result.response.TaskId,
+					FailureDetails:  failureDetails,
+				},
+			},
+		}
 	} else {
 		responseEvent = helpers.NewTaskCompletedEvent(result.response.TaskId, result.response.Result)
 	}
@@ -430,7 +440,22 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 	ctx, span := helpers.StartNewCreateOrchestrationSpan(ctx, req.Name, req.Version.GetValue(), instanceID)
 	defer span.End()
 
-	e := helpers.NewExecutionStartedEvent(req.Name, instanceID, req.Input, nil, helpers.TraceContextFromSpan(span), req.ScheduledStartTimestamp)
+	e := &protos.HistoryEvent{
+		EventId:   -1,
+		Timestamp: timestamppb.New(time.Now()),
+		EventType: &protos.HistoryEvent_ExecutionStarted{
+			ExecutionStarted: &protos.ExecutionStartedEvent{
+				Name:  req.Name,
+				Input: req.Input,
+				OrchestrationInstance: &protos.OrchestrationInstance{
+					InstanceId:  instanceID,
+					ExecutionId: wrapperspb.String(uuid.New().String()),
+				},
+				ParentTraceContext:      helpers.TraceContextFromSpan(span),
+				ScheduledStartTimestamp: req.ScheduledStartTimestamp,
+			},
+		},
+	}
 	if err := g.backend.CreateOrchestrationInstance(ctx, e, WithOrchestrationIdReusePolicy(req.OrchestrationIdReusePolicy)); err != nil {
 		return nil, err
 	}
