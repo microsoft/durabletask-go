@@ -489,3 +489,36 @@ func Test_Grpc_SubOrchestratorRetries(t *testing.T) {
 	// With 3 max attempts there will be two retries with 10 millis delay before each
 	require.GreaterOrEqual(t, metadata.LastUpdatedAt.AsTime(), metadata.CreatedAt.AsTime().Add(2*10*time.Millisecond))
 }
+
+func Test_Grpc_SubOrchestratorRetries(t *testing.T) {
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+		err := ctx.CallSubOrchestrator(
+			"Child",
+			task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_child"),
+			task.WithSubOrchestrationRetryPolicy(&task.RetryPolicy{
+				MaxAttempts:          3,
+				InitialRetryInterval: 10 * time.Millisecond,
+				BackoffCoefficient:   2,
+			})).Await(nil)
+		return nil, err
+	})
+	r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
+		return nil, errors.New("Child failed")
+	})
+
+	cancelListener := startGrpcListener(t, r)
+	defer cancelListener()
+	instanceID := api.InstanceID("orchestrator_retries")
+
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "Parent", api.WithInstanceID(instanceID))
+	require.NoError(t, err)
+	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelTimeout()
+	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
+	require.NoError(t, err)
+	assert.Equal(t, true, metadata.IsComplete())
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
+	// With 3 max attempts there will be two retries with 10 millis delay before each
+	require.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt.Add(2*10*time.Millisecond))
+}
