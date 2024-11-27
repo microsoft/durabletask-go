@@ -28,6 +28,7 @@ var (
 var backends = []backend.Backend{
 	sqlite.NewSqliteBackend(sqliteFileOptions, logger),
 	sqlite.NewSqliteBackend(sqliteInMemoryOptions, logger),
+	//postgres.NewPostgresBackend(nil, logger), // Requires a local Postgres instance running with host=localhost, user=postgres, password=postgres, dbname=postgres
 }
 
 var completionStatusValues = []protos.OrchestrationStatus{
@@ -458,12 +459,11 @@ func workItemProcessingTestLogic(
 							// State should be initialized with only "old" events
 							assert.Empty(t, state.NewEvents())
 							assert.NotEmpty(t, state.OldEvents())
-
 							// Validate orchestration metadata
 							if metadata, ok := getOrchestrationMetadata(t, be, state.InstanceID()); ok {
 								assert.Equal(t, defaultName, metadata.Name)
 								assert.Equal(t, defaultInput, metadata.SerializedInput)
-								assert.Equal(t, createdTime, metadata.CreatedAt)
+								assert.Less(t, createdTime.Sub(metadata.CreatedAt).Abs(), time.Microsecond) // Some database backends (like postgres) don't support sub-microsecond precision
 								assert.Equal(t, state.RuntimeStatus(), metadata.RuntimeStatus)
 
 								validateMetadata(metadata)
