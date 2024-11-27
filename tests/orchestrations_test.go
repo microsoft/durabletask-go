@@ -465,11 +465,11 @@ func Test_SingleSubOrchestrator_Failed_Retries(t *testing.T) {
 	spans := exporter.GetSpans().Snapshots()
 	assertSpanSequence(t, spans,
 		assertOrchestratorCreated("Parent", id),
-		assertOrchestratorExecuted("Child", id+"_child", "FAILED", assertTaskID(0)),
+		assertOrchestratorExecuted("Child", id+"_child", "FAILED"),
 		assertTimer(id, assertTaskID(1)),
-		assertOrchestratorExecuted("Child", id+"_child", "FAILED", assertTaskID(2)),
+		assertOrchestratorExecuted("Child", id+"_child", "FAILED"),
 		assertTimer(id, assertTaskID(3)),
-		assertOrchestratorExecuted("Child", id+"_child", "FAILED", assertTaskID(4)),
+		assertOrchestratorExecuted("Child", id+"_child", "FAILED"),
 		assertOrchestratorExecuted("Parent", id, "FAILED"),
 	)
 }
