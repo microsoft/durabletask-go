@@ -16,6 +16,8 @@ import (
 	"github.com/dapr/durabletask-go/backend"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	_ "modernc.org/sqlite"
 )
@@ -634,7 +636,7 @@ func (be *sqliteBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.I
 }
 
 // GetOrchestrationMetadata implements backend.Backend
-func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.InstanceID) (*api.OrchestrationMetadata, error) {
+func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.InstanceID) (*backend.OrchestrationMetadata, error) {
 	if err := be.ensureDB(); err != nil {
 		return nil, err
 	}
@@ -671,16 +673,17 @@ func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.I
 		return nil, fmt.Errorf("failed to scan the Instances table result: %w", err)
 	}
 
-	if input == nil {
-		input = &emptyString
+	var inputw *wrapperspb.StringValue
+	var outputw *wrapperspb.StringValue
+	var customStatusw *wrapperspb.StringValue
+	if input != nil {
+		inputw = wrapperspb.String(*input)
 	}
-
-	if output == nil {
-		output = &emptyString
+	if output != nil {
+		outputw = wrapperspb.String(*output)
 	}
-
-	if customStatus == nil {
-		customStatus = &emptyString
+	if customStatus != nil {
+		customStatusw = wrapperspb.String(*customStatus)
 	}
 
 	if len(failureDetailsPayload) > 0 {
@@ -690,18 +693,17 @@ func (be *sqliteBackend) GetOrchestrationMetadata(ctx context.Context, iid api.I
 		}
 	}
 
-	metadata := api.NewOrchestrationMetadata(
-		iid,
-		*name,
-		helpers.FromRuntimeStatusString(*runtimeStatus),
-		*createdAt,
-		*lastUpdatedAt,
-		*input,
-		*output,
-		*customStatus,
-		failureDetails,
-	)
-	return metadata, nil
+	return &backend.OrchestrationMetadata{
+		InstanceId:     string(iid),
+		Name:           *name,
+		RuntimeStatus:  helpers.FromRuntimeStatusString(*runtimeStatus),
+		CreatedAt:      timestamppb.New(*createdAt),
+		LastUpdatedAt:  timestamppb.New(*lastUpdatedAt),
+		Input:          inputw,
+		Output:         outputw,
+		CustomStatus:   customStatusw,
+		FailureDetails: failureDetails,
+	}, nil
 }
 
 // GetOrchestrationRuntimeState implements backend.Backend

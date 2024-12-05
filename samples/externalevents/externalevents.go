@@ -53,7 +53,7 @@ func main() {
 	if metadata.FailureDetails != nil {
 		log.Println("orchestration failed:", metadata.FailureDetails.ErrorMessage)
 	} else {
-		log.Println("orchestration completed:", metadata.SerializedOutput)
+		log.Println("orchestration completed:", metadata.Output)
 	}
 }
 

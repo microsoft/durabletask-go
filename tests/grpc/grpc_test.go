@@ -141,8 +141,8 @@ func Test_Grpc_WaitForInstanceStart_ConnectionResume(t *testing.T) {
 	defer cancelTimeout()
 	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
 	require.NoError(t, err)
-	assert.Equal(t, true, metadata.IsComplete())
-	assert.Equal(t, "42", metadata.SerializedOutput)
+	assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
+	assert.Equal(t, "42", metadata.Output.Value)
 	time.Sleep(1 * time.Second)
 }
 
@@ -175,9 +175,9 @@ func Test_Grpc_HelloOrchestration(t *testing.T) {
 	defer cancelTimeout()
 	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
 	require.NoError(t, err)
-	assert.Equal(t, true, metadata.IsComplete())
-	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
-	assert.Equal(t, "hello-test", metadata.SerializedCustomStatus)
+	assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
+	assert.Equal(t, `"Hello, 世界!"`, metadata.Output.Value)
+	assert.Equal(t, "hello-test", metadata.CustomStatus.Value)
 	time.Sleep(1 * time.Second)
 }
 
@@ -218,10 +218,10 @@ func Test_Grpc_SuspendResume(t *testing.T) {
 	_, err = grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id)
 	require.ErrorIs(t, err, timeoutCtx.Err())
 
-	var metadata *api.OrchestrationMetadata
+	var metadata *backend.OrchestrationMetadata
 	metadata, err = grpcClient.FetchOrchestrationMetadata(ctx, id)
 	require.NoError(t, err)
-	require.True(t, metadata.IsRunning())
+	assert.True(t, api.OrchestrationMetadataIsRunning(metadata))
 	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED, metadata.RuntimeStatus)
 
 	// Resume the orchestration and wait for it to complete
@@ -284,7 +284,7 @@ func Test_Grpc_Terminate_Recursive(t *testing.T) {
 			metadata, err := grpcClient.WaitForOrchestrationCompletion(ctx, id)
 			require.NoError(t, err)
 			require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, metadata.RuntimeStatus)
-			require.Equal(t, fmt.Sprintf("\"%s\"", output), metadata.SerializedOutput)
+			require.Equal(t, fmt.Sprintf("\"%s\"", output), metadata.Output.Value)
 
 			// Wait longer to ensure that none of the sub-orchestrations continued to the next step
 			// of executing the activity function.
@@ -335,11 +335,11 @@ func Test_Grpc_ReuseInstanceIDIgnore(t *testing.T) {
 	defer cancelTimeout()
 	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
 	require.NoError(t, err)
-	assert.Equal(t, true, metadata.IsComplete())
+	assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 	// the first orchestration should complete as the second one is ignored
-	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+	assert.Equal(t, `"Hello, 世界!"`, metadata.Output.Value)
 	// assert the orchestration created timestamp
-	assert.True(t, pivotTime.After(metadata.CreatedAt))
+	assert.True(t, pivotTime.After(metadata.CreatedAt.AsTime()))
 }
 
 func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
@@ -383,11 +383,11 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 	defer cancelTimeout()
 	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
 	require.NoError(t, err)
-	assert.Equal(t, true, metadata.IsComplete())
+	assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 	// the second orchestration should complete.
-	assert.Equal(t, `"Hello, World!"`, metadata.SerializedOutput)
+	assert.Equal(t, `"Hello, World!"`, metadata.Output.Value)
 	// assert the orchestration created timestamp
-	assert.True(t, pivotTime.Before(metadata.CreatedAt))
+	assert.True(t, pivotTime.Before(metadata.CreatedAt.AsTime()))
 }
 
 func Test_Grpc_ReuseInstanceIDError(t *testing.T) {
@@ -448,10 +448,10 @@ func Test_Grpc_ActivityRetries(t *testing.T) {
 	defer cancelTimeout()
 	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
 	require.NoError(t, err)
-	assert.Equal(t, true, metadata.IsComplete())
+	assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
 	// With 3 max attempts there will be two retries with 10 millis delay before each
-	require.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt.Add(2*10*time.Millisecond))
+	require.GreaterOrEqual(t, metadata.LastUpdatedAt.AsTime(), metadata.CreatedAt.AsTime().Add(2*10*time.Millisecond))
 }
 
 func Test_Grpc_SubOrchestratorRetries(t *testing.T) {
@@ -481,8 +481,8 @@ func Test_Grpc_SubOrchestratorRetries(t *testing.T) {
 	defer cancelTimeout()
 	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
 	require.NoError(t, err)
-	assert.Equal(t, true, metadata.IsComplete())
+	assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
 	// With 3 max attempts there will be two retries with 10 millis delay before each
-	require.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt.Add(2*10*time.Millisecond))
+	require.GreaterOrEqual(t, metadata.LastUpdatedAt.AsTime(), metadata.CreatedAt.AsTime().Add(2*10*time.Millisecond))
 }

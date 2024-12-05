@@ -53,7 +53,7 @@ func (c *TaskHubGrpcClient) ScheduleNewOrchestration(ctx context.Context, orches
 // FetchOrchestrationMetadata fetches metadata for the specified orchestration from the configured task hub.
 //
 // api.ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
-func (c *TaskHubGrpcClient) FetchOrchestrationMetadata(ctx context.Context, id api.InstanceID, opts ...api.FetchOrchestrationMetadataOptions) (*api.OrchestrationMetadata, error) {
+func (c *TaskHubGrpcClient) FetchOrchestrationMetadata(ctx context.Context, id api.InstanceID, opts ...api.FetchOrchestrationMetadataOptions) (*backend.OrchestrationMetadata, error) {
 	req := makeGetInstanceRequest(id, opts)
 	resp, err := c.client.GetInstance(ctx, req)
 	if err != nil {
@@ -65,11 +65,11 @@ func (c *TaskHubGrpcClient) FetchOrchestrationMetadata(ctx context.Context, id a
 	return makeOrchestrationMetadata(resp)
 }
 
-// WaitForOrchestrationStart waits for an orchestration to start running and returns an [api.OrchestrationMetadata] object that contains
+// WaitForOrchestrationStart waits for an orchestration to start running and returns an [backend.OrchestrationMetadata] object that contains
 // metadata about the started instance.
 //
 // api.ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
-func (c *TaskHubGrpcClient) WaitForOrchestrationStart(ctx context.Context, id api.InstanceID, opts ...api.FetchOrchestrationMetadataOptions) (*api.OrchestrationMetadata, error) {
+func (c *TaskHubGrpcClient) WaitForOrchestrationStart(ctx context.Context, id api.InstanceID, opts ...api.FetchOrchestrationMetadataOptions) (*backend.OrchestrationMetadata, error) {
 	var resp *protos.GetInstanceResponse
 	var err error
 	err = backoff.Retry(func() error {
@@ -90,11 +90,11 @@ func (c *TaskHubGrpcClient) WaitForOrchestrationStart(ctx context.Context, id ap
 	return makeOrchestrationMetadata(resp)
 }
 
-// WaitForOrchestrationCompletion waits for an orchestration to complete and returns an [api.OrchestrationMetadata] object that contains
+// WaitForOrchestrationCompletion waits for an orchestration to complete and returns an [backend.OrchestrationMetadata] object that contains
 // metadata about the completed instance.
 //
 // api.ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
-func (c *TaskHubGrpcClient) WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID, opts ...api.FetchOrchestrationMetadataOptions) (*api.OrchestrationMetadata, error) {
+func (c *TaskHubGrpcClient) WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID, opts ...api.FetchOrchestrationMetadataOptions) (*backend.OrchestrationMetadata, error) {
 	var resp *protos.GetInstanceResponse
 	var err error
 	err = backoff.Retry(func() error {
@@ -221,28 +221,24 @@ func makeGetInstanceRequest(id api.InstanceID, opts []api.FetchOrchestrationMeta
 	return req
 }
 
-// makeOrchestrationMetadata validates and converts protos.GetInstanceResponse to api.OrchestrationMetadata
+// makeOrchestrationMetadata validates and converts protos.GetInstanceResponse to backend.OrchestrationMetadata
 // api.ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
-func makeOrchestrationMetadata(resp *protos.GetInstanceResponse) (*api.OrchestrationMetadata, error) {
+func makeOrchestrationMetadata(resp *protos.GetInstanceResponse) (*backend.OrchestrationMetadata, error) {
 	if !resp.Exists {
 		return nil, api.ErrInstanceNotFound
 	}
 	if resp.OrchestrationState == nil {
 		return nil, fmt.Errorf("orchestration state is nil")
 	}
-	metadata := &api.OrchestrationMetadata{
-		InstanceID:             api.InstanceID(resp.OrchestrationState.InstanceId),
-		Name:                   resp.OrchestrationState.Name,
-		RuntimeStatus:          resp.OrchestrationState.OrchestrationStatus,
-		SerializedInput:        resp.OrchestrationState.Input.GetValue(),
-		SerializedCustomStatus: resp.OrchestrationState.CustomStatus.GetValue(),
-		SerializedOutput:       resp.OrchestrationState.Output.GetValue(),
-	}
-	if resp.OrchestrationState.CreatedTimestamp != nil {
-		metadata.CreatedAt = resp.OrchestrationState.CreatedTimestamp.AsTime()
-	}
-	if resp.OrchestrationState.LastUpdatedTimestamp != nil {
-		metadata.LastUpdatedAt = resp.OrchestrationState.LastUpdatedTimestamp.AsTime()
+	metadata := &backend.OrchestrationMetadata{
+		InstanceId:    resp.OrchestrationState.InstanceId,
+		Name:          resp.OrchestrationState.Name,
+		RuntimeStatus: resp.OrchestrationState.OrchestrationStatus,
+		Input:         resp.OrchestrationState.Input,
+		CustomStatus:  resp.OrchestrationState.CustomStatus,
+		Output:        resp.OrchestrationState.Output,
+		CreatedAt:     resp.OrchestrationState.CreatedTimestamp,
+		LastUpdatedAt: resp.OrchestrationState.LastUpdatedTimestamp,
 	}
 	return metadata, nil
 }

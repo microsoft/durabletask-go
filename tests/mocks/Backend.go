@@ -475,23 +475,23 @@ func (_c *Backend_GetActivityWorkItem_Call) RunAndReturn(run func(context.Contex
 }
 
 // GetOrchestrationMetadata provides a mock function with given fields: _a0, _a1
-func (_m *Backend) GetOrchestrationMetadata(_a0 context.Context, _a1 api.InstanceID) (*api.OrchestrationMetadata, error) {
+func (_m *Backend) GetOrchestrationMetadata(_a0 context.Context, _a1 api.InstanceID) (*backend.OrchestrationMetadata, error) {
 	ret := _m.Called(_a0, _a1)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetOrchestrationMetadata")
 	}
 
-	var r0 *api.OrchestrationMetadata
+	var r0 *backend.OrchestrationMetadata
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID) (*api.OrchestrationMetadata, error)); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID) (*backend.OrchestrationMetadata, error)); ok {
 		return rf(_a0, _a1)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID) *api.OrchestrationMetadata); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID) *backend.OrchestrationMetadata); ok {
 		r0 = rf(_a0, _a1)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*api.OrchestrationMetadata)
+			r0 = ret.Get(0).(*backend.OrchestrationMetadata)
 		}
 	}
 
@@ -523,12 +523,12 @@ func (_c *Backend_GetOrchestrationMetadata_Call) Run(run func(_a0 context.Contex
 	return _c
 }
 
-func (_c *Backend_GetOrchestrationMetadata_Call) Return(_a0 *api.OrchestrationMetadata, _a1 error) *Backend_GetOrchestrationMetadata_Call {
+func (_c *Backend_GetOrchestrationMetadata_Call) Return(_a0 *backend.OrchestrationMetadata, _a1 error) *Backend_GetOrchestrationMetadata_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *Backend_GetOrchestrationMetadata_Call) RunAndReturn(run func(context.Context, api.InstanceID) (*api.OrchestrationMetadata, error)) *Backend_GetOrchestrationMetadata_Call {
+func (_c *Backend_GetOrchestrationMetadata_Call) RunAndReturn(run func(context.Context, api.InstanceID) (*backend.OrchestrationMetadata, error)) *Backend_GetOrchestrationMetadata_Call {
 	_c.Call.Return(run)
 	return _c
 }

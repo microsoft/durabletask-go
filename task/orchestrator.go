@@ -84,9 +84,9 @@ func WithSubOrchestratorInput(input any) subOrchestratorOption {
 
 // WithRawSubOrchestratorInput is a functional option type for the CallSubOrchestrator
 // orchestrator method that takes a raw input value.
-func WithRawSubOrchestratorInput(input string) subOrchestratorOption {
+func WithRawSubOrchestratorInput(input *wrapperspb.StringValue) subOrchestratorOption {
 	return func(opts *callSubOrchestratorOptions) error {
-		opts.rawInput = wrapperspb.String(input)
+		opts.rawInput = input
 		return nil
 	}
 }

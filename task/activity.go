@@ -71,9 +71,9 @@ func WithActivityInput(input any) callActivityOption {
 }
 
 // WithRawActivityInput configures a raw input for an activity invocation.
-func WithRawActivityInput(input string) callActivityOption {
+func WithRawActivityInput(input *wrapperspb.StringValue) callActivityOption {
 	return func(opt *callActivityOptions) error {
-		opt.rawInput = wrapperspb.String(input)
+		opt.rawInput = input
 		return nil
 	}
 }

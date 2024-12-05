@@ -67,7 +67,7 @@ func Test_SingleTimer(t *testing.T) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-			assert.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt)
+			assert.GreaterOrEqual(t, metadata.LastUpdatedAt.AsTime(), metadata.CreatedAt.AsTime())
 		}
 	}
 
@@ -109,7 +109,7 @@ func Test_ConcurrentTimers(t *testing.T) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-			assert.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt)
+			assert.GreaterOrEqual(t, metadata.LastUpdatedAt.AsTime(), metadata.CreatedAt.AsTime())
 		}
 	}
 
@@ -148,7 +148,7 @@ func Test_IsReplaying(t *testing.T) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-			assert.Equal(t, `[true,true,false]`, metadata.SerializedOutput)
+			assert.Equal(t, `[true,true,false]`, metadata.Output.Value)
 		}
 	}
 
@@ -194,7 +194,7 @@ func Test_SingleActivity(t *testing.T) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-			assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+			assert.Equal(t, `"Hello, 世界!"`, metadata.Output.Value)
 		}
 	}
 
@@ -239,7 +239,7 @@ func Test_ActivityChain(t *testing.T) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-			assert.Equal(t, `10`, metadata.SerializedOutput)
+			assert.Equal(t, `10`, metadata.Output.Value)
 		}
 	}
 
@@ -283,7 +283,7 @@ func Test_ActivityRetries(t *testing.T) {
 		if assert.NoError(t, err) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
 			// With 3 max attempts there will be two retries with 10 millis delay before each
-			require.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt.Add(2*10*time.Millisecond))
+			require.GreaterOrEqual(t, metadata.LastUpdatedAt.AsTime(), metadata.CreatedAt.AsTime().Add(2*10*time.Millisecond))
 		}
 	}
 
@@ -340,10 +340,10 @@ func Test_ActivityFanOut(t *testing.T) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-			assert.Equal(t, `["9","8","7","6","5","4","3","2","1","0"]`, metadata.SerializedOutput)
+			assert.Equal(t, `["9","8","7","6","5","4","3","2","1","0"]`, metadata.Output.Value)
 
 			// Because all the activities run in parallel, they should complete very quickly
-			assert.Less(t, metadata.LastUpdatedAt.Sub(metadata.CreatedAt), 3*time.Second)
+			assert.Less(t, metadata.LastUpdatedAt.AsTime().Sub(metadata.CreatedAt.AsTime()), 3*time.Second)
 		}
 	}
 
@@ -387,7 +387,7 @@ func Test_SingleSubOrchestrator_Completed(t *testing.T) {
 	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-	assert.Equal(t, `"Hello, world!"`, metadata.SerializedOutput)
+	assert.Equal(t, `"Hello, world!"`, metadata.Output.Value)
 
 	spans := exporter.GetSpans().Snapshots()
 	assertSpanSequence(t, spans,
@@ -504,7 +504,7 @@ func Test_ContinueAsNew(t *testing.T) {
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-			assert.Equal(t, `10`, metadata.SerializedOutput)
+			assert.Equal(t, `10`, metadata.Output.Value)
 		}
 	}
 
@@ -560,7 +560,7 @@ func Test_ContinueAsNew_Events(t *testing.T) {
 	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-	assert.Equal(t, `10`, metadata.SerializedOutput)
+	assert.Equal(t, `10`, metadata.Output.Value)
 }
 
 func Test_ExternalEventContention(t *testing.T) {
@@ -609,7 +609,7 @@ func Test_ExternalEventContention(t *testing.T) {
 	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-	assert.Equal(t, `42`, metadata.SerializedOutput)
+	assert.Equal(t, `42`, metadata.Output.Value)
 }
 
 func Test_ExternalEventOrchestration(t *testing.T) {
@@ -647,7 +647,7 @@ func Test_ExternalEventOrchestration(t *testing.T) {
 
 		metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
 		require.NoError(t, err)
-		require.True(t, metadata.IsComplete())
+		assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 		require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
 	}
 
@@ -706,7 +706,7 @@ func Test_ExternalEventTimeout(t *testing.T) {
 			// Validate the exported OTel traces
 			spans := exporter.GetSpans().Snapshots()
 			if raiseEvent {
-				assert.True(t, metadata.IsComplete())
+				assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 				assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
 
 				assertSpanSequence(t, spans,
@@ -716,7 +716,7 @@ func Test_ExternalEventTimeout(t *testing.T) {
 					)),
 				)
 			} else {
-				require.True(t, metadata.IsComplete())
+				assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 				require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, metadata.RuntimeStatus)
 				if assert.NotNil(t, metadata.FailureDetails) {
 					// The exact message is not important - just make sure it's something clear
@@ -782,10 +782,10 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 	_, err = client.WaitForOrchestrationCompletion(timeoutCtx, id)
 	require.ErrorIs(t, err, timeoutCtx.Err())
 
-	var metadata *api.OrchestrationMetadata
+	var metadata *backend.OrchestrationMetadata
 	metadata, err = client.FetchOrchestrationMetadata(ctx, id)
 	if assert.NoError(t, err) {
-		assert.True(t, metadata.IsRunning())
+		assert.True(t, api.OrchestrationMetadataIsRunning(metadata))
 		assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED, metadata.RuntimeStatus)
 	}
 
@@ -842,9 +842,9 @@ func Test_TerminateOrchestration(t *testing.T) {
 	// Wait for the orchestration to complete
 	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	require.NoError(t, err)
-	require.True(t, metadata.IsComplete())
+	assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, metadata.RuntimeStatus)
-	require.Equal(t, `"You got terminated!"`, metadata.SerializedOutput)
+	require.Equal(t, `"You got terminated!"`, metadata.Output.Value)
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
@@ -922,7 +922,7 @@ func Test_TerminateOrchestration_Recursive(t *testing.T) {
 			metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 			require.NoError(t, err)
 			require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, metadata.RuntimeStatus)
-			require.Equal(t, fmt.Sprintf("\"%s\"", output), metadata.SerializedOutput)
+			require.Equal(t, fmt.Sprintf("\"%s\"", output), metadata.Output.Value)
 
 			// Wait for all L2 suborchestrations to complete
 			orchIDs := []string{}
@@ -1003,7 +1003,7 @@ func Test_TerminateOrchestration_Recursive_TerminateCompletedSubOrchestration(t 
 			metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 			require.NoError(t, err)
 			require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, metadata.RuntimeStatus)
-			require.Equal(t, fmt.Sprintf("\"%s\"", output), metadata.SerializedOutput)
+			require.Equal(t, fmt.Sprintf("\"%s\"", output), metadata.Output.Value)
 
 			// Verify that the L1 and L2 orchestrations have completed with the appropriate status
 			L1_OrchestrationStatus := protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
@@ -1018,13 +1018,13 @@ func Test_TerminateOrchestration_Recursive_TerminateCompletedSubOrchestration(t 
 			metadata, err = client.WaitForOrchestrationCompletion(ctx, id+"_L1")
 			require.NoError(t, err)
 			require.Equal(t, L1_OrchestrationStatus, metadata.RuntimeStatus)
-			require.Equal(t, L1_Output, metadata.SerializedOutput)
+			require.Equal(t, L1_Output, metadata.Output.Value)
 
 			// In recursive case, L2 is terminated because it was still running when the root orchestration was terminated
 			metadata, err = client.WaitForOrchestrationCompletion(ctx, id+"_L1_L2")
 			require.NoError(t, err)
 			require.Equal(t, L2_OrchestrationStatus, metadata.RuntimeStatus)
-			require.Equal(t, L2_Output, metadata.SerializedOutput)
+			require.Equal(t, L2_Output, metadata.Output.Value)
 		})
 	}
 }
@@ -1178,7 +1178,7 @@ func Test_RecreateCompletedOrchestration(t *testing.T) {
 	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+	assert.Equal(t, `"Hello, 世界!"`, metadata.Output.Value)
 
 	// Run the second orchestration with the same ID as the first
 	var newID api.InstanceID
@@ -1188,7 +1188,7 @@ func Test_RecreateCompletedOrchestration(t *testing.T) {
 	metadata, err = client.WaitForOrchestrationCompletion(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-	assert.Equal(t, `"Hello, World!"`, metadata.SerializedOutput)
+	assert.Equal(t, `"Hello, World!"`, metadata.Output.Value)
 
 	// Validate the exported OTel traces
 	spans := exporter.GetSpans().Snapshots()
@@ -1246,11 +1246,11 @@ func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
 	defer cancelTimeout()
 	metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
 	require.NoError(t, err)
-	assert.Equal(t, true, metadata.IsComplete())
+	assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 	// the first orchestration should complete as the second one is ignored
-	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+	assert.Equal(t, `"Hello, 世界!"`, metadata.Output.Value)
 	// assert the orchestration created timestamp
-	assert.True(t, pivotTime.After(metadata.CreatedAt))
+	assert.True(t, pivotTime.After(metadata.CreatedAt.AsTime()))
 }
 
 func Test_SingleActivity_ReuseInstanceIDTerminate(t *testing.T) {
@@ -1297,11 +1297,11 @@ func Test_SingleActivity_ReuseInstanceIDTerminate(t *testing.T) {
 	defer cancelTimeout()
 	metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
 	require.NoError(t, err)
-	assert.Equal(t, true, metadata.IsComplete())
+	assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 	// the second orchestration should complete.
-	assert.Equal(t, `"Hello, World!"`, metadata.SerializedOutput)
+	assert.Equal(t, `"Hello, World!"`, metadata.Output.Value)
 	// assert the orchestration created timestamp
-	assert.True(t, pivotTime.Before(metadata.CreatedAt))
+	assert.True(t, pivotTime.Before(metadata.CreatedAt.AsTime()))
 }
 
 func Test_SingleActivity_ReuseInstanceIDError(t *testing.T) {

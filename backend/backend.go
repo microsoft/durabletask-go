@@ -20,8 +20,12 @@ var (
 )
 
 type (
-	HistoryEvent       = protos.HistoryEvent
-	TaskFailureDetails = protos.TaskFailureDetails
+	HistoryEvent                  = protos.HistoryEvent
+	TaskFailureDetails            = protos.TaskFailureDetails
+	WorkflowState                 = protos.WorkflowState
+	CreateWorkflowInstanceRequest = protos.CreateWorkflowInstanceRequest
+	ActivityRequest               = protos.ActivityRequest
+	OrchestrationMetadata         = protos.OrchestrationMetadata
 )
 
 type OrchestrationIdReusePolicyOptions func(*protos.OrchestrationIdReusePolicy) error
@@ -71,7 +75,7 @@ type Backend interface {
 	// GetOrchestrationMetadata gets the metadata associated with the given orchestration instance ID.
 	//
 	// Returns [api.ErrInstanceNotFound] if the orchestration instance doesn't exist.
-	GetOrchestrationMetadata(context.Context, api.InstanceID) (*api.OrchestrationMetadata, error)
+	GetOrchestrationMetadata(context.Context, api.InstanceID) (*OrchestrationMetadata, error)
 
 	// CompleteOrchestrationWorkItem completes a work item by saving the updated runtime state to durable storage.
 	//

@@ -19,9 +19,9 @@ import (
 
 type TaskHubClient interface {
 	ScheduleNewOrchestration(ctx context.Context, orchestrator interface{}, opts ...api.NewOrchestrationOptions) (api.InstanceID, error)
-	FetchOrchestrationMetadata(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
-	WaitForOrchestrationStart(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
-	WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
+	FetchOrchestrationMetadata(ctx context.Context, id api.InstanceID) (*OrchestrationMetadata, error)
+	WaitForOrchestrationStart(ctx context.Context, id api.InstanceID) (*OrchestrationMetadata, error)
+	WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID) (*OrchestrationMetadata, error)
 	TerminateOrchestration(ctx context.Context, id api.InstanceID, opts ...api.TerminateOptions) error
 	RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, opts ...api.RaiseEventOptions) error
 	SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error
@@ -87,7 +87,7 @@ func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrat
 // FetchOrchestrationMetadata fetches metadata for the specified orchestration from the configured task hub.
 //
 // ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
-func (c *backendClient) FetchOrchestrationMetadata(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error) {
+func (c *backendClient) FetchOrchestrationMetadata(ctx context.Context, id api.InstanceID) (*OrchestrationMetadata, error) {
 	metadata, err := c.be.GetOrchestrationMetadata(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch orchestration metadata: %w", err)
@@ -99,8 +99,8 @@ func (c *backendClient) FetchOrchestrationMetadata(ctx context.Context, id api.I
 // metadata about the started instance.
 //
 // ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
-func (c *backendClient) WaitForOrchestrationStart(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error) {
-	return c.waitForOrchestrationCondition(ctx, id, func(metadata *api.OrchestrationMetadata) bool {
+func (c *backendClient) WaitForOrchestrationStart(ctx context.Context, id api.InstanceID) (*OrchestrationMetadata, error) {
+	return c.waitForOrchestrationCondition(ctx, id, func(metadata *OrchestrationMetadata) bool {
 		return metadata.RuntimeStatus != protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
 	})
 }
@@ -109,13 +109,11 @@ func (c *backendClient) WaitForOrchestrationStart(ctx context.Context, id api.In
 // metadata about the completed instance.
 //
 // ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
-func (c *backendClient) WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error) {
-	return c.waitForOrchestrationCondition(ctx, id, func(metadata *api.OrchestrationMetadata) bool {
-		return metadata.IsComplete()
-	})
+func (c *backendClient) WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID) (*OrchestrationMetadata, error) {
+	return c.waitForOrchestrationCondition(ctx, id, api.OrchestrationMetadataIsComplete)
 }
 
-func (c *backendClient) waitForOrchestrationCondition(ctx context.Context, id api.InstanceID, condition func(metadata *api.OrchestrationMetadata) bool) (*api.OrchestrationMetadata, error) {
+func (c *backendClient) waitForOrchestrationCondition(ctx context.Context, id api.InstanceID, condition func(metadata *OrchestrationMetadata) bool) (*OrchestrationMetadata, error) {
 	b := backoff.ExponentialBackOff{
 		InitialInterval:     100 * time.Millisecond,
 		MaxInterval:         10 * time.Second,

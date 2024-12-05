@@ -151,16 +151,16 @@ func Test_CompleteOrchestration(t *testing.T) {
 				}}
 			}
 
-			validateMetadata := func(metadata *api.OrchestrationMetadata) {
-				assert.True(t, metadata.IsComplete())
-				assert.False(t, metadata.IsRunning())
+			validateMetadata := func(metadata *backend.OrchestrationMetadata) {
+				assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
+				assert.False(t, api.OrchestrationMetadataIsRunning(metadata))
 
 				if expectedStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED {
 					assert.Equal(t, "MyError", metadata.FailureDetails.ErrorType)
 					assert.Equal(t, "Kah-BOOOM!!", metadata.FailureDetails.ErrorMessage)
 					assert.Equal(t, expectedStackTrace, metadata.FailureDetails.StackTrace.GetValue())
 				} else {
-					assert.Equal(t, expectedResult, metadata.SerializedOutput)
+					assert.Equal(t, expectedResult, metadata.Output.Value)
 				}
 			}
 
@@ -201,8 +201,8 @@ func Test_ScheduleActivityTasks(t *testing.T) {
 		}
 
 		// Make sure the metadata reflects that the orchestration is running
-		validateMetadata := func(metadata *api.OrchestrationMetadata) {
-			assert.True(t, metadata.IsRunning())
+		validateMetadata := func(metadata *backend.OrchestrationMetadata) {
+			assert.True(t, api.OrchestrationMetadataIsRunning(metadata))
 		}
 
 		// Execute the test, which calls the above callbacks
@@ -263,8 +263,8 @@ func Test_ScheduleTimerTasks(t *testing.T) {
 		}
 
 		// Make sure the metadata reflects that the orchestration is running
-		validateMetadata := func(metadata *api.OrchestrationMetadata) {
-			assert.True(t, metadata.IsRunning())
+		validateMetadata := func(metadata *backend.OrchestrationMetadata) {
+			assert.True(t, api.OrchestrationMetadataIsRunning(metadata))
 		}
 
 		// Execute the test, which calls the above callbacks
@@ -322,8 +322,8 @@ func Test_AbandonActivityWorkItem(t *testing.T) {
 		}
 
 		// Make sure the metadata reflects that the orchestration is running
-		validateMetadata := func(metadata *api.OrchestrationMetadata) {
-			assert.True(t, metadata.IsRunning())
+		validateMetadata := func(metadata *backend.OrchestrationMetadata) {
+			assert.True(t, api.OrchestrationMetadataIsRunning(metadata))
 		}
 
 		// Execute the test, which calls the above callbacks
@@ -397,10 +397,10 @@ func Test_PurgeOrchestrationState(t *testing.T) {
 
 		// Make sure the orchestration actually completed and get the instance ID
 		var instanceID api.InstanceID
-		validateMetadata := func(metadata *api.OrchestrationMetadata) {
-			instanceID = metadata.InstanceID
-			assert.True(t, metadata.IsComplete())
-			assert.False(t, metadata.IsRunning())
+		validateMetadata := func(metadata *backend.OrchestrationMetadata) {
+			instanceID = api.InstanceID(metadata.InstanceId)
+			assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
+			assert.False(t, api.OrchestrationMetadataIsRunning(metadata))
 		}
 
 		// Execute the test, which calls the above callbacks
@@ -447,7 +447,7 @@ func workItemProcessingTestLogic(
 	t *testing.T,
 	be backend.Backend,
 	getOrchestratorActions func() []*protos.OrchestratorAction,
-	validateMetadata func(metadata *api.OrchestrationMetadata),
+	validateMetadata func(metadata *backend.OrchestrationMetadata),
 ) {
 	expectedID := "myinstance"
 
@@ -480,8 +480,8 @@ func workItemProcessingTestLogic(
 							// Validate orchestration metadata
 							if metadata, ok := getOrchestrationMetadata(t, be, state.InstanceID()); ok {
 								assert.Equal(t, defaultName, metadata.Name)
-								assert.Equal(t, defaultInput, metadata.SerializedInput)
-								assert.Equal(t, createdTime, metadata.CreatedAt)
+								assert.Equal(t, defaultInput, metadata.Input.Value)
+								assert.Equal(t, createdTime, metadata.CreatedAt.AsTime())
 								assert.Equal(t, state.RuntimeStatus(), metadata.RuntimeStatus)
 
 								validateMetadata(metadata)
@@ -530,10 +530,10 @@ func getOrchestrationRuntimeState(t assert.TestingT, be backend.Backend, wi *bac
 	return nil, false
 }
 
-func getOrchestrationMetadata(t assert.TestingT, be backend.Backend, iid api.InstanceID) (*api.OrchestrationMetadata, bool) {
+func getOrchestrationMetadata(t assert.TestingT, be backend.Backend, iid api.InstanceID) (*backend.OrchestrationMetadata, bool) {
 	metadata, err := be.GetOrchestrationMetadata(ctx, iid)
 	if assert.NoError(t, err) && assert.NotNil(t, metadata) {
-		return metadata, assert.Equal(t, iid, metadata.InstanceID)
+		return metadata, assert.Equal(t, iid, api.InstanceID(metadata.InstanceId))
 	}
 
 	return nil, false

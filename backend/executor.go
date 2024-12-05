@@ -542,19 +542,17 @@ func (g *grpcExecutor) ResumeInstance(ctx context.Context, req *protos.ResumeReq
 
 // WaitForInstanceCompletion implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) WaitForInstanceCompletion(ctx context.Context, req *protos.GetInstanceRequest) (*protos.GetInstanceResponse, error) {
-	return g.waitForInstance(ctx, req, func(m *api.OrchestrationMetadata) bool {
-		return m.IsComplete()
-	})
+	return g.waitForInstance(ctx, req, api.OrchestrationMetadataIsComplete)
 }
 
 // WaitForInstanceStart implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) WaitForInstanceStart(ctx context.Context, req *protos.GetInstanceRequest) (*protos.GetInstanceResponse, error) {
-	return g.waitForInstance(ctx, req, func(m *api.OrchestrationMetadata) bool {
+	return g.waitForInstance(ctx, req, func(m *OrchestrationMetadata) bool {
 		return m.RuntimeStatus != protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
 	})
 }
 
-func (g *grpcExecutor) waitForInstance(ctx context.Context, req *protos.GetInstanceRequest, condition func(*api.OrchestrationMetadata) bool) (*protos.GetInstanceResponse, error) {
+func (g *grpcExecutor) waitForInstance(ctx context.Context, req *protos.GetInstanceRequest, condition func(*OrchestrationMetadata) bool) (*protos.GetInstanceResponse, error) {
 	iid := api.InstanceID(req.InstanceId)
 
 	var b backoff.BackOff = &backoff.ExponentialBackOff{
@@ -599,19 +597,19 @@ loop:
 func (grpcExecutor) mustEmbedUnimplementedTaskHubSidecarServiceServer() {
 }
 
-func createGetInstanceResponse(req *protos.GetInstanceRequest, metadata *api.OrchestrationMetadata) *protos.GetInstanceResponse {
+func createGetInstanceResponse(req *protos.GetInstanceRequest, metadata *OrchestrationMetadata) *protos.GetInstanceResponse {
 	state := &protos.OrchestrationState{
 		InstanceId:           req.InstanceId,
 		Name:                 metadata.Name,
 		OrchestrationStatus:  metadata.RuntimeStatus,
-		CreatedTimestamp:     timestamppb.New(metadata.CreatedAt),
-		LastUpdatedTimestamp: timestamppb.New(metadata.LastUpdatedAt),
+		CreatedTimestamp:     metadata.CreatedAt,
+		LastUpdatedTimestamp: metadata.LastUpdatedAt,
 	}
 
 	if req.GetInputsAndOutputs {
-		state.Input = wrapperspb.String(metadata.SerializedInput)
-		state.CustomStatus = wrapperspb.String(metadata.SerializedCustomStatus)
-		state.Output = wrapperspb.String(metadata.SerializedOutput)
+		state.Input = metadata.Input
+		state.CustomStatus = metadata.CustomStatus
+		state.Output = metadata.Output
 		state.FailureDetails = metadata.FailureDetails
 	}
 
