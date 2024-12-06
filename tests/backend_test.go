@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"github.com/microsoft/durabletask-go/backend/postgres"
 	"reflect"
 	"runtime"
 	"testing"
@@ -28,7 +29,7 @@ var (
 var backends = []backend.Backend{
 	sqlite.NewSqliteBackend(sqliteFileOptions, logger),
 	sqlite.NewSqliteBackend(sqliteInMemoryOptions, logger),
-	//postgres.NewPostgresBackend(nil, logger), // Requires a local Postgres instance running with host=localhost, user=postgres, password=postgres, dbname=postgres
+	postgres.NewPostgresBackend(nil, logger), // Requires a local Postgres instance running with host=localhost, port=5432, user=postgres, password=postgres, dbname=postgres.
 }
 
 var completionStatusValues = []protos.OrchestrationStatus{

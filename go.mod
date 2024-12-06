@@ -2,8 +2,6 @@ module github.com/microsoft/durabletask-go
 
 go 1.21
 
-toolchain go1.23.1
-
 require (
 	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/golang/protobuf v1.5.3
