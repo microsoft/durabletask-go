@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/microsoft/durabletask-go/backend/postgres"
+	"os"
 	"reflect"
 	"runtime"
 	"testing"
@@ -26,11 +27,20 @@ var (
 	sqliteFileOptions     = sqlite.NewSqliteOptions("test.sqlite3")
 )
 
-var backends = []backend.Backend{
-	sqlite.NewSqliteBackend(sqliteFileOptions, logger),
-	sqlite.NewSqliteBackend(sqliteInMemoryOptions, logger),
-	postgres.NewPostgresBackend(nil, logger), // Requires a local Postgres instance running with host=localhost, port=5432, user=postgres, password=postgres, dbname=postgres.
+func getRunnableBackends() []backend.Backend {
+	var runnableBackends []backend.Backend
+
+	runnableBackends = append(runnableBackends, sqlite.NewSqliteBackend(sqliteFileOptions, logger))
+	runnableBackends = append(runnableBackends, sqlite.NewSqliteBackend(sqliteInMemoryOptions, logger))
+
+	if os.Getenv("POSTGRES_ENABLED") == "true" {
+		runnableBackends = append(runnableBackends, postgres.NewPostgresBackend(nil, logger))
+	}
+
+	return runnableBackends
 }
+
+var backends = getRunnableBackends()
 
 var completionStatusValues = []protos.OrchestrationStatus{
 	protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
