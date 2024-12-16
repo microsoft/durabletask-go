@@ -1123,6 +1123,124 @@ func (x *OrchestrationMetadata) GetFailureDetails() *TaskFailureDetails {
 	return nil
 }
 
+type WorkflowStateMetadata struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	InboxLength   uint64 `protobuf:"varint,1,opt,name=inboxLength,proto3" json:"inboxLength,omitempty"`
+	HistoryLength uint64 `protobuf:"varint,2,opt,name=historyLength,proto3" json:"historyLength,omitempty"`
+	Generation    uint64 `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+}
+
+func (x *WorkflowStateMetadata) Reset() {
+	*x = WorkflowStateMetadata{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_backend_service_proto_msgTypes[20]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *WorkflowStateMetadata) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkflowStateMetadata) ProtoMessage() {}
+
+func (x *WorkflowStateMetadata) ProtoReflect() protoreflect.Message {
+	mi := &file_backend_service_proto_msgTypes[20]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkflowStateMetadata.ProtoReflect.Descriptor instead.
+func (*WorkflowStateMetadata) Descriptor() ([]byte, []int) {
+	return file_backend_service_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *WorkflowStateMetadata) GetInboxLength() uint64 {
+	if x != nil {
+		return x.InboxLength
+	}
+	return 0
+}
+
+func (x *WorkflowStateMetadata) GetHistoryLength() uint64 {
+	if x != nil {
+		return x.HistoryLength
+	}
+	return 0
+}
+
+func (x *WorkflowStateMetadata) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+type DurableTimer struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	TimerEvent *HistoryEvent `protobuf:"bytes,1,opt,name=timerEvent,proto3" json:"timerEvent,omitempty"`
+	Generation uint64        `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
+}
+
+func (x *DurableTimer) Reset() {
+	*x = DurableTimer{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_backend_service_proto_msgTypes[21]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *DurableTimer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DurableTimer) ProtoMessage() {}
+
+func (x *DurableTimer) ProtoReflect() protoreflect.Message {
+	mi := &file_backend_service_proto_msgTypes[21]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DurableTimer.ProtoReflect.Descriptor instead.
+func (*DurableTimer) Descriptor() ([]byte, []int) {
+	return file_backend_service_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *DurableTimer) GetTimerEvent() *HistoryEvent {
+	if x != nil {
+		return x.TimerEvent
+	}
+	return nil
+}
+
+func (x *DurableTimer) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
 var File_backend_service_proto protoreflect.FileDescriptor
 
 var file_backend_service_proto_rawDesc = []byte{
@@ -1288,7 +1406,21 @@ var file_backend_service_proto_rawDesc = []byte{
 	0x75, 0x72, 0x65, 0x44, 0x65, 0x74, 0x61, 0x69, 0x6c, 0x73, 0x18, 0x09, 0x20, 0x01, 0x28, 0x0b,
 	0x32, 0x13, 0x2e, 0x54, 0x61, 0x73, 0x6b, 0x46, 0x61, 0x69, 0x6c, 0x75, 0x72, 0x65, 0x44, 0x65,
 	0x74, 0x61, 0x69, 0x6c, 0x73, 0x52, 0x0e, 0x66, 0x61, 0x69, 0x6c, 0x75, 0x72, 0x65, 0x44, 0x65,
-	0x74, 0x61, 0x69, 0x6c, 0x73, 0x32, 0xd1, 0x0b, 0x0a, 0x0e, 0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e,
+	0x74, 0x61, 0x69, 0x6c, 0x73, 0x22, 0x7f, 0x0a, 0x15, 0x57, 0x6f, 0x72, 0x6b, 0x66, 0x6c, 0x6f,
+	0x77, 0x53, 0x74, 0x61, 0x74, 0x65, 0x4d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x12, 0x20,
+	0x0a, 0x0b, 0x69, 0x6e, 0x62, 0x6f, 0x78, 0x4c, 0x65, 0x6e, 0x67, 0x74, 0x68, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x04, 0x52, 0x0b, 0x69, 0x6e, 0x62, 0x6f, 0x78, 0x4c, 0x65, 0x6e, 0x67, 0x74, 0x68,
+	0x12, 0x24, 0x0a, 0x0d, 0x68, 0x69, 0x73, 0x74, 0x6f, 0x72, 0x79, 0x4c, 0x65, 0x6e, 0x67, 0x74,
+	0x68, 0x18, 0x02, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0d, 0x68, 0x69, 0x73, 0x74, 0x6f, 0x72, 0x79,
+	0x4c, 0x65, 0x6e, 0x67, 0x74, 0x68, 0x12, 0x1e, 0x0a, 0x0a, 0x67, 0x65, 0x6e, 0x65, 0x72, 0x61,
+	0x74, 0x69, 0x6f, 0x6e, 0x18, 0x03, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0a, 0x67, 0x65, 0x6e, 0x65,
+	0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x22, 0x5d, 0x0a, 0x0c, 0x44, 0x75, 0x72, 0x61, 0x62, 0x6c,
+	0x65, 0x54, 0x69, 0x6d, 0x65, 0x72, 0x12, 0x2d, 0x0a, 0x0a, 0x74, 0x69, 0x6d, 0x65, 0x72, 0x45,
+	0x76, 0x65, 0x6e, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x0d, 0x2e, 0x48, 0x69, 0x73,
+	0x74, 0x6f, 0x72, 0x79, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x52, 0x0a, 0x74, 0x69, 0x6d, 0x65, 0x72,
+	0x45, 0x76, 0x65, 0x6e, 0x74, 0x12, 0x1e, 0x0a, 0x0a, 0x67, 0x65, 0x6e, 0x65, 0x72, 0x61, 0x74,
+	0x69, 0x6f, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0a, 0x67, 0x65, 0x6e, 0x65, 0x72,
+	0x61, 0x74, 0x69, 0x6f, 0x6e, 0x32, 0xd1, 0x0b, 0x0a, 0x0e, 0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e,
 	0x64, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x41, 0x0a, 0x0e, 0x43, 0x72, 0x65, 0x61,
 	0x74, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x16, 0x2e, 0x43, 0x72, 0x65,
 	0x61, 0x74, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65,
@@ -1403,7 +1535,7 @@ func file_backend_service_proto_rawDescGZIP() []byte {
 	return file_backend_service_proto_rawDescData
 }
 
-var file_backend_service_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_backend_service_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_backend_service_proto_goTypes = []interface{}{
 	(*AddEventRequest)(nil),                       // 0: durabletask.protos.backend.v1.AddEventRequest
 	(*AddEventResponse)(nil),                      // 1: durabletask.protos.backend.v1.AddEventResponse
@@ -1425,84 +1557,87 @@ var file_backend_service_proto_goTypes = []interface{}{
 	(*WorkflowState)(nil),                         // 17: durabletask.protos.backend.v1.WorkflowState
 	(*CreateWorkflowInstanceRequest)(nil),         // 18: durabletask.protos.backend.v1.CreateWorkflowInstanceRequest
 	(*OrchestrationMetadata)(nil),                 // 19: durabletask.protos.backend.v1.OrchestrationMetadata
-	(*OrchestrationInstance)(nil),                 // 20: OrchestrationInstance
-	(*HistoryEvent)(nil),                          // 21: HistoryEvent
-	(*OrchestrationState)(nil),                    // 22: OrchestrationState
-	(*wrapperspb.StringValue)(nil),                // 23: google.protobuf.StringValue
-	(OrchestrationStatus)(0),                      // 24: OrchestrationStatus
-	(*OrchestrationIdReusePolicy)(nil),            // 25: OrchestrationIdReusePolicy
-	(*timestamppb.Timestamp)(nil),                 // 26: google.protobuf.Timestamp
-	(*TaskFailureDetails)(nil),                    // 27: TaskFailureDetails
-	(*CreateInstanceRequest)(nil),                 // 28: CreateInstanceRequest
-	(*GetInstanceRequest)(nil),                    // 29: GetInstanceRequest
-	(*QueryInstancesRequest)(nil),                 // 30: QueryInstancesRequest
-	(*PurgeInstancesRequest)(nil),                 // 31: PurgeInstancesRequest
-	(*GetWorkItemsRequest)(nil),                   // 32: GetWorkItemsRequest
-	(*CreateInstanceResponse)(nil),                // 33: CreateInstanceResponse
-	(*GetInstanceResponse)(nil),                   // 34: GetInstanceResponse
-	(*QueryInstancesResponse)(nil),                // 35: QueryInstancesResponse
-	(*PurgeInstancesResponse)(nil),                // 36: PurgeInstancesResponse
-	(*WorkItem)(nil),                              // 37: WorkItem
+	(*WorkflowStateMetadata)(nil),                 // 20: durabletask.protos.backend.v1.WorkflowStateMetadata
+	(*DurableTimer)(nil),                          // 21: durabletask.protos.backend.v1.DurableTimer
+	(*OrchestrationInstance)(nil),                 // 22: OrchestrationInstance
+	(*HistoryEvent)(nil),                          // 23: HistoryEvent
+	(*OrchestrationState)(nil),                    // 24: OrchestrationState
+	(*wrapperspb.StringValue)(nil),                // 25: google.protobuf.StringValue
+	(OrchestrationStatus)(0),                      // 26: OrchestrationStatus
+	(*OrchestrationIdReusePolicy)(nil),            // 27: OrchestrationIdReusePolicy
+	(*timestamppb.Timestamp)(nil),                 // 28: google.protobuf.Timestamp
+	(*TaskFailureDetails)(nil),                    // 29: TaskFailureDetails
+	(*CreateInstanceRequest)(nil),                 // 30: CreateInstanceRequest
+	(*GetInstanceRequest)(nil),                    // 31: GetInstanceRequest
+	(*QueryInstancesRequest)(nil),                 // 32: QueryInstancesRequest
+	(*PurgeInstancesRequest)(nil),                 // 33: PurgeInstancesRequest
+	(*GetWorkItemsRequest)(nil),                   // 34: GetWorkItemsRequest
+	(*CreateInstanceResponse)(nil),                // 35: CreateInstanceResponse
+	(*GetInstanceResponse)(nil),                   // 36: GetInstanceResponse
+	(*QueryInstancesResponse)(nil),                // 37: QueryInstancesResponse
+	(*PurgeInstancesResponse)(nil),                // 38: PurgeInstancesResponse
+	(*WorkItem)(nil),                              // 39: WorkItem
 }
 var file_backend_service_proto_depIdxs = []int32{
-	20, // 0: durabletask.protos.backend.v1.AddEventRequest.instance:type_name -> OrchestrationInstance
-	21, // 1: durabletask.protos.backend.v1.AddEventRequest.event:type_name -> HistoryEvent
-	22, // 2: durabletask.protos.backend.v1.WaitForInstanceResponse.orchestrationState:type_name -> OrchestrationState
-	20, // 3: durabletask.protos.backend.v1.GetOrchestrationRuntimeStateRequest.instance:type_name -> OrchestrationInstance
-	21, // 4: durabletask.protos.backend.v1.GetOrchestrationRuntimeStateResponse.history:type_name -> HistoryEvent
-	21, // 5: durabletask.protos.backend.v1.CompleteActivityWorkItemRequest.responseEvent:type_name -> HistoryEvent
-	23, // 6: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.newExecutionId:type_name -> google.protobuf.StringValue
-	24, // 7: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.runtimeStatus:type_name -> OrchestrationStatus
-	23, // 8: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.customStatus:type_name -> google.protobuf.StringValue
-	21, // 9: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.newHistory:type_name -> HistoryEvent
-	21, // 10: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.newTasks:type_name -> HistoryEvent
-	21, // 11: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.newTimers:type_name -> HistoryEvent
+	22, // 0: durabletask.protos.backend.v1.AddEventRequest.instance:type_name -> OrchestrationInstance
+	23, // 1: durabletask.protos.backend.v1.AddEventRequest.event:type_name -> HistoryEvent
+	24, // 2: durabletask.protos.backend.v1.WaitForInstanceResponse.orchestrationState:type_name -> OrchestrationState
+	22, // 3: durabletask.protos.backend.v1.GetOrchestrationRuntimeStateRequest.instance:type_name -> OrchestrationInstance
+	23, // 4: durabletask.protos.backend.v1.GetOrchestrationRuntimeStateResponse.history:type_name -> HistoryEvent
+	23, // 5: durabletask.protos.backend.v1.CompleteActivityWorkItemRequest.responseEvent:type_name -> HistoryEvent
+	25, // 6: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.newExecutionId:type_name -> google.protobuf.StringValue
+	26, // 7: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.runtimeStatus:type_name -> OrchestrationStatus
+	25, // 8: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.customStatus:type_name -> google.protobuf.StringValue
+	23, // 9: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.newHistory:type_name -> HistoryEvent
+	23, // 10: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.newTasks:type_name -> HistoryEvent
+	23, // 11: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.newTimers:type_name -> HistoryEvent
 	12, // 12: durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest.newMessages:type_name -> durabletask.protos.backend.v1.OrchestratorMessage
-	20, // 13: durabletask.protos.backend.v1.OrchestratorMessage.instance:type_name -> OrchestrationInstance
-	21, // 14: durabletask.protos.backend.v1.OrchestratorMessage.event:type_name -> HistoryEvent
-	21, // 15: durabletask.protos.backend.v1.WorkflowState.inbox:type_name -> HistoryEvent
-	21, // 16: durabletask.protos.backend.v1.WorkflowState.history:type_name -> HistoryEvent
-	23, // 17: durabletask.protos.backend.v1.WorkflowState.customStatus:type_name -> google.protobuf.StringValue
-	21, // 18: durabletask.protos.backend.v1.CreateWorkflowInstanceRequest.startEvent:type_name -> HistoryEvent
-	25, // 19: durabletask.protos.backend.v1.CreateWorkflowInstanceRequest.policy:type_name -> OrchestrationIdReusePolicy
-	24, // 20: durabletask.protos.backend.v1.OrchestrationMetadata.runtimeStatus:type_name -> OrchestrationStatus
-	26, // 21: durabletask.protos.backend.v1.OrchestrationMetadata.createdAt:type_name -> google.protobuf.Timestamp
-	26, // 22: durabletask.protos.backend.v1.OrchestrationMetadata.lastUpdatedAt:type_name -> google.protobuf.Timestamp
-	23, // 23: durabletask.protos.backend.v1.OrchestrationMetadata.input:type_name -> google.protobuf.StringValue
-	23, // 24: durabletask.protos.backend.v1.OrchestrationMetadata.output:type_name -> google.protobuf.StringValue
-	23, // 25: durabletask.protos.backend.v1.OrchestrationMetadata.customStatus:type_name -> google.protobuf.StringValue
-	27, // 26: durabletask.protos.backend.v1.OrchestrationMetadata.failureDetails:type_name -> TaskFailureDetails
-	28, // 27: durabletask.protos.backend.v1.BackendService.CreateInstance:input_type -> CreateInstanceRequest
-	0,  // 28: durabletask.protos.backend.v1.BackendService.AddEvent:input_type -> durabletask.protos.backend.v1.AddEventRequest
-	29, // 29: durabletask.protos.backend.v1.BackendService.GetInstance:input_type -> GetInstanceRequest
-	30, // 30: durabletask.protos.backend.v1.BackendService.QueryInstances:input_type -> QueryInstancesRequest
-	2,  // 31: durabletask.protos.backend.v1.BackendService.WaitForInstance:input_type -> durabletask.protos.backend.v1.WaitForInstanceRequest
-	31, // 32: durabletask.protos.backend.v1.BackendService.PurgeInstances:input_type -> PurgeInstancesRequest
-	32, // 33: durabletask.protos.backend.v1.BackendService.GetWorkItems:input_type -> GetWorkItemsRequest
-	4,  // 34: durabletask.protos.backend.v1.BackendService.GetOrchestrationRuntimeState:input_type -> durabletask.protos.backend.v1.GetOrchestrationRuntimeStateRequest
-	6,  // 35: durabletask.protos.backend.v1.BackendService.CompleteActivityWorkItem:input_type -> durabletask.protos.backend.v1.CompleteActivityWorkItemRequest
-	8,  // 36: durabletask.protos.backend.v1.BackendService.AbandonActivityWorkItem:input_type -> durabletask.protos.backend.v1.AbandonActivityWorkItemRequest
-	10, // 37: durabletask.protos.backend.v1.BackendService.CompleteOrchestrationWorkItem:input_type -> durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest
-	13, // 38: durabletask.protos.backend.v1.BackendService.AbandonOrchestrationWorkItem:input_type -> durabletask.protos.backend.v1.AbandonOrchestrationWorkItemRequest
-	15, // 39: durabletask.protos.backend.v1.BackendService.Ping:input_type -> durabletask.protos.backend.v1.PingRequest
-	33, // 40: durabletask.protos.backend.v1.BackendService.CreateInstance:output_type -> CreateInstanceResponse
-	1,  // 41: durabletask.protos.backend.v1.BackendService.AddEvent:output_type -> durabletask.protos.backend.v1.AddEventResponse
-	34, // 42: durabletask.protos.backend.v1.BackendService.GetInstance:output_type -> GetInstanceResponse
-	35, // 43: durabletask.protos.backend.v1.BackendService.QueryInstances:output_type -> QueryInstancesResponse
-	3,  // 44: durabletask.protos.backend.v1.BackendService.WaitForInstance:output_type -> durabletask.protos.backend.v1.WaitForInstanceResponse
-	36, // 45: durabletask.protos.backend.v1.BackendService.PurgeInstances:output_type -> PurgeInstancesResponse
-	37, // 46: durabletask.protos.backend.v1.BackendService.GetWorkItems:output_type -> WorkItem
-	5,  // 47: durabletask.protos.backend.v1.BackendService.GetOrchestrationRuntimeState:output_type -> durabletask.protos.backend.v1.GetOrchestrationRuntimeStateResponse
-	7,  // 48: durabletask.protos.backend.v1.BackendService.CompleteActivityWorkItem:output_type -> durabletask.protos.backend.v1.CompleteActivityWorkItemResponse
-	9,  // 49: durabletask.protos.backend.v1.BackendService.AbandonActivityWorkItem:output_type -> durabletask.protos.backend.v1.AbandonActivityWorkItemResponse
-	11, // 50: durabletask.protos.backend.v1.BackendService.CompleteOrchestrationWorkItem:output_type -> durabletask.protos.backend.v1.CompleteOrchestrationWorkItemResponse
-	14, // 51: durabletask.protos.backend.v1.BackendService.AbandonOrchestrationWorkItem:output_type -> durabletask.protos.backend.v1.AbandonOrchestrationWorkItemResponse
-	16, // 52: durabletask.protos.backend.v1.BackendService.Ping:output_type -> durabletask.protos.backend.v1.PingResponse
-	40, // [40:53] is the sub-list for method output_type
-	27, // [27:40] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	22, // 13: durabletask.protos.backend.v1.OrchestratorMessage.instance:type_name -> OrchestrationInstance
+	23, // 14: durabletask.protos.backend.v1.OrchestratorMessage.event:type_name -> HistoryEvent
+	23, // 15: durabletask.protos.backend.v1.WorkflowState.inbox:type_name -> HistoryEvent
+	23, // 16: durabletask.protos.backend.v1.WorkflowState.history:type_name -> HistoryEvent
+	25, // 17: durabletask.protos.backend.v1.WorkflowState.customStatus:type_name -> google.protobuf.StringValue
+	23, // 18: durabletask.protos.backend.v1.CreateWorkflowInstanceRequest.startEvent:type_name -> HistoryEvent
+	27, // 19: durabletask.protos.backend.v1.CreateWorkflowInstanceRequest.policy:type_name -> OrchestrationIdReusePolicy
+	26, // 20: durabletask.protos.backend.v1.OrchestrationMetadata.runtimeStatus:type_name -> OrchestrationStatus
+	28, // 21: durabletask.protos.backend.v1.OrchestrationMetadata.createdAt:type_name -> google.protobuf.Timestamp
+	28, // 22: durabletask.protos.backend.v1.OrchestrationMetadata.lastUpdatedAt:type_name -> google.protobuf.Timestamp
+	25, // 23: durabletask.protos.backend.v1.OrchestrationMetadata.input:type_name -> google.protobuf.StringValue
+	25, // 24: durabletask.protos.backend.v1.OrchestrationMetadata.output:type_name -> google.protobuf.StringValue
+	25, // 25: durabletask.protos.backend.v1.OrchestrationMetadata.customStatus:type_name -> google.protobuf.StringValue
+	29, // 26: durabletask.protos.backend.v1.OrchestrationMetadata.failureDetails:type_name -> TaskFailureDetails
+	23, // 27: durabletask.protos.backend.v1.DurableTimer.timerEvent:type_name -> HistoryEvent
+	30, // 28: durabletask.protos.backend.v1.BackendService.CreateInstance:input_type -> CreateInstanceRequest
+	0,  // 29: durabletask.protos.backend.v1.BackendService.AddEvent:input_type -> durabletask.protos.backend.v1.AddEventRequest
+	31, // 30: durabletask.protos.backend.v1.BackendService.GetInstance:input_type -> GetInstanceRequest
+	32, // 31: durabletask.protos.backend.v1.BackendService.QueryInstances:input_type -> QueryInstancesRequest
+	2,  // 32: durabletask.protos.backend.v1.BackendService.WaitForInstance:input_type -> durabletask.protos.backend.v1.WaitForInstanceRequest
+	33, // 33: durabletask.protos.backend.v1.BackendService.PurgeInstances:input_type -> PurgeInstancesRequest
+	34, // 34: durabletask.protos.backend.v1.BackendService.GetWorkItems:input_type -> GetWorkItemsRequest
+	4,  // 35: durabletask.protos.backend.v1.BackendService.GetOrchestrationRuntimeState:input_type -> durabletask.protos.backend.v1.GetOrchestrationRuntimeStateRequest
+	6,  // 36: durabletask.protos.backend.v1.BackendService.CompleteActivityWorkItem:input_type -> durabletask.protos.backend.v1.CompleteActivityWorkItemRequest
+	8,  // 37: durabletask.protos.backend.v1.BackendService.AbandonActivityWorkItem:input_type -> durabletask.protos.backend.v1.AbandonActivityWorkItemRequest
+	10, // 38: durabletask.protos.backend.v1.BackendService.CompleteOrchestrationWorkItem:input_type -> durabletask.protos.backend.v1.CompleteOrchestrationWorkItemRequest
+	13, // 39: durabletask.protos.backend.v1.BackendService.AbandonOrchestrationWorkItem:input_type -> durabletask.protos.backend.v1.AbandonOrchestrationWorkItemRequest
+	15, // 40: durabletask.protos.backend.v1.BackendService.Ping:input_type -> durabletask.protos.backend.v1.PingRequest
+	35, // 41: durabletask.protos.backend.v1.BackendService.CreateInstance:output_type -> CreateInstanceResponse
+	1,  // 42: durabletask.protos.backend.v1.BackendService.AddEvent:output_type -> durabletask.protos.backend.v1.AddEventResponse
+	36, // 43: durabletask.protos.backend.v1.BackendService.GetInstance:output_type -> GetInstanceResponse
+	37, // 44: durabletask.protos.backend.v1.BackendService.QueryInstances:output_type -> QueryInstancesResponse
+	3,  // 45: durabletask.protos.backend.v1.BackendService.WaitForInstance:output_type -> durabletask.protos.backend.v1.WaitForInstanceResponse
+	38, // 46: durabletask.protos.backend.v1.BackendService.PurgeInstances:output_type -> PurgeInstancesResponse
+	39, // 47: durabletask.protos.backend.v1.BackendService.GetWorkItems:output_type -> WorkItem
+	5,  // 48: durabletask.protos.backend.v1.BackendService.GetOrchestrationRuntimeState:output_type -> durabletask.protos.backend.v1.GetOrchestrationRuntimeStateResponse
+	7,  // 49: durabletask.protos.backend.v1.BackendService.CompleteActivityWorkItem:output_type -> durabletask.protos.backend.v1.CompleteActivityWorkItemResponse
+	9,  // 50: durabletask.protos.backend.v1.BackendService.AbandonActivityWorkItem:output_type -> durabletask.protos.backend.v1.AbandonActivityWorkItemResponse
+	11, // 51: durabletask.protos.backend.v1.BackendService.CompleteOrchestrationWorkItem:output_type -> durabletask.protos.backend.v1.CompleteOrchestrationWorkItemResponse
+	14, // 52: durabletask.protos.backend.v1.BackendService.AbandonOrchestrationWorkItem:output_type -> durabletask.protos.backend.v1.AbandonOrchestrationWorkItemResponse
+	16, // 53: durabletask.protos.backend.v1.BackendService.Ping:output_type -> durabletask.protos.backend.v1.PingResponse
+	41, // [41:54] is the sub-list for method output_type
+	28, // [28:41] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_backend_service_proto_init() }
@@ -1752,6 +1887,30 @@ func file_backend_service_proto_init() {
 				return nil
 			}
 		}
+		file_backend_service_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*WorkflowStateMetadata); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_backend_service_proto_msgTypes[21].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*DurableTimer); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	file_backend_service_proto_msgTypes[18].OneofWrappers = []interface{}{}
 	type x struct{}
@@ -1760,7 +1919,7 @@ func file_backend_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_backend_service_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   20,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

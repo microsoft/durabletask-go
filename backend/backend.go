@@ -26,6 +26,8 @@ type (
 	CreateWorkflowInstanceRequest = protos.CreateWorkflowInstanceRequest
 	ActivityRequest               = protos.ActivityRequest
 	OrchestrationMetadata         = protos.OrchestrationMetadata
+	WorkflowStateMetadata         = protos.WorkflowStateMetadata
+	DurableTimer                  = protos.DurableTimer
 )
 
 type OrchestrationIdReusePolicyOptions func(*protos.OrchestrationIdReusePolicy) error
