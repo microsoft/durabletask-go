@@ -371,8 +371,12 @@ func (grpcExecutor) DeleteTaskHub(context.Context, *protos.DeleteTaskHubRequest)
 func (g *grpcExecutor) GetInstance(ctx context.Context, req *protos.GetInstanceRequest) (*protos.GetInstanceResponse, error) {
 	metadata, err := g.backend.GetOrchestrationMetadata(ctx, api.InstanceID(req.InstanceId))
 	if err != nil {
+		if errors.Is(err, api.ErrInstanceNotFound) {
+			return &protos.GetInstanceResponse{Exists: false}, nil
+		}
 		return nil, err
 	}
+
 	if metadata == nil {
 		return &protos.GetInstanceResponse{Exists: false}, nil
 	}
