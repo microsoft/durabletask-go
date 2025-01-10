@@ -36,7 +36,7 @@ jobs:
           submodules: true
           
       - name: Setup Go environment
-        uses: actions/setup-go@v3.3.0
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
           
