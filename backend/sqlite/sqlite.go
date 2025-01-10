@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
@@ -630,6 +631,43 @@ func (be *sqliteBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.I
 
 	if err != nil {
 		return fmt.Errorf("failed to insert row into [NewEvents] table: %w", err)
+	}
+
+	return nil
+}
+
+func (be *sqliteBackend) WatchOrchestrationRuntimeStatus(ctx context.Context, id api.InstanceID, ch chan<- *backend.OrchestrationMetadata) error {
+	b := backoff.ExponentialBackOff{
+		InitialInterval:     100 * time.Millisecond,
+		MaxInterval:         10 * time.Second,
+		Multiplier:          1.5,
+		RandomizationFactor: 0.05,
+		Stop:                backoff.Stop,
+		Clock:               backoff.SystemClock,
+	}
+	b.Reset()
+
+	for {
+		t := time.NewTimer(b.NextBackOff())
+
+		select {
+		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
+			return ctx.Err()
+		case <-t.C:
+			meta, err := be.GetOrchestrationMetadata(ctx, id)
+			if err != nil {
+				return err
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case ch <- meta:
+			}
+		}
 	}
 
 	return nil

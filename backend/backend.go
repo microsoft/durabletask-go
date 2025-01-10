@@ -26,6 +26,7 @@ type (
 	CreateWorkflowInstanceRequest = protos.CreateWorkflowInstanceRequest
 	ActivityRequest               = protos.ActivityRequest
 	OrchestrationMetadata         = protos.OrchestrationMetadata
+	OrchestrationStatus           = protos.OrchestrationStatus
 	WorkflowStateMetadata         = protos.WorkflowStateMetadata
 	DurableTimer                  = protos.DurableTimer
 )
@@ -73,6 +74,11 @@ type Backend interface {
 
 	// GetOrchestrationRuntimeState gets the runtime state of an orchestration instance.
 	GetOrchestrationRuntimeState(context.Context, *OrchestrationWorkItem) (*OrchestrationRuntimeState, error)
+
+	// WatchOrchestrationRuntimeStatus is a streaming API to watch for changes to
+	// the OrchestrtionMetadata, receiving events as and when the state changes.
+	// Used over polling the metadata.
+	WatchOrchestrationRuntimeStatus(ctx context.Context, id api.InstanceID, ch chan<- *OrchestrationMetadata) error
 
 	// GetOrchestrationMetadata gets the metadata associated with the given orchestration instance ID.
 	//

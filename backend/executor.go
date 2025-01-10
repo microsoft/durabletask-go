@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -22,6 +21,7 @@ import (
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
+	"github.com/dapr/kit/concurrency"
 )
 
 var emptyCompleteTaskResponse = &protos.CompleteTaskResponse{}
@@ -555,42 +555,35 @@ func (g *grpcExecutor) WaitForInstanceStart(ctx context.Context, req *protos.Get
 func (g *grpcExecutor) waitForInstance(ctx context.Context, req *protos.GetInstanceRequest, condition func(*OrchestrationMetadata) bool) (*protos.GetInstanceResponse, error) {
 	iid := api.InstanceID(req.InstanceId)
 
-	var b backoff.BackOff = &backoff.ExponentialBackOff{
-		InitialInterval:     1 * time.Millisecond,
-		MaxInterval:         3 * time.Second,
-		Multiplier:          1.5,
-		RandomizationFactor: 0.5,
-		Stop:                backoff.Stop,
-		Clock:               backoff.SystemClock,
-	}
-	b = backoff.WithContext(b, ctx)
-	b.Reset()
+	ch := make(chan *protos.OrchestrationMetadata)
+	var metadata *protos.OrchestrationMetadata
+	err := concurrency.NewRunnerManager(
+		func(ctx context.Context) error {
+			return g.backend.WatchOrchestrationRuntimeStatus(ctx, iid, ch)
+		},
+		func(ctx context.Context) error {
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case metadata = <-ch:
+					if condition(metadata) {
+						return nil
+					}
+				}
+			}
+		},
+	).Run(ctx)
 
-loop:
-	for {
-		t := time.NewTimer(b.NextBackOff())
-		select {
-		case <-ctx.Done():
-			if !t.Stop() {
-				<-t.C
-			}
-			break loop
-
-		case <-t.C:
-			metadata, err := g.backend.GetOrchestrationMetadata(ctx, iid)
-			if err != nil {
-				return nil, err
-			}
-			if metadata == nil {
-				return &protos.GetInstanceResponse{Exists: false}, nil
-			}
-			if condition(metadata) {
-				return createGetInstanceResponse(req, metadata), nil
-			}
-		}
+	if err != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, ctx.Err())
 	}
 
-	return nil, status.Errorf(codes.Canceled, "instance hasn't completed")
+	if metadata == nil {
+		return &protos.GetInstanceResponse{Exists: false}, nil
+	}
+
+	return createGetInstanceResponse(req, metadata), nil
 }
 
 // mustEmbedUnimplementedTaskHubSidecarServiceServer implements protos.TaskHubSidecarServiceServer

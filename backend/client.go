@@ -2,10 +2,10 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -15,6 +15,7 @@ import (
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
+	"github.com/dapr/kit/concurrency"
 )
 
 type TaskHubClient interface {
@@ -114,34 +115,31 @@ func (c *backendClient) WaitForOrchestrationCompletion(ctx context.Context, id a
 }
 
 func (c *backendClient) waitForOrchestrationCondition(ctx context.Context, id api.InstanceID, condition func(metadata *OrchestrationMetadata) bool) (*OrchestrationMetadata, error) {
-	b := backoff.ExponentialBackOff{
-		InitialInterval:     100 * time.Millisecond,
-		MaxInterval:         10 * time.Second,
-		Multiplier:          1.5,
-		RandomizationFactor: 0.05,
-		Stop:                backoff.Stop,
-		Clock:               backoff.SystemClock,
-	}
-	b.Reset()
+	ch := make(chan *protos.OrchestrationMetadata)
+	var metadata *protos.OrchestrationMetadata
+	err := concurrency.NewRunnerManager(
+		func(ctx context.Context) error {
+			return c.be.WatchOrchestrationRuntimeStatus(ctx, id, ch)
+		},
+		func(ctx context.Context) error {
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case metadata = <-ch:
+					if condition(metadata) {
+						return nil
+					}
+				}
+			}
+		},
+	).Run(ctx)
 
-	for {
-		t := time.NewTimer(b.NextBackOff())
-		select {
-		case <-ctx.Done():
-			if !t.Stop() {
-				<-t.C
-			}
-			return nil, ctx.Err()
-		case <-t.C:
-			metadata, err := c.FetchOrchestrationMetadata(ctx, id)
-			if err != nil {
-				return nil, err
-			}
-			if metadata != nil && condition(metadata) {
-				return metadata, nil
-			}
-		}
+	if err != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, ctx.Err())
 	}
+
+	return metadata, nil
 }
 
 // TerminateOrchestration enqueues a message to terminate a running orchestration, causing it to stop receiving new events and
