@@ -28,6 +28,8 @@ var schema string
 
 var emptyString string = ""
 
+var errNoWorkItems = errors.New("no work items were found")
+
 type SqliteOptions struct {
 	OrchestrationLockTimeout time.Duration
 	ActivityLockTimeout      time.Duration
@@ -40,6 +42,9 @@ type sqliteBackend struct {
 	workerName string
 	logger     backend.Logger
 	options    *SqliteOptions
+
+	activityWorker      *backend.TaskWorker[*backend.ActivityWorkItem]
+	orchestrationWorker *backend.TaskWorker[*backend.OrchestrationWorkItem]
 }
 
 // NewSqliteOptions creates a new options object for the sqlite backend provider.
@@ -778,8 +783,8 @@ func (be *sqliteBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *b
 	return state, nil
 }
 
-// GetOrchestrationWorkItem implements backend.Backend
-func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend.OrchestrationWorkItem, error) {
+// getOrchestrationWorkItem implements backend.Backend
+func (be *sqliteBackend) getOrchestrationWorkItem(ctx context.Context) (*backend.OrchestrationWorkItem, error) {
 	if err := be.ensureDB(); err != nil {
 		return nil, err
 	}
@@ -819,7 +824,7 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 	if err := row.Scan(&instanceID); err != nil {
 		if err == sql.ErrNoRows {
 			// No new events to process
-			return nil, backend.ErrNoWorkItems
+			return nil, errNoWorkItems
 		}
 
 		return nil, fmt.Errorf("failed to scan the orchestration work-item: %w", err)
@@ -878,7 +883,73 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 	return wi, nil
 }
 
-func (be *sqliteBackend) GetActivityWorkItem(ctx context.Context) (*backend.ActivityWorkItem, error) {
+func (be *sqliteBackend) NextOrchestrationWorkItem(ctx context.Context) (*backend.OrchestrationWorkItem, error) {
+	b := backoff.WithContext(&backoff.ExponentialBackOff{
+		InitialInterval:     50 * time.Millisecond,
+		MaxInterval:         5 * time.Second,
+		Multiplier:          1.05,
+		RandomizationFactor: 0.05,
+		Stop:                backoff.Stop,
+		Clock:               backoff.SystemClock,
+	}, ctx)
+
+	for {
+		wi, err := be.getOrchestrationWorkItem(ctx)
+		if err == nil {
+			return wi, nil
+		}
+
+		if !errors.Is(err, errNoWorkItems) {
+			return nil, err
+		}
+
+		t := time.NewTimer(b.NextBackOff())
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
+			be.logger.Info("Activity: received cancellation signal")
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (be *sqliteBackend) NextActivityWorkItem(ctx context.Context) (*backend.ActivityWorkItem, error) {
+	b := backoff.WithContext(&backoff.ExponentialBackOff{
+		InitialInterval:     50 * time.Millisecond,
+		MaxInterval:         5 * time.Second,
+		Multiplier:          1.05,
+		RandomizationFactor: 0.05,
+		Stop:                backoff.Stop,
+		Clock:               backoff.SystemClock,
+	}, ctx)
+
+	for {
+		wi, err := be.getActivityWorkItem(ctx)
+		if err == nil {
+			return wi, nil
+		}
+
+		if !errors.Is(err, errNoWorkItems) {
+			return nil, err
+		}
+
+		t := time.NewTimer(b.NextBackOff())
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
+			be.logger.Info("Activity: received cancellation signal")
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (be *sqliteBackend) getActivityWorkItem(ctx context.Context) (*backend.ActivityWorkItem, error) {
 	if err := be.ensureDB(); err != nil {
 		return nil, err
 	}
@@ -910,7 +981,7 @@ func (be *sqliteBackend) GetActivityWorkItem(ctx context.Context) (*backend.Acti
 	if err := row.Scan(&sequenceNumber, &instanceID, &eventPayload); err != nil {
 		if err == sql.ErrNoRows {
 			// No new activity tasks to process
-			return nil, backend.ErrNoWorkItems
+			return nil, errNoWorkItems
 		}
 
 		return nil, fmt.Errorf("failed to scan the activity work-item: %w", err)

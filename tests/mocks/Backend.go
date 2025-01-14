@@ -416,64 +416,6 @@ func (_c *Backend_DeleteTaskHub_Call) RunAndReturn(run func(context.Context) err
 	return _c
 }
 
-// GetActivityWorkItem provides a mock function with given fields: _a0
-func (_m *Backend) GetActivityWorkItem(_a0 context.Context) (*backend.ActivityWorkItem, error) {
-	ret := _m.Called(_a0)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetActivityWorkItem")
-	}
-
-	var r0 *backend.ActivityWorkItem
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (*backend.ActivityWorkItem, error)); ok {
-		return rf(_a0)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context) *backend.ActivityWorkItem); ok {
-		r0 = rf(_a0)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*backend.ActivityWorkItem)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// Backend_GetActivityWorkItem_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetActivityWorkItem'
-type Backend_GetActivityWorkItem_Call struct {
-	*mock.Call
-}
-
-// GetActivityWorkItem is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *Backend_Expecter) GetActivityWorkItem(_a0 interface{}) *Backend_GetActivityWorkItem_Call {
-	return &Backend_GetActivityWorkItem_Call{Call: _e.mock.On("GetActivityWorkItem", _a0)}
-}
-
-func (_c *Backend_GetActivityWorkItem_Call) Run(run func(_a0 context.Context)) *Backend_GetActivityWorkItem_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
-	})
-	return _c
-}
-
-func (_c *Backend_GetActivityWorkItem_Call) Return(_a0 *backend.ActivityWorkItem, _a1 error) *Backend_GetActivityWorkItem_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *Backend_GetActivityWorkItem_Call) RunAndReturn(run func(context.Context) (*backend.ActivityWorkItem, error)) *Backend_GetActivityWorkItem_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetOrchestrationMetadata provides a mock function with given fields: _a0, _a1
 func (_m *Backend) GetOrchestrationMetadata(_a0 context.Context, _a1 api.InstanceID) (*protos.OrchestrationMetadata, error) {
 	ret := _m.Called(_a0, _a1)
@@ -592,12 +534,70 @@ func (_c *Backend_GetOrchestrationRuntimeState_Call) RunAndReturn(run func(conte
 	return _c
 }
 
-// GetOrchestrationWorkItem provides a mock function with given fields: _a0
-func (_m *Backend) GetOrchestrationWorkItem(_a0 context.Context) (*backend.OrchestrationWorkItem, error) {
+// NextActivityWorkItem provides a mock function with given fields: _a0
+func (_m *Backend) NextActivityWorkItem(_a0 context.Context) (*backend.ActivityWorkItem, error) {
 	ret := _m.Called(_a0)
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetOrchestrationWorkItem")
+		panic("no return value specified for NextActivityWorkItem")
+	}
+
+	var r0 *backend.ActivityWorkItem
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (*backend.ActivityWorkItem, error)); ok {
+		return rf(_a0)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) *backend.ActivityWorkItem); ok {
+		r0 = rf(_a0)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*backend.ActivityWorkItem)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(_a0)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// Backend_NextActivityWorkItem_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'NextActivityWorkItem'
+type Backend_NextActivityWorkItem_Call struct {
+	*mock.Call
+}
+
+// NextActivityWorkItem is a helper method to define mock.On call
+//   - _a0 context.Context
+func (_e *Backend_Expecter) NextActivityWorkItem(_a0 interface{}) *Backend_NextActivityWorkItem_Call {
+	return &Backend_NextActivityWorkItem_Call{Call: _e.mock.On("NextActivityWorkItem", _a0)}
+}
+
+func (_c *Backend_NextActivityWorkItem_Call) Run(run func(_a0 context.Context)) *Backend_NextActivityWorkItem_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *Backend_NextActivityWorkItem_Call) Return(_a0 *backend.ActivityWorkItem, _a1 error) *Backend_NextActivityWorkItem_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *Backend_NextActivityWorkItem_Call) RunAndReturn(run func(context.Context) (*backend.ActivityWorkItem, error)) *Backend_NextActivityWorkItem_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// NextOrchestrationWorkItem provides a mock function with given fields: _a0
+func (_m *Backend) NextOrchestrationWorkItem(_a0 context.Context) (*backend.OrchestrationWorkItem, error) {
+	ret := _m.Called(_a0)
+
+	if len(ret) == 0 {
+		panic("no return value specified for NextOrchestrationWorkItem")
 	}
 
 	var r0 *backend.OrchestrationWorkItem
@@ -622,30 +622,30 @@ func (_m *Backend) GetOrchestrationWorkItem(_a0 context.Context) (*backend.Orche
 	return r0, r1
 }
 
-// Backend_GetOrchestrationWorkItem_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetOrchestrationWorkItem'
-type Backend_GetOrchestrationWorkItem_Call struct {
+// Backend_NextOrchestrationWorkItem_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'NextOrchestrationWorkItem'
+type Backend_NextOrchestrationWorkItem_Call struct {
 	*mock.Call
 }
 
-// GetOrchestrationWorkItem is a helper method to define mock.On call
+// NextOrchestrationWorkItem is a helper method to define mock.On call
 //   - _a0 context.Context
-func (_e *Backend_Expecter) GetOrchestrationWorkItem(_a0 interface{}) *Backend_GetOrchestrationWorkItem_Call {
-	return &Backend_GetOrchestrationWorkItem_Call{Call: _e.mock.On("GetOrchestrationWorkItem", _a0)}
+func (_e *Backend_Expecter) NextOrchestrationWorkItem(_a0 interface{}) *Backend_NextOrchestrationWorkItem_Call {
+	return &Backend_NextOrchestrationWorkItem_Call{Call: _e.mock.On("NextOrchestrationWorkItem", _a0)}
 }
 
-func (_c *Backend_GetOrchestrationWorkItem_Call) Run(run func(_a0 context.Context)) *Backend_GetOrchestrationWorkItem_Call {
+func (_c *Backend_NextOrchestrationWorkItem_Call) Run(run func(_a0 context.Context)) *Backend_NextOrchestrationWorkItem_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
 	return _c
 }
 
-func (_c *Backend_GetOrchestrationWorkItem_Call) Return(_a0 *backend.OrchestrationWorkItem, _a1 error) *Backend_GetOrchestrationWorkItem_Call {
+func (_c *Backend_NextOrchestrationWorkItem_Call) Return(_a0 *backend.OrchestrationWorkItem, _a1 error) *Backend_NextOrchestrationWorkItem_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *Backend_GetOrchestrationWorkItem_Call) RunAndReturn(run func(context.Context) (*backend.OrchestrationWorkItem, error)) *Backend_GetOrchestrationWorkItem_Call {
+func (_c *Backend_NextOrchestrationWorkItem_Call) RunAndReturn(run func(context.Context) (*backend.OrchestrationWorkItem, error)) *Backend_NextOrchestrationWorkItem_Call {
 	_c.Call.Return(run)
 	return _c
 }

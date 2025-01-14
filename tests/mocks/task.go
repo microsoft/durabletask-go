@@ -10,90 +10,87 @@ import (
 	backend "github.com/dapr/durabletask-go/backend"
 )
 
-var _ backend.TaskProcessor = &TestTaskProcessor{}
-
 // TestTaskProcessor implements a dummy task processor useful for testing
-type TestTaskProcessor struct {
+type TestTaskProcessor[T backend.WorkItem] struct {
 	name string
 
 	processingBlocked atomic.Bool
 
 	workItemMu sync.Mutex
-	workItems  []backend.WorkItem
+	workItems  []T
 
 	abandonedWorkItemMu sync.Mutex
-	abandonedWorkItems  []backend.WorkItem
+	abandonedWorkItems  []T
 
 	completedWorkItemMu sync.Mutex
-	completedWorkItems  []backend.WorkItem
+	completedWorkItems  []T
 }
 
-func NewTestTaskPocessor(name string) *TestTaskProcessor {
-	return &TestTaskProcessor{
+func NewTestTaskPocessor[T backend.WorkItem](name string) *TestTaskProcessor[T] {
+	return &TestTaskProcessor[T]{
 		name: name,
 	}
 }
 
-func (t *TestTaskProcessor) BlockProcessing() {
+func (t *TestTaskProcessor[T]) BlockProcessing() {
 	t.processingBlocked.Store(true)
 }
 
-func (t *TestTaskProcessor) UnblockProcessing() {
+func (t *TestTaskProcessor[T]) UnblockProcessing() {
 	t.processingBlocked.Store(false)
 }
 
-func (t *TestTaskProcessor) PendingWorkItems() []backend.WorkItem {
+func (t *TestTaskProcessor[T]) PendingWorkItems() []T {
 	t.workItemMu.Lock()
 	defer t.workItemMu.Unlock()
 
 	// copy array
-	return append([]backend.WorkItem{}, t.workItems...)
+	return append([]T{}, t.workItems...)
 }
 
-func (t *TestTaskProcessor) AbandonedWorkItems() []backend.WorkItem {
+func (t *TestTaskProcessor[T]) AbandonedWorkItems() []T {
 	t.abandonedWorkItemMu.Lock()
 	defer t.abandonedWorkItemMu.Unlock()
 
 	// copy array
-	return append([]backend.WorkItem{}, t.abandonedWorkItems...)
+	return append([]T{}, t.abandonedWorkItems...)
 }
 
-func (t *TestTaskProcessor) CompletedWorkItems() []backend.WorkItem {
+func (t *TestTaskProcessor[T]) CompletedWorkItems() []T {
 	t.completedWorkItemMu.Lock()
 	defer t.completedWorkItemMu.Unlock()
 
 	// copy array
-	return append([]backend.WorkItem{}, t.completedWorkItems...)
+	return append([]T{}, t.completedWorkItems...)
 }
 
-func (t *TestTaskProcessor) AddWorkItems(wis ...backend.WorkItem) {
+func (t *TestTaskProcessor[T]) AddWorkItems(wis ...T) {
 	t.workItemMu.Lock()
 	defer t.workItemMu.Unlock()
 
 	t.workItems = append(t.workItems, wis...)
 }
 
-func (t *TestTaskProcessor) Name() string {
+func (t *TestTaskProcessor[T]) Name() string {
 	return t.name
 }
 
-func (t *TestTaskProcessor) FetchWorkItem(context.Context) (backend.WorkItem, error) {
+func (t *TestTaskProcessor[T]) NextWorkItem(context.Context) (T, error) {
 	t.workItemMu.Lock()
 	defer t.workItemMu.Unlock()
 
 	if len(t.workItems) == 0 {
-		return nil, backend.ErrNoWorkItems
+		var tt T
+		return tt, errors.New("no work items")
 	}
 
-	// pop first item
-	i := 0
-	wi := t.workItems[i]
-	t.workItems = append(t.workItems[:i], t.workItems[i+1:]...)
+	wi := t.workItems[0]
+	t.workItems = t.workItems[1:]
 
 	return wi, nil
 }
 
-func (t *TestTaskProcessor) ProcessWorkItem(ctx context.Context, wi backend.WorkItem) error {
+func (t *TestTaskProcessor[T]) ProcessWorkItem(ctx context.Context, wi T) error {
 	if !t.processingBlocked.Load() {
 		return nil
 	}
@@ -111,7 +108,7 @@ func (t *TestTaskProcessor) ProcessWorkItem(ctx context.Context, wi backend.Work
 	}
 }
 
-func (t *TestTaskProcessor) AbandonWorkItem(ctx context.Context, wi backend.WorkItem) error {
+func (t *TestTaskProcessor[T]) AbandonWorkItem(ctx context.Context, wi T) error {
 	t.abandonedWorkItemMu.Lock()
 	defer t.abandonedWorkItemMu.Unlock()
 
@@ -119,7 +116,7 @@ func (t *TestTaskProcessor) AbandonWorkItem(ctx context.Context, wi backend.Work
 	return nil
 }
 
-func (t *TestTaskProcessor) CompleteWorkItem(ctx context.Context, wi backend.WorkItem) error {
+func (t *TestTaskProcessor[T]) CompleteWorkItem(ctx context.Context, wi T) error {
 	t.completedWorkItemMu.Lock()
 	defer t.completedWorkItemMu.Unlock()
 

@@ -1,14 +1,11 @@
 package backend
 
 import (
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/dapr/durabletask-go/api"
 )
-
-var ErrNoWorkItems = errors.New("no work items were found")
 
 type WorkItem interface {
 	fmt.Stringer

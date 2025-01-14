@@ -13,8 +13,8 @@ func Test_TaskHubWorkerStartsDependencies(t *testing.T) {
 	ctx := context.Background()
 
 	be := mocks.NewBackend(t)
-	orchWorker := mocks.NewTaskWorker(t)
-	actWorker := mocks.NewTaskWorker(t)
+	orchWorker := mocks.NewTaskWorker[*backend.OrchestrationWorkItem](t)
+	actWorker := mocks.NewTaskWorker[*backend.ActivityWorkItem](t)
 
 	be.EXPECT().CreateTaskHub(ctx).Return(nil).Once()
 	be.EXPECT().Start(ctx).Return(nil).Once()
@@ -30,8 +30,8 @@ func Test_TaskHubWorkerStopsDependencies(t *testing.T) {
 	ctx := context.Background()
 
 	be := mocks.NewBackend(t)
-	orchWorker := mocks.NewTaskWorker(t)
-	actWorker := mocks.NewTaskWorker(t)
+	orchWorker := mocks.NewTaskWorker[*backend.OrchestrationWorkItem](t)
+	actWorker := mocks.NewTaskWorker[*backend.ActivityWorkItem](t)
 
 	be.EXPECT().Stop(ctx).Return(nil).Once()
 	orchWorker.EXPECT().StopAndDrain().Return().Once()

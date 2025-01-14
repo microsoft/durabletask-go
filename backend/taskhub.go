@@ -15,12 +15,12 @@ type TaskHubWorker interface {
 
 type taskHubWorker struct {
 	backend             Backend
-	orchestrationWorker TaskWorker
-	activityWorker      TaskWorker
+	orchestrationWorker TaskWorker[*OrchestrationWorkItem]
+	activityWorker      TaskWorker[*ActivityWorkItem]
 	logger              Logger
 }
 
-func NewTaskHubWorker(be Backend, orchestrationWorker TaskWorker, activityWorker TaskWorker, logger Logger) TaskHubWorker {
+func NewTaskHubWorker(be Backend, orchestrationWorker TaskWorker[*OrchestrationWorkItem], activityWorker TaskWorker[*ActivityWorkItem], logger Logger) TaskHubWorker {
 	return &taskHubWorker{
 		backend:             be,
 		orchestrationWorker: orchestrationWorker,
@@ -30,13 +30,14 @@ func NewTaskHubWorker(be Backend, orchestrationWorker TaskWorker, activityWorker
 }
 
 func (w *taskHubWorker) Start(ctx context.Context) error {
-	// TODO: Check for already started worker
 	if err := w.backend.CreateTaskHub(ctx); err != nil && err != ErrTaskHubExists {
 		return err
 	}
+
 	if err := w.backend.Start(ctx); err != nil {
 		return err
 	}
+
 	w.logger.Infof("worker started with backend %v", w.backend)
 
 	w.orchestrationWorker.Start(ctx)
@@ -53,7 +54,7 @@ func (w *taskHubWorker) Shutdown(ctx context.Context) error {
 	w.logger.Info("workers stopping and draining...")
 	defer w.logger.Info("finished stopping and draining workers!")
 
-	wg := sync.WaitGroup{}
+	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

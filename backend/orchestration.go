@@ -30,13 +30,13 @@ type orchestratorProcessor struct {
 	logger   Logger
 }
 
-func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
+func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker[*OrchestrationWorkItem] {
 	processor := &orchestratorProcessor{
 		be:       be,
 		executor: executor,
 		logger:   logger,
 	}
-	return NewTaskWorker(processor, logger, opts...)
+	return NewTaskWorker[*OrchestrationWorkItem](processor, logger, opts...)
 }
 
 // Name implements TaskProcessor
@@ -44,14 +44,13 @@ func (*orchestratorProcessor) Name() string {
 	return "orchestration-processor"
 }
 
-// FetchWorkItem implements TaskProcessor
-func (p *orchestratorProcessor) FetchWorkItem(ctx context.Context) (WorkItem, error) {
-	return p.be.GetOrchestrationWorkItem(ctx)
+// NextWorkItem implements TaskProcessor
+func (p *orchestratorProcessor) NextWorkItem(ctx context.Context) (*OrchestrationWorkItem, error) {
+	return p.be.NextOrchestrationWorkItem(ctx)
 }
 
 // ProcessWorkItem implements TaskProcessor
-func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkItem) error {
-	wi := cwi.(*OrchestrationWorkItem)
+func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, wi *OrchestrationWorkItem) error {
 	w.logger.Debugf("%v: received work item with %d new event(s): %v", wi.InstanceID, len(wi.NewEvents), helpers.HistoryListSummary(wi.NewEvents))
 
 	// TODO: Caching
@@ -131,15 +130,13 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 }
 
 // CompleteWorkItem implements TaskProcessor
-func (p *orchestratorProcessor) CompleteWorkItem(ctx context.Context, wi WorkItem) error {
-	owi := wi.(*OrchestrationWorkItem)
-	return p.be.CompleteOrchestrationWorkItem(ctx, owi)
+func (p *orchestratorProcessor) CompleteWorkItem(ctx context.Context, wi *OrchestrationWorkItem) error {
+	return p.be.CompleteOrchestrationWorkItem(ctx, wi)
 }
 
 // AbandonWorkItem implements TaskProcessor
-func (p *orchestratorProcessor) AbandonWorkItem(ctx context.Context, wi WorkItem) error {
-	owi := wi.(*OrchestrationWorkItem)
-	return p.be.AbandonOrchestrationWorkItem(ctx, owi)
+func (p *orchestratorProcessor) AbandonWorkItem(ctx context.Context, wi *OrchestrationWorkItem) error {
+	return p.be.AbandonOrchestrationWorkItem(ctx, wi)
 }
 
 func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *OrchestrationWorkItem) (context.Context, trace.Span, bool) {

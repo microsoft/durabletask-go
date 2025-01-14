@@ -68,9 +68,9 @@ type Backend interface {
 	// AddNewEvent adds a new orchestration event to the specified orchestration instance.
 	AddNewOrchestrationEvent(context.Context, api.InstanceID, *HistoryEvent) error
 
-	// GetOrchestrationWorkItem gets a pending work item from the task hub or returns [ErrNoOrchWorkItems]
-	// if there are no pending work items.
-	GetOrchestrationWorkItem(context.Context) (*OrchestrationWorkItem, error)
+	// NextOrchestrationWorkItem blocks and returns the next orchestration work
+	// item from the task hub. Should only return an error when shutting down.
+	NextOrchestrationWorkItem(context.Context) (*OrchestrationWorkItem, error)
 
 	// GetOrchestrationRuntimeState gets the runtime state of an orchestration instance.
 	GetOrchestrationRuntimeState(context.Context, *OrchestrationWorkItem) (*OrchestrationRuntimeState, error)
@@ -97,9 +97,9 @@ type Backend interface {
 	// completes with a failure is still considered a successfully processed work item).
 	AbandonOrchestrationWorkItem(context.Context, *OrchestrationWorkItem) error
 
-	// GetActivityWorkItem gets a pending activity work item from the task hub or returns [ErrNoWorkItems]
-	// if there are no pending activity work items.
-	GetActivityWorkItem(context.Context) (*ActivityWorkItem, error)
+	// NextActivityWorkItem blocks and returns the next activity work item from
+	// the task hub. Should only return an error when shutting down.
+	NextActivityWorkItem(context.Context) (*ActivityWorkItem, error)
 
 	// CompleteActivityWorkItem sends a message to the parent orchestration indicating activity completion.
 	//

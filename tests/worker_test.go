@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,9 +47,13 @@ func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 	state := &backend.OrchestrationRuntimeState{}
 	result := &backend.ExecutionResults{Response: &protos.OrchestratorResponse{}}
 
+	ctx, cancel := context.WithCancel(ctx)
 	completed := atomic.Bool{}
 	be := mocks.NewBackend(t)
-	be.EXPECT().GetOrchestrationWorkItem(anyContext).Return(wi, nil).Once()
+	be.EXPECT().NextOrchestrationWorkItem(anyContext).Return(wi, nil).Once()
+	be.EXPECT().NextOrchestrationWorkItem(anyContext).Return(nil, errors.New("")).Once().Run(func(mock.Arguments) {
+		cancel()
+	})
 	be.EXPECT().GetOrchestrationRuntimeState(anyContext, wi).Return(state, nil).Once()
 	be.EXPECT().CompleteOrchestrationWorkItem(anyContext, wi).RunAndReturn(func(ctx context.Context, owi *backend.OrchestrationWorkItem) error {
 		completed.Store(true)
@@ -59,10 +64,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 	ex.EXPECT().ExecuteOrchestrator(anyContext, wi.InstanceID, state.OldEvents(), mock.Anything).Return(result, nil).Once()
 
 	worker := backend.NewOrchestrationWorker(be, ex, logger)
-	ok, err := worker.ProcessNext(ctx)
-	// Successfully processing a work-item should result in a nil error
-	assert.Nil(t, err)
-	assert.True(t, ok)
+	worker.Start(ctx)
 
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		if !completed.Load() {
@@ -71,17 +73,6 @@ func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 	}, 1*time.Second, 100*time.Millisecond)
 
 	worker.StopAndDrain()
-}
-
-func Test_TryProcessSingleOrchestrationWorkItem_NoWorkItems(t *testing.T) {
-	ctx := context.Background()
-	be := mocks.NewBackend(t)
-	be.EXPECT().GetOrchestrationWorkItem(anyContext).Return(nil, backend.ErrNoWorkItems).Once()
-
-	w := backend.NewOrchestrationWorker(be, nil, logger)
-	ok, err := w.ProcessNext(ctx)
-	assert.Nil(t, err)
-	assert.False(t, ok)
 }
 
 func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *testing.T) {
@@ -111,8 +102,13 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	// Empty orchestration runtime state since we're starting a new execution from scratch
 	state := backend.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{})
 
+	ctx, cancel := context.WithCancel(ctx)
 	be := mocks.NewBackend(t)
-	be.EXPECT().GetOrchestrationWorkItem(anyContext).Return(wi, nil).Once()
+	be.EXPECT().NextOrchestrationWorkItem(anyContext).Return(wi, nil).Once()
+	be.EXPECT().NextOrchestrationWorkItem(anyContext).Return(nil, errors.New("")).Once().Run(func(mock.Arguments) {
+		cancel()
+	})
+
 	be.EXPECT().GetOrchestrationRuntimeState(anyContext, wi).Return(state, nil).Once()
 
 	ex := mocks.NewExecutor(t)
@@ -148,10 +144,11 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 
 	// Set up and run the test
 	worker := backend.NewOrchestrationWorker(be, ex, logger)
-	ok, err := worker.ProcessNext(ctx)
-	// Successfully processing a work-item should result in a nil error
-	assert.Nil(t, err)
-	assert.True(t, ok)
+	worker.Start(ctx)
+	//ok, err := worker.ProcessNext(ctx)
+	//// Successfully processing a work-item should result in a nil error
+	//assert.Nil(t, err)
+	//assert.True(t, ok)
 
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		if !completed.Load() {
@@ -166,18 +163,18 @@ func Test_TaskWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tp := mocks.NewTestTaskPocessor("test")
+	tp := mocks.NewTestTaskPocessor[*backend.ActivityWorkItem]("test")
 	tp.UnblockProcessing()
 
-	first := backend.ActivityWorkItem{
+	first := &backend.ActivityWorkItem{
 		SequenceNumber: 1,
 	}
-	second := backend.ActivityWorkItem{
+	second := &backend.ActivityWorkItem{
 		SequenceNumber: 2,
 	}
 	tp.AddWorkItems(first, second)
 
-	worker := backend.NewTaskWorker(tp, logger)
+	worker := backend.NewTaskWorker[*backend.ActivityWorkItem](tp, logger)
 
 	worker.Start(ctx)
 
@@ -213,7 +210,7 @@ func Test_StartAndStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tp := mocks.NewTestTaskPocessor("test")
+	tp := mocks.NewTestTaskPocessor[*backend.ActivityWorkItem]("test")
 	tp.BlockProcessing()
 
 	first := backend.ActivityWorkItem{
@@ -222,21 +219,17 @@ func Test_StartAndStop(t *testing.T) {
 	second := backend.ActivityWorkItem{
 		SequenceNumber: 2,
 	}
-	tp.AddWorkItems(first, second)
+	tp.AddWorkItems(&first, &second)
 
-	worker := backend.NewTaskWorker(tp, logger)
+	worker := backend.NewTaskWorker[*backend.ActivityWorkItem](tp, logger)
 
 	worker.Start(ctx)
 
-	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		if len(tp.PendingWorkItems()) == 1 {
-			return
-		}
-		collect.Errorf("first work item not consumed yet")
-	}, 500*time.Millisecond, 100*time.Millisecond)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Len(c, tp.PendingWorkItems(), 1)
+	}, time.Second*5, 100*time.Millisecond)
 
 	// due to the configuration of the TestTaskProcessor, now the work item is blocked on ProcessWorkItem until the context is cancelled
-
 	drainFinished := make(chan bool)
 	go func() {
 		worker.StopAndDrain()

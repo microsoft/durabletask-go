@@ -21,12 +21,12 @@ type ActivityExecutor interface {
 	ExecuteActivity(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error)
 }
 
-func NewActivityTaskWorker(be Backend, executor ActivityExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
+func NewActivityTaskWorker(be Backend, executor ActivityExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker[*ActivityWorkItem] {
 	processor := newActivityProcessor(be, executor)
 	return NewTaskWorker(processor, logger, opts...)
 }
 
-func newActivityProcessor(be Backend, executor ActivityExecutor) TaskProcessor {
+func newActivityProcessor(be Backend, executor ActivityExecutor) TaskProcessor[*ActivityWorkItem] {
 	return &activityProcessor{
 		be:       be,
 		executor: executor,
@@ -38,15 +38,13 @@ func (*activityProcessor) Name() string {
 	return "activity-processor"
 }
 
-// FetchWorkItem implements TaskDispatcher
-func (ap *activityProcessor) FetchWorkItem(ctx context.Context) (WorkItem, error) {
-	return ap.be.GetActivityWorkItem(ctx)
+// NextWorkItem implements TaskDispatcher
+func (ap *activityProcessor) NextWorkItem(ctx context.Context) (*ActivityWorkItem, error) {
+	return ap.be.NextActivityWorkItem(ctx)
 }
 
 // ProcessWorkItem implements TaskDispatcher
-func (p *activityProcessor) ProcessWorkItem(ctx context.Context, wi WorkItem) error {
-	awi := wi.(*ActivityWorkItem)
-
+func (p *activityProcessor) ProcessWorkItem(ctx context.Context, awi *ActivityWorkItem) error {
 	ts := awi.NewEvent.GetTaskScheduled()
 	if ts == nil {
 		return fmt.Errorf("%v: invalid TaskScheduled event", awi.InstanceID)
@@ -83,20 +81,18 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, wi WorkItem) er
 }
 
 // CompleteWorkItem implements TaskDispatcher
-func (ap *activityProcessor) CompleteWorkItem(ctx context.Context, wi WorkItem) error {
-	awi := wi.(*ActivityWorkItem)
+func (ap *activityProcessor) CompleteWorkItem(ctx context.Context, awi *ActivityWorkItem) error {
 	if awi.Result == nil {
-		return fmt.Errorf("can't complete work item '%s' with nil result", wi)
+		return fmt.Errorf("can't complete work item '%s' with nil result", awi)
 	}
 	if awi.Result.GetTaskCompleted() == nil && awi.Result.GetTaskFailed() == nil {
-		return fmt.Errorf("can't complete work item '%s', which isn't TaskCompleted or TaskFailed", wi)
+		return fmt.Errorf("can't complete work item '%s', which isn't TaskCompleted or TaskFailed", awi)
 	}
 
 	return ap.be.CompleteActivityWorkItem(ctx, awi)
 }
 
 // AbandonWorkItem implements TaskDispatcher
-func (ap *activityProcessor) AbandonWorkItem(ctx context.Context, wi WorkItem) error {
-	awi := wi.(*ActivityWorkItem)
+func (ap *activityProcessor) AbandonWorkItem(ctx context.Context, awi *ActivityWorkItem) error {
 	return ap.be.AbandonActivityWorkItem(ctx, awi)
 }

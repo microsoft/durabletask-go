@@ -6,7 +6,6 @@ require (
 	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/dapr/kit v0.13.1-0.20250110192255-fb195706966f
 	github.com/google/uuid v1.6.0
-	github.com/marusama/semaphore/v2 v2.5.0
 	github.com/stretchr/testify v1.9.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.44.0
 	go.opentelemetry.io/otel v1.18.0

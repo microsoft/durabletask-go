@@ -68,10 +68,6 @@ func Test_NewOrchestrationWorkItem_Single(t *testing.T) {
 					assert.Equal(t, 0, len(state.NewEvents()))
 					assert.Equal(t, 0, len(state.OldEvents()))
 				}
-
-				// Ensure no more work items
-				_, err := be.GetOrchestrationWorkItem(ctx)
-				assert.ErrorIs(t, err, backend.ErrNoWorkItems)
 			}
 		}
 	}
@@ -113,10 +109,6 @@ func Test_NewOrchestrationWorkItem_Multiple(t *testing.T) {
 				}
 			}
 		}
-
-		// Ensure no more work items
-		_, err := be.GetOrchestrationWorkItem(ctx)
-		assert.ErrorIs(t, err, backend.ErrNoWorkItems)
 	}
 }
 
@@ -166,10 +158,6 @@ func Test_CompleteOrchestration(t *testing.T) {
 
 			// Execute the test, which calls the above callbacks
 			workItemProcessingTestLogic(t, be, getOrchestratorActions, validateMetadata)
-
-			// Ensure no more work items
-			_, err := be.GetOrchestrationWorkItem(ctx)
-			assert.ErrorIs(t, err, backend.ErrNoWorkItems)
 		}
 	}
 }
@@ -182,11 +170,6 @@ func Test_ScheduleActivityTasks(t *testing.T) {
 
 	for i, be := range backends {
 		initTest(t, be, i, true)
-
-		wi, err := be.GetActivityWorkItem(ctx)
-		if !assert.ErrorIs(t, err, backend.ErrNoWorkItems) {
-			continue
-		}
 
 		// Produce a TaskScheduled event with a particular input
 		getOrchestratorActions := func() []*protos.OrchestratorAction {
@@ -208,20 +191,12 @@ func Test_ScheduleActivityTasks(t *testing.T) {
 		// Execute the test, which calls the above callbacks
 		workItemProcessingTestLogic(t, be, getOrchestratorActions, validateMetadata)
 
-		// Ensure no more orchestration work items
-		_, err = be.GetOrchestrationWorkItem(ctx)
-		assert.ErrorIs(t, err, backend.ErrNoWorkItems)
-
 		// However, there should be an activity work item
-		wi, err = be.GetActivityWorkItem(ctx)
+		wi, err := be.NextActivityWorkItem(ctx)
 		if assert.NoError(t, err) && assert.NotNil(t, wi) {
 			assert.Equal(t, expectedName, wi.NewEvent.GetTaskScheduled().GetName())
 			assert.Equal(t, expectedInput, wi.NewEvent.GetTaskScheduled().GetInput().GetValue())
 		}
-
-		// Ensure no more activity work items
-		_, err = be.GetActivityWorkItem(ctx)
-		assert.ErrorIs(t, err, backend.ErrNoWorkItems)
 
 		// Complete the fetched activity work item
 		wi.Result = &protos.HistoryEvent{
@@ -237,7 +212,7 @@ func Test_ScheduleActivityTasks(t *testing.T) {
 		err = be.CompleteActivityWorkItem(ctx, wi)
 		if assert.NoError(t, err) {
 			// Completing the activity work item should create a new TaskCompleted event
-			wi, err := be.GetOrchestrationWorkItem(ctx)
+			wi, err := be.NextOrchestrationWorkItem(ctx)
 			if assert.NoError(t, err) && assert.NotNil(t, wi) && assert.Len(t, wi.NewEvents, 1) {
 				assert.Equal(t, expectedTaskID, wi.NewEvents[0].GetTaskCompleted().GetTaskScheduledId())
 				assert.Equal(t, expectedResult, wi.NewEvents[0].GetTaskCompleted().GetResult().GetValue())
@@ -270,15 +245,11 @@ func Test_ScheduleTimerTasks(t *testing.T) {
 		// Execute the test, which calls the above callbacks
 		workItemProcessingTestLogic(t, be, getOrchestratorActions, validateMetadata)
 
-		// Validate that the timer work-item isn't yet visible
-		_, err := be.GetOrchestrationWorkItem(ctx)
-		assert.ErrorIs(t, err, backend.ErrNoWorkItems)
-
 		// Sleep until the expected visibility time expires
 		time.Sleep(timerDuration)
 
 		// Validate that the timer work-item is now visible
-		wi, err := be.GetOrchestrationWorkItem(ctx)
+		wi, err := be.NextOrchestrationWorkItem(ctx)
 		if assert.NoError(t, err) && assert.Equal(t, 1, len(wi.NewEvents)) {
 			e := wi.NewEvents[0]
 			tf := e.GetTimerFired()
@@ -330,15 +301,11 @@ func Test_AbandonActivityWorkItem(t *testing.T) {
 		workItemProcessingTestLogic(t, be, getOrchestratorActions, validateMetadata)
 
 		// The NewScheduleTaskAction should have created an activity work item
-		wi, err := be.GetActivityWorkItem(ctx)
+		wi, err := be.NextActivityWorkItem(ctx)
 		if assert.NoError(t, err) && assert.NotNil(t, wi) {
-			// Ensure no more activity work items
-			_, err = be.GetActivityWorkItem(ctx)
-			assert.ErrorIs(t, err, backend.ErrNoWorkItems)
-
 			if err := be.AbandonActivityWorkItem(ctx, wi); assert.NoError(t, err) {
 				// Re-fetch the abandoned activity work item
-				wi, err = be.GetActivityWorkItem(ctx)
+				wi, err = be.NextActivityWorkItem(ctx)
 				assert.Equal(t, "MyActivity", wi.NewEvent.GetTaskScheduled().GetName())
 				assert.Equal(t, int32(123), wi.NewEvent.EventId)
 				assert.Nil(t, wi.NewEvent.GetTaskScheduled().GetInput())
@@ -361,9 +328,9 @@ func Test_UninitializedBackend(t *testing.T) {
 		assert.Equal(t, err, backend.ErrNotInitialized)
 		_, err = be.GetOrchestrationRuntimeState(ctx, nil)
 		assert.Equal(t, err, backend.ErrNotInitialized)
-		_, err = be.GetOrchestrationWorkItem(ctx)
+		_, err = be.NextOrchestrationWorkItem(ctx)
 		assert.Equal(t, err, backend.ErrNotInitialized)
-		_, err = be.GetActivityWorkItem(ctx)
+		_, err = be.NextActivityWorkItem(ctx)
 		assert.Equal(t, err, backend.ErrNotInitialized)
 	}
 }
@@ -511,7 +478,7 @@ func createOrchestrationInstance(t assert.TestingT, be backend.Backend, instance
 }
 
 func getOrchestrationWorkItem(t assert.TestingT, be backend.Backend, expectedInstanceID string) (*backend.OrchestrationWorkItem, bool) {
-	wi, err := be.GetOrchestrationWorkItem(ctx)
+	wi, err := be.NextOrchestrationWorkItem(ctx)
 	if assert.NoError(t, err) && assert.NotNil(t, wi) {
 		assert.NotEmpty(t, wi.LockedBy)
 		return wi, assert.Equal(t, expectedInstanceID, string(wi.InstanceID))
