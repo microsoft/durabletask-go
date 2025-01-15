@@ -7,6 +7,7 @@ import (
 
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/protos"
+	"github.com/dapr/durabletask-go/backend/runtimestate"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -20,15 +21,17 @@ var (
 )
 
 type (
-	HistoryEvent                  = protos.HistoryEvent
-	TaskFailureDetails            = protos.TaskFailureDetails
-	WorkflowState                 = protos.WorkflowState
-	CreateWorkflowInstanceRequest = protos.CreateWorkflowInstanceRequest
-	ActivityRequest               = protos.ActivityRequest
-	OrchestrationMetadata         = protos.OrchestrationMetadata
-	OrchestrationStatus           = protos.OrchestrationStatus
-	WorkflowStateMetadata         = protos.WorkflowStateMetadata
-	DurableTimer                  = protos.DurableTimer
+	HistoryEvent                     = protos.HistoryEvent
+	TaskFailureDetails               = protos.TaskFailureDetails
+	WorkflowState                    = protos.WorkflowState
+	CreateWorkflowInstanceRequest    = protos.CreateWorkflowInstanceRequest
+	ActivityRequest                  = protos.ActivityRequest
+	OrchestrationMetadata            = protos.OrchestrationMetadata
+	OrchestrationStatus              = protos.OrchestrationStatus
+	WorkflowStateMetadata            = protos.WorkflowStateMetadata
+	DurableTimer                     = protos.DurableTimer
+	OrchestrationRuntimeState        = protos.OrchestrationRuntimeState
+	OrchestrationRuntimeStateMessage = protos.OrchestrationRuntimeStateMessage
 )
 
 type OrchestrationIdReusePolicyOptions func(*protos.OrchestrationIdReusePolicy) error
@@ -148,15 +151,15 @@ func purgeOrchestrationState(ctx context.Context, be Backend, iid api.InstanceID
 		if err != nil {
 			return 0, fmt.Errorf("failed to fetch orchestration state: %w", err)
 		}
-		if len(state.NewEvents())+len(state.oldEvents) == 0 {
+		if len(state.NewEvents)+len(state.OldEvents) == 0 {
 			// If there are no events, the orchestration instance doesn't exist
 			return 0, api.ErrInstanceNotFound
 		}
-		if !state.IsCompleted() {
+		if !runtimestate.IsCompleted(state) {
 			// Orchestration must be completed before purging its state
 			return 0, api.ErrNotCompleted
 		}
-		subOrchestrationInstances := getSubOrchestrationInstances(state.OldEvents(), state.NewEvents())
+		subOrchestrationInstances := getSubOrchestrationInstances(state.OldEvents, state.NewEvents)
 		for _, subOrchestrationInstance := range subOrchestrationInstances {
 			// Recursively purge sub-orchestrations
 			count, err := purgeOrchestrationState(ctx, be, subOrchestrationInstance, recursive)
@@ -179,7 +182,7 @@ func terminateSubOrchestrationInstances(ctx context.Context, be Backend, iid api
 	if !et.Recurse {
 		return nil
 	}
-	subOrchestrationInstances := getSubOrchestrationInstances(state.OldEvents(), state.NewEvents())
+	subOrchestrationInstances := getSubOrchestrationInstances(state.OldEvents, state.NewEvents)
 	for _, subOrchestrationInstance := range subOrchestrationInstances {
 		e := &protos.HistoryEvent{
 			EventId:   -1,

@@ -14,6 +14,7 @@ import (
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
+	"github.com/dapr/durabletask-go/backend/runtimestate"
 )
 
 type OrchestratorExecutor interface {
@@ -81,20 +82,20 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, wi *Orchest
 
 		for continueAsNewCount := 0; ; continueAsNewCount++ {
 			if continueAsNewCount > 0 {
-				w.logger.Debugf("%v: continuing-as-new with %d event(s): %s", wi.InstanceID, len(wi.State.NewEvents()), helpers.HistoryListSummary(wi.State.NewEvents()))
+				w.logger.Debugf("%v: continuing-as-new with %d event(s): %s", wi.InstanceID, len(wi.State.NewEvents), helpers.HistoryListSummary(wi.State.NewEvents))
 			} else {
 				w.logger.Debugf("%v: invoking orchestrator", wi.InstanceID)
 			}
 
 			// Run the user orchestrator code, providing the old history and new events together.
-			results, err := w.executor.ExecuteOrchestrator(ctx, wi.InstanceID, wi.State.OldEvents(), wi.State.NewEvents())
+			results, err := w.executor.ExecuteOrchestrator(ctx, wi.InstanceID, wi.State.OldEvents, wi.State.NewEvents)
 			if err != nil {
 				return fmt.Errorf("error executing orchestrator: %w", err)
 			}
 			w.logger.Debugf("%v: orchestrator returned %d action(s): %s", wi.InstanceID, len(results.Response.Actions), helpers.ActionListSummary(results.Response.Actions))
 
 			// Apply the orchestrator outputs to the orchestration state.
-			continuedAsNew, err := wi.State.ApplyActions(results.Response.Actions, helpers.TraceContextFromSpan(span))
+			continuedAsNew, err := runtimestate.ApplyActions(wi.State, results.Response.Actions, helpers.TraceContextFromSpan(span))
 			if err != nil {
 				return fmt.Errorf("failed to apply the execution result actions: %w", err)
 			}
@@ -114,14 +115,14 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, wi *Orchest
 				continue
 			}
 
-			if wi.State.IsCompleted() {
-				name, _ := wi.State.Name()
-				w.logger.Infof("%v: '%s' completed with a %s status.", wi.InstanceID, name, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()))
+			if runtimestate.IsCompleted(wi.State) {
+				name, _ := runtimestate.Name(wi.State)
+				w.logger.Infof("%v: '%s' completed with a %s status.", wi.InstanceID, name, helpers.ToRuntimeStatusString(runtimestate.RuntimeStatus(wi.State)))
 			}
 			break
 		}
 	}
-	if terminateEvent != nil && wi.State.IsCompleted() {
+	if terminateEvent != nil && runtimestate.IsCompleted(wi.State) {
 		if err := terminateSubOrchestrationInstances(ctx, w.be, wi.InstanceID, wi.State, terminateEvent); err != nil {
 			return err
 		}
@@ -141,10 +142,10 @@ func (p *orchestratorProcessor) AbandonWorkItem(ctx context.Context, wi *Orchest
 
 func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *OrchestrationWorkItem) (context.Context, trace.Span, bool) {
 	// Ignore work items for orchestrations that are completed or are in a corrupted state.
-	if !wi.State.IsValid() {
+	if !runtimestate.IsValid(wi.State) {
 		w.logger.Warnf("%v: orchestration state is invalid; dropping work item", wi.InstanceID)
 		return nil, nil, false
-	} else if wi.State.IsCompleted() {
+	} else if runtimestate.IsCompleted(wi.State) {
 		w.logger.Warnf("%v: orchestration already completed; dropping work item", wi.InstanceID)
 		return nil, nil, false
 	} else if len(wi.NewEvents) == 0 {
@@ -153,7 +154,7 @@ func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *Orchestra
 
 	// The orchestrator started event is used primarily for updating the current time as reported
 	// by the orchestration context APIs.
-	wi.State.AddEvent(&protos.HistoryEvent{
+	runtimestate.AddEvent(wi.State, &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.Now(),
 		EventType: &protos.HistoryEvent_OrchestratorStarted{
@@ -172,8 +173,8 @@ func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *Orchestra
 	// the orchestration logic for an empty set of events.
 	added := 0
 	for _, e := range wi.NewEvents {
-		if err := wi.State.AddEvent(e); err != nil {
-			if err == ErrDuplicateEvent {
+		if err := runtimestate.AddEvent(wi.State, e); err != nil {
+			if err == runtimestate.ErrDuplicateEvent {
 				w.logger.Warnf("%v: dropping duplicate event: %v", wi.InstanceID, e)
 			} else {
 				w.logger.Warnf("%v: dropping event: %v, %v", wi.InstanceID, e, err)
@@ -203,7 +204,7 @@ func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *Orchestra
 }
 
 func getOrchestrationStateDescription(wi *OrchestrationWorkItem) string {
-	name, err := wi.State.Name()
+	name, err := runtimestate.Name(wi.State)
 	if err != nil {
 		if len(wi.NewEvents) > 0 {
 			name = wi.NewEvents[0].GetExecutionStarted().GetName()
@@ -214,7 +215,7 @@ func getOrchestrationStateDescription(wi *OrchestrationWorkItem) string {
 	}
 
 	ageStr := "(new)"
-	createdAt, err := wi.State.CreatedTime()
+	createdAt, err := runtimestate.CreatedTime(wi.State)
 	if err == nil {
 		age := time.Since(createdAt)
 
@@ -222,16 +223,16 @@ func getOrchestrationStateDescription(wi *OrchestrationWorkItem) string {
 			ageStr = age.Round(time.Second).String()
 		}
 	}
-	status := helpers.ToRuntimeStatusString(wi.State.RuntimeStatus())
-	return fmt.Sprintf("name=%s, status=%s, events=%d, age=%s", name, status, len(wi.State.OldEvents()), ageStr)
+	status := helpers.ToRuntimeStatusString(runtimestate.RuntimeStatus(wi.State))
+	return fmt.Sprintf("name=%s, status=%s, events=%d, age=%s", name, status, len(wi.State.OldEvents), ageStr)
 }
 
 func (w *orchestratorProcessor) startOrResumeOrchestratorSpan(ctx context.Context, wi *OrchestrationWorkItem) (context.Context, trace.Span) {
 	// Get the trace context from the ExecutionStarted history event
 	var ptc *protos.TraceContext
 	var es *protos.ExecutionStartedEvent
-	if es = wi.State.startEvent; es != nil {
-		ptc = wi.State.startEvent.ParentTraceContext
+	if es = wi.State.StartEvent; es != nil {
+		ptc = wi.State.StartEvent.ParentTraceContext
 	} else {
 		for _, e := range wi.NewEvents {
 			if es = e.GetExecutionStarted(); es != nil {
@@ -253,7 +254,7 @@ func (w *orchestratorProcessor) startOrResumeOrchestratorSpan(ctx context.Contex
 
 	// start a new span from the updated go context
 	var span trace.Span
-	ctx, span = helpers.StartNewRunOrchestrationSpan(ctx, es, wi.State.getStartedTime())
+	ctx, span = helpers.StartNewRunOrchestrationSpan(ctx, es, runtimestate.GetStartedTime(wi.State))
 
 	// Assign or rehydrate the long-running orchestration span ID
 	if es.OrchestrationSpanID == nil {
@@ -274,16 +275,16 @@ func (w *orchestratorProcessor) startOrResumeOrchestratorSpan(ctx context.Contex
 }
 
 func (w *orchestratorProcessor) endOrchestratorSpan(ctx context.Context, wi *OrchestrationWorkItem, span trace.Span, continuedAsNew bool) {
-	if wi.State.IsCompleted() {
-		if fd, err := wi.State.FailureDetails(); err == nil {
+	if runtimestate.IsCompleted(wi.State) {
+		if fd, err := runtimestate.FailureDetails(wi.State); err == nil {
 			span.SetStatus(codes.Error, fd.ErrorMessage)
 		}
 		span.SetAttributes(attribute.KeyValue{
 			Key:   "durabletask.runtime_status",
-			Value: attribute.StringValue(helpers.ToRuntimeStatusString(wi.State.RuntimeStatus())),
+			Value: attribute.StringValue(helpers.ToRuntimeStatusString(runtimestate.RuntimeStatus(wi.State))),
 		})
-		addNotableEventsToSpan(wi.State.OldEvents(), span)
-		addNotableEventsToSpan(wi.State.NewEvents(), span)
+		addNotableEventsToSpan(wi.State.OldEvents, span)
+		addNotableEventsToSpan(wi.State.NewEvents, span)
 	} else if continuedAsNew {
 		span.SetAttributes(attribute.KeyValue{
 			Key:   "durabletask.runtime_status",

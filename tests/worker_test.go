@@ -10,6 +10,7 @@ import (
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/backend/runtimestate"
 	"github.com/dapr/durabletask-go/tests/mocks"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -61,7 +62,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 	}).Once()
 
 	ex := mocks.NewExecutor(t)
-	ex.EXPECT().ExecuteOrchestrator(anyContext, wi.InstanceID, state.OldEvents(), mock.Anything).Return(result, nil).Once()
+	ex.EXPECT().ExecuteOrchestrator(anyContext, wi.InstanceID, state.OldEvents, mock.Anything).Return(result, nil).Once()
 
 	worker := backend.NewOrchestrationWorker(be, ex, logger)
 	worker.Start(ctx)
@@ -100,7 +101,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	}
 
 	// Empty orchestration runtime state since we're starting a new execution from scratch
-	state := backend.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{})
+	state := runtimestate.NewOrchestrationRuntimeState(string(iid), []*protos.HistoryEvent{})
 
 	ctx, cancel := context.WithCancel(ctx)
 	be := mocks.NewBackend(t)

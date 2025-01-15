@@ -1,100 +1,75 @@
-package backend
+package runtimestate
 
 import (
 	"errors"
 	"fmt"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-	"google.golang.org/protobuf/types/known/wrapperspb"
-
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 var ErrDuplicateEvent = errors.New("duplicate event")
 
-type OrchestrationRuntimeState struct {
-	instanceID      api.InstanceID
-	newEvents       []*protos.HistoryEvent
-	oldEvents       []*protos.HistoryEvent
-	pendingTasks    []*protos.HistoryEvent
-	pendingTimers   []*protos.HistoryEvent
-	pendingMessages []OrchestratorMessage
-
-	startEvent      *protos.ExecutionStartedEvent
-	completedEvent  *protos.ExecutionCompletedEvent
-	createdTime     time.Time
-	lastUpdatedTime time.Time
-	completedTime   time.Time
-	continuedAsNew  bool
-	isSuspended     bool
-
-	CustomStatus *wrapperspb.StringValue
-}
-
-type OrchestratorMessage struct {
-	HistoryEvent     *HistoryEvent
-	TargetInstanceID string
-}
-
-func NewOrchestrationRuntimeState(instanceID api.InstanceID, existingHistory []*HistoryEvent) *OrchestrationRuntimeState {
-	s := &OrchestrationRuntimeState{
-		instanceID: instanceID,
-		oldEvents:  make([]*HistoryEvent, 0, len(existingHistory)),
-		newEvents:  make([]*HistoryEvent, 0, 10),
+func NewOrchestrationRuntimeState(instanceID string, existingHistory []*protos.HistoryEvent) *protos.OrchestrationRuntimeState {
+	s := &protos.OrchestrationRuntimeState{
+		InstanceId: instanceID,
+		OldEvents:  make([]*protos.HistoryEvent, 0, len(existingHistory)),
+		NewEvents:  make([]*protos.HistoryEvent, 0, 10),
 	}
 
 	for _, e := range existingHistory {
-		s.addEvent(e, false)
+		addEvent(s, e, false)
 	}
 
 	return s
 }
 
 // AddEvent appends a new history event to the orchestration history
-func (s *OrchestrationRuntimeState) AddEvent(e *HistoryEvent) error {
-	return s.addEvent(e, true)
+func AddEvent(s *protos.OrchestrationRuntimeState, e *protos.HistoryEvent) error {
+	return addEvent(s, e, true)
 }
 
-func (s *OrchestrationRuntimeState) addEvent(e *HistoryEvent, isNew bool) error {
+func addEvent(s *protos.OrchestrationRuntimeState, e *protos.HistoryEvent, isNew bool) error {
 	if startEvent := e.GetExecutionStarted(); startEvent != nil {
-		if s.startEvent != nil {
+		if s.StartEvent != nil {
 			return ErrDuplicateEvent
 		}
-		s.startEvent = startEvent
-		s.createdTime = e.Timestamp.AsTime()
+		s.StartEvent = startEvent
+		s.CreatedTime = timestamppb.New(e.Timestamp.AsTime())
 	} else if completedEvent := e.GetExecutionCompleted(); completedEvent != nil {
-		if s.completedEvent != nil {
+		if s.CompletedEvent != nil {
 			return ErrDuplicateEvent
 		}
-		s.completedEvent = completedEvent
-		s.completedTime = e.Timestamp.AsTime()
+		s.CompletedEvent = completedEvent
+		s.CompletedTime = timestamppb.New(e.Timestamp.AsTime())
 	} else if e.GetExecutionSuspended() != nil {
-		s.isSuspended = true
+		s.IsSuspended = true
 	} else if e.GetExecutionResumed() != nil {
-		s.isSuspended = false
+		s.IsSuspended = false
 	} else {
 		// TODO: Check for other possible duplicates using task IDs
 	}
 
 	if isNew {
-		s.newEvents = append(s.newEvents, e)
+		s.NewEvents = append(s.NewEvents, e)
 	} else {
-		s.oldEvents = append(s.oldEvents, e)
+		s.OldEvents = append(s.OldEvents, e)
 	}
 
-	s.lastUpdatedTime = e.Timestamp.AsTime()
+	s.LastUpdatedTime = timestamppb.New(e.Timestamp.AsTime())
 	return nil
 }
 
-func (s *OrchestrationRuntimeState) IsValid() bool {
-	if len(s.oldEvents) == 0 && len(s.newEvents) == 0 {
+func IsValid(s *protos.OrchestrationRuntimeState) bool {
+	if len(s.OldEvents) == 0 && len(s.NewEvents) == 0 {
 		// empty orchestration state
 		return true
-	} else if s.startEvent != nil {
+	} else if s.StartEvent != nil {
 		// orchestration history has a start event
 		return true
 	}
@@ -102,13 +77,13 @@ func (s *OrchestrationRuntimeState) IsValid() bool {
 }
 
 // ApplyActions takes a set of actions and updates its internal state, including populating the outbox.
-func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorAction, currentTraceContext *protos.TraceContext) (bool, error) {
+func ApplyActions(s *protos.OrchestrationRuntimeState, actions []*protos.OrchestratorAction, currentTraceContext *protos.TraceContext) (bool, error) {
 	for _, action := range actions {
 		if completedAction := action.GetCompleteOrchestration(); completedAction != nil {
 			if completedAction.OrchestrationStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW {
-				newState := NewOrchestrationRuntimeState(s.instanceID, []*protos.HistoryEvent{})
-				newState.continuedAsNew = true
-				newState.AddEvent(&protos.HistoryEvent{
+				newState := NewOrchestrationRuntimeState(s.InstanceId, []*protos.HistoryEvent{})
+				newState.ContinuedAsNew = true
+				AddEvent(newState, &protos.HistoryEvent{
 					EventId:   -1,
 					Timestamp: timestamppb.Now(),
 					EventType: &protos.HistoryEvent_OrchestratorStarted{
@@ -117,20 +92,20 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 				})
 
 				// Duplicate the start event info, updating just the input
-				newState.AddEvent(
+				AddEvent(newState,
 					&protos.HistoryEvent{
 						EventId:   -1,
 						Timestamp: timestamppb.New(time.Now()),
 						EventType: &protos.HistoryEvent_ExecutionStarted{
 							ExecutionStarted: &protos.ExecutionStartedEvent{
-								Name:           s.startEvent.Name,
-								ParentInstance: s.startEvent.ParentInstance,
+								Name:           s.StartEvent.Name,
+								ParentInstance: s.StartEvent.ParentInstance,
 								Input:          completedAction.Result,
 								OrchestrationInstance: &protos.OrchestrationInstance{
-									InstanceId:  string(s.instanceID),
+									InstanceId:  s.InstanceId,
 									ExecutionId: wrapperspb.String(uuid.New().String()),
 								},
-								ParentTraceContext: s.startEvent.ParentTraceContext,
+								ParentTraceContext: s.StartEvent.ParentTraceContext,
 							},
 						},
 					},
@@ -138,7 +113,7 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 
 				// Unprocessed "carryover" events
 				for _, e := range completedAction.CarryoverEvents {
-					newState.AddEvent(e)
+					AddEvent(newState, e)
 				}
 
 				// Overwrite the current state object with a new one
@@ -147,7 +122,7 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 				// ignore all remaining actions
 				return true, nil
 			} else {
-				s.AddEvent(&protos.HistoryEvent{
+				AddEvent(s, &protos.HistoryEvent{
 					EventId:   action.Id,
 					Timestamp: timestamppb.Now(),
 					EventType: &protos.HistoryEvent_ExecutionCompleted{
@@ -158,15 +133,15 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 						},
 					},
 				})
-				if s.startEvent.GetParentInstance() != nil {
-					msg := OrchestratorMessage{
+				if s.StartEvent.GetParentInstance() != nil {
+					msg := &protos.OrchestrationRuntimeStateMessage{
 						HistoryEvent:     &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.Now()},
-						TargetInstanceID: s.startEvent.GetParentInstance().OrchestrationInstance.GetInstanceId(),
+						TargetInstanceID: s.StartEvent.GetParentInstance().OrchestrationInstance.InstanceId,
 					}
 					if completedAction.OrchestrationStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED {
 						msg.HistoryEvent.EventType = &protos.HistoryEvent_SubOrchestrationInstanceCompleted{
 							SubOrchestrationInstanceCompleted: &protos.SubOrchestrationInstanceCompletedEvent{
-								TaskScheduledId: s.startEvent.ParentInstance.TaskScheduledId,
+								TaskScheduledId: s.StartEvent.ParentInstance.TaskScheduledId,
 								Result:          completedAction.Result,
 							},
 						}
@@ -174,16 +149,16 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 						// TODO: What is the expected result for termination?
 						msg.HistoryEvent.EventType = &protos.HistoryEvent_SubOrchestrationInstanceFailed{
 							SubOrchestrationInstanceFailed: &protos.SubOrchestrationInstanceFailedEvent{
-								TaskScheduledId: s.startEvent.ParentInstance.TaskScheduledId,
+								TaskScheduledId: s.StartEvent.ParentInstance.TaskScheduledId,
 								FailureDetails:  completedAction.FailureDetails,
 							},
 						}
 					}
-					s.pendingMessages = append(s.pendingMessages, msg)
+					s.PendingMessages = append(s.PendingMessages, msg)
 				}
 			}
 		} else if createtimer := action.GetCreateTimer(); createtimer != nil {
-			s.AddEvent(&protos.HistoryEvent{
+			AddEvent(s, &protos.HistoryEvent{
 				EventId:   action.Id,
 				Timestamp: timestamppb.New(time.Now()),
 				EventType: &protos.HistoryEvent_TimerCreated{
@@ -191,7 +166,7 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 				},
 			})
 			// TODO cant pass trace context
-			s.pendingTimers = append(s.pendingTimers, &protos.HistoryEvent{
+			s.PendingTimers = append(s.PendingTimers, &protos.HistoryEvent{
 				EventId:   -1,
 				Timestamp: timestamppb.New(time.Now()),
 				EventType: &protos.HistoryEvent_TimerFired{
@@ -214,15 +189,15 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 					},
 				},
 			}
-			s.AddEvent(scheduledEvent)
-			s.pendingTasks = append(s.pendingTasks, scheduledEvent)
+			AddEvent(s, scheduledEvent)
+			s.PendingTasks = append(s.PendingTasks, scheduledEvent)
 		} else if createSO := action.GetCreateSubOrchestration(); createSO != nil {
 			// Autogenerate an instance ID for the sub-orchestration if none is provided, using a
 			// deterministic algorithm based on the parent instance ID to help enable de-duplication.
 			if createSO.InstanceId == "" {
-				createSO.InstanceId = fmt.Sprintf("%s:%04x", s.instanceID, action.Id)
+				createSO.InstanceId = fmt.Sprintf("%s:%04x", s.InstanceId, action.Id)
 			}
-			s.AddEvent(&protos.HistoryEvent{
+			AddEvent(s, &protos.HistoryEvent{
 				EventId:   action.Id,
 				Timestamp: timestamppb.New(time.Now()),
 				EventType: &protos.HistoryEvent_SubOrchestrationInstanceCreated{
@@ -243,8 +218,8 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 						Name: createSO.Name,
 						ParentInstance: &protos.ParentInstanceInfo{
 							TaskScheduledId:       action.Id,
-							Name:                  wrapperspb.String(s.startEvent.Name),
-							OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: string(s.instanceID)},
+							Name:                  wrapperspb.String(s.StartEvent.Name),
+							OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: string(s.InstanceId)},
 						},
 						Input: createSO.Input,
 						OrchestrationInstance: &protos.OrchestrationInstance{
@@ -256,7 +231,7 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 				},
 			}
 
-			s.pendingMessages = append(s.pendingMessages, OrchestratorMessage{HistoryEvent: startEvent, TargetInstanceID: createSO.InstanceId})
+			s.PendingMessages = append(s.PendingMessages, &protos.OrchestrationRuntimeStateMessage{HistoryEvent: startEvent, TargetInstanceID: createSO.InstanceId})
 		} else if sendEvent := action.GetSendEvent(); sendEvent != nil {
 			e := &protos.HistoryEvent{
 				EventId:   action.Id,
@@ -269,11 +244,11 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 					},
 				},
 			}
-			s.AddEvent(e)
-			s.pendingMessages = append(s.pendingMessages, OrchestratorMessage{HistoryEvent: e, TargetInstanceID: sendEvent.Instance.InstanceId})
+			AddEvent(s, e)
+			s.PendingMessages = append(s.PendingMessages, &protos.OrchestrationRuntimeStateMessage{HistoryEvent: e, TargetInstanceID: sendEvent.Instance.InstanceId})
 		} else if terminate := action.GetTerminateOrchestration(); terminate != nil {
 			// Send a message to terminate the target orchestration
-			msg := OrchestratorMessage{
+			msg := &protos.OrchestrationRuntimeStateMessage{
 				TargetInstanceID: terminate.InstanceId,
 				HistoryEvent: &protos.HistoryEvent{
 					EventId:   -1,
@@ -286,7 +261,7 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 					},
 				},
 			}
-			s.pendingMessages = append(s.pendingMessages, msg)
+			s.PendingMessages = append(s.PendingMessages, msg)
 		} else {
 			return false, fmt.Errorf("unknown action type: %v", action)
 		}
@@ -295,128 +270,100 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 	return false, nil
 }
 
-func (s *OrchestrationRuntimeState) InstanceID() api.InstanceID {
-	return s.instanceID
-}
-
-func (s *OrchestrationRuntimeState) Name() (string, error) {
-	if s.startEvent == nil {
+func Name(s *protos.OrchestrationRuntimeState) (string, error) {
+	if s.StartEvent == nil {
 		return "", api.ErrNotStarted
 	}
 
-	return s.startEvent.Name, nil
+	return s.StartEvent.Name, nil
 }
 
-func (s *OrchestrationRuntimeState) Input() (string, error) {
-	if s.startEvent == nil {
+func Input(s *protos.OrchestrationRuntimeState) (string, error) {
+	if s.StartEvent == nil {
 		return "", api.ErrNotStarted
 	}
 
 	// REVIEW: Should we distinguish between no input and the empty string?
-	return s.startEvent.Input.GetValue(), nil
+	return s.StartEvent.Input.GetValue(), nil
 }
 
-func (s *OrchestrationRuntimeState) Output() (string, error) {
-	if s.completedEvent == nil {
+func Output(s *protos.OrchestrationRuntimeState) (string, error) {
+	if s.CompletedEvent == nil {
 		return "", api.ErrNotCompleted
 	}
 
 	// REVIEW: Should we distinguish between no output and the empty string?
-	return s.completedEvent.Result.GetValue(), nil
+	return s.CompletedEvent.Result.GetValue(), nil
 }
 
-func (s *OrchestrationRuntimeState) RuntimeStatus() protos.OrchestrationStatus {
-	if s.startEvent == nil {
+func RuntimeStatus(s *protos.OrchestrationRuntimeState) protos.OrchestrationStatus {
+	if s.StartEvent == nil {
 		return protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
-	} else if s.isSuspended {
+	} else if s.IsSuspended {
 		return protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED
-	} else if s.completedEvent != nil {
-		return s.completedEvent.GetOrchestrationStatus()
+	} else if s.CompletedEvent != nil {
+		return s.CompletedEvent.GetOrchestrationStatus()
 	}
 
 	return protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING
 }
 
-func (s *OrchestrationRuntimeState) CreatedTime() (time.Time, error) {
-	if s.startEvent == nil {
+func CreatedTime(s *protos.OrchestrationRuntimeState) (time.Time, error) {
+	if s.StartEvent == nil {
 		return time.Time{}, api.ErrNotStarted
 	}
 
-	return s.createdTime, nil
+	return s.CreatedTime.AsTime(), nil
 }
 
-func (s *OrchestrationRuntimeState) LastUpdatedTime() (time.Time, error) {
-	if s.startEvent == nil {
+func LastUpdatedTime(s *protos.OrchestrationRuntimeState) (time.Time, error) {
+	if s.StartEvent == nil {
 		return time.Time{}, api.ErrNotStarted
 	}
 
-	return s.lastUpdatedTime, nil
+	return s.LastUpdatedTime.AsTime(), nil
 }
 
-func (s *OrchestrationRuntimeState) CompletedTime() (time.Time, error) {
-	if s.completedEvent == nil {
+func CompletedTime(s *protos.OrchestrationRuntimeState) (time.Time, error) {
+	if s.CompletedEvent == nil {
 		return time.Time{}, api.ErrNotCompleted
 	}
 
-	return s.completedTime, nil
+	return s.CompletedTime.AsTime(), nil
 }
 
-func (s *OrchestrationRuntimeState) IsCompleted() bool {
-	return s.completedEvent != nil
-}
-
-func (s *OrchestrationRuntimeState) OldEvents() []*HistoryEvent {
-	return s.oldEvents
-}
-
-func (s *OrchestrationRuntimeState) NewEvents() []*HistoryEvent {
-	return s.newEvents
-}
-
-func (s *OrchestrationRuntimeState) FailureDetails() (*TaskFailureDetails, error) {
-	if s.completedEvent == nil {
+func FailureDetails(s *protos.OrchestrationRuntimeState) (*protos.TaskFailureDetails, error) {
+	if s.CompletedEvent == nil {
 		return nil, api.ErrNotCompleted
-	} else if s.completedEvent.FailureDetails == nil {
+	} else if s.CompletedEvent.FailureDetails == nil {
 		return nil, api.ErrNoFailures
 	}
 
-	return s.completedEvent.FailureDetails, nil
-}
-
-func (s *OrchestrationRuntimeState) PendingTimers() []*HistoryEvent {
-	return s.pendingTimers
-}
-
-func (s *OrchestrationRuntimeState) PendingTasks() []*HistoryEvent {
-	return s.pendingTasks
-}
-
-func (s *OrchestrationRuntimeState) PendingMessages() []OrchestratorMessage {
-	return s.pendingMessages
-}
-
-func (s *OrchestrationRuntimeState) ContinuedAsNew() bool {
-	return s.continuedAsNew
+	return s.CompletedEvent.FailureDetails, nil
 }
 
 // useful for abruptly stopping any execution of an orchestration from the backend
-func (s *OrchestrationRuntimeState) CancelPending() {
-	s.newEvents = []*protos.HistoryEvent{}
-	s.pendingMessages = []OrchestratorMessage{}
-	s.pendingTasks = []*protos.HistoryEvent{}
-	s.pendingTimers = []*protos.HistoryEvent{}
+func CancelPending(s *protos.OrchestrationRuntimeState) {
+	s.NewEvents = []*protos.HistoryEvent{}
+	s.PendingMessages = []*protos.OrchestrationRuntimeStateMessage{}
+	s.PendingTasks = []*protos.HistoryEvent{}
+	s.PendingTimers = []*protos.HistoryEvent{}
 }
 
-func (s *OrchestrationRuntimeState) String() string {
-	return fmt.Sprintf("%v:%v", s.instanceID, helpers.ToRuntimeStatusString(s.RuntimeStatus()))
+func String(s *protos.OrchestrationRuntimeState) string {
+	return fmt.Sprintf("%v:%v", s.InstanceId, helpers.ToRuntimeStatusString(RuntimeStatus(s)))
 }
 
-func (s *OrchestrationRuntimeState) getStartedTime() time.Time {
+func GetStartedTime(s *protos.OrchestrationRuntimeState) time.Time {
 	var startTime time.Time
-	if len(s.oldEvents) > 0 {
-		startTime = s.oldEvents[0].Timestamp.AsTime()
-	} else if len(s.newEvents) > 0 {
-		startTime = s.newEvents[0].Timestamp.AsTime()
+	if len(s.OldEvents) > 0 {
+		startTime = s.OldEvents[0].Timestamp.AsTime()
+	} else if len(s.NewEvents) > 0 {
+		startTime = s.NewEvents[0].Timestamp.AsTime()
 	}
 	return startTime
+}
+
+func IsCompleted(s *protos.OrchestrationRuntimeState) bool {
+	return s.CompletedEvent != nil
 }

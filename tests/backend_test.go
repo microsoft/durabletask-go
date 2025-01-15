@@ -11,6 +11,7 @@ import (
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/backend/runtimestate"
 	"github.com/dapr/durabletask-go/backend/sqlite"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -59,14 +60,14 @@ func Test_NewOrchestrationWorkItem_Single(t *testing.T) {
 				}
 				if state, ok := getOrchestrationRuntimeState(t, be, wi); ok {
 					// initial state should be empty since this is a new instance
-					iid := state.InstanceID()
-					assert.Equal(t, wi.InstanceID, iid)
-					_, err := state.Name()
+					iid := state.InstanceId
+					assert.Equal(t, wi.InstanceID, api.InstanceID(iid))
+					_, err := runtimestate.Name(state)
 					assert.ErrorIs(t, err, api.ErrNotStarted)
-					_, err = state.Input()
+					_, err = runtimestate.Input(state)
 					assert.ErrorIs(t, err, api.ErrNotStarted)
-					assert.Equal(t, 0, len(state.NewEvents()))
-					assert.Equal(t, 0, len(state.OldEvents()))
+					assert.Equal(t, 0, len(state.NewEvents))
+					assert.Equal(t, 0, len(state.OldEvents))
 				}
 			}
 		}
@@ -100,12 +101,12 @@ func Test_NewOrchestrationWorkItem_Multiple(t *testing.T) {
 				}
 				if state, ok := getOrchestrationRuntimeState(t, be, wi); ok {
 					// initial state should be empty since this is a new instance
-					_, err := state.Name()
+					_, err := runtimestate.Name(state)
 					assert.ErrorIs(t, err, api.ErrNotStarted)
-					_, err = state.Input()
+					_, err = runtimestate.Input(state)
 					assert.ErrorIs(t, err, api.ErrNotStarted)
-					assert.Equal(t, 0, len(state.NewEvents()))
-					assert.Equal(t, 0, len(state.OldEvents()))
+					assert.Equal(t, 0, len(state.NewEvents))
+					assert.Equal(t, 0, len(state.OldEvents))
 				}
 			}
 		}
@@ -388,8 +389,8 @@ func Test_PurgeOrchestrationState(t *testing.T) {
 		assert.NoError(t, err)
 
 		// The state should be empty
-		assert.Equal(t, 0, len(state.NewEvents()))
-		assert.Equal(t, 0, len(state.OldEvents()))
+		assert.Equal(t, 0, len(state.NewEvents))
+		assert.Equal(t, 0, len(state.OldEvents))
 
 		// Attempting to purge again should fail with api.ErrInstanceNotFound
 		if err := be.PurgeOrchestrationState(ctx, instanceID); !assert.ErrorIs(t, err, api.ErrInstanceNotFound) {
@@ -424,32 +425,32 @@ func workItemProcessingTestLogic(
 			if state, ok := getOrchestrationRuntimeState(t, be, wi); ok {
 				// Update the state with new events. Normally the worker logic would do this.
 				for _, e := range wi.NewEvents {
-					state.AddEvent(e)
+					runtimestate.AddEvent(state, e)
 				}
 
 				actions := getOrchestratorActions()
-				_, err := state.ApplyActions(actions, nil)
+				_, err := runtimestate.ApplyActions(state, actions, nil)
 				if assert.NoError(t, err) {
 					wi.State = state
 					err := be.CompleteOrchestrationWorkItem(ctx, wi)
 					if assert.NoError(t, err) {
 						// Validate runtime state
 						if state, ok = getOrchestrationRuntimeState(t, be, wi); ok {
-							createdTime, err := state.CreatedTime()
+							createdTime, err := runtimestate.CreatedTime(state)
 							if assert.NoError(t, err) {
 								assert.GreaterOrEqual(t, createdTime, startTime)
 							}
 
 							// State should be initialized with only "old" events
-							assert.Empty(t, state.NewEvents())
-							assert.NotEmpty(t, state.OldEvents())
+							assert.Empty(t, state.NewEvents)
+							assert.NotEmpty(t, state.OldEvents)
 
 							// Validate orchestration metadata
-							if metadata, ok := getOrchestrationMetadata(t, be, state.InstanceID()); ok {
+							if metadata, ok := getOrchestrationMetadata(t, be, api.InstanceID(state.InstanceId)); ok {
 								assert.Equal(t, defaultName, metadata.Name)
 								assert.Equal(t, defaultInput, metadata.Input.Value)
 								assert.Equal(t, createdTime, metadata.CreatedAt.AsTime())
-								assert.Equal(t, state.RuntimeStatus(), metadata.RuntimeStatus)
+								assert.Equal(t, runtimestate.RuntimeStatus(state), metadata.RuntimeStatus)
 
 								validateMetadata(metadata)
 							}
@@ -490,8 +491,8 @@ func getOrchestrationWorkItem(t assert.TestingT, be backend.Backend, expectedIns
 func getOrchestrationRuntimeState(t assert.TestingT, be backend.Backend, wi *backend.OrchestrationWorkItem) (*backend.OrchestrationRuntimeState, bool) {
 	state, err := be.GetOrchestrationRuntimeState(ctx, wi)
 	if assert.NoError(t, err) && assert.NotNil(t, state) {
-		iid := state.InstanceID()
-		return state, assert.Equal(t, wi.InstanceID, iid)
+		iid := state.InstanceId
+		return state, assert.Equal(t, wi.InstanceID, api.InstanceID(iid))
 	}
 
 	return nil, false

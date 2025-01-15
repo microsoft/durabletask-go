@@ -15,6 +15,7 @@ import (
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/backend/runtimestate"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -218,7 +219,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	isCreated := false
 	isCompleted := false
 
-	for _, e := range wi.State.NewEvents() {
+	for _, e := range wi.State.NewEvents {
 		if es := e.GetExecutionStarted(); es != nil {
 			if isCreated {
 				// TODO: Log warning about duplicate start event
@@ -257,7 +258,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 
 	// TODO: Support for stickiness, which would extend the LockExpiration
 	sqlSB.WriteString("[RuntimeStatus] = ?, [LastUpdatedTime] = ?, [LockExpiration] = NULL WHERE [InstanceID] = ? AND [LockedBy] = ?")
-	sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()), now, string(wi.InstanceID), wi.LockedBy)
+	sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(runtimestate.RuntimeStatus(wi.State)), now, string(wi.InstanceID), wi.LockedBy)
 
 	result, err := tx.ExecContext(ctx, sqlSB.String(), sqlUpdateArgs...)
 	if err != nil {
@@ -272,21 +273,21 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	}
 
 	// If continue-as-new, delete all existing history
-	if wi.State.ContinuedAsNew() {
+	if wi.State.ContinuedAsNew {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM History WHERE InstanceID = ?", string(wi.InstanceID)); err != nil {
 			return fmt.Errorf("failed to delete from History table: %w", err)
 		}
 	}
 
 	// Save new history events
-	newHistoryCount := len(wi.State.NewEvents())
+	newHistoryCount := len(wi.State.NewEvents)
 	if newHistoryCount > 0 {
 		query := "INSERT INTO History ([InstanceID], [SequenceNumber], [EventPayload]) VALUES (?, ?, ?)" +
 			strings.Repeat(", (?, ?, ?)", newHistoryCount-1)
 
 		args := make([]interface{}, 0, newHistoryCount*3)
-		nextSequenceNumber := len(wi.State.OldEvents())
-		for _, e := range wi.State.NewEvents() {
+		nextSequenceNumber := len(wi.State.OldEvents)
+		for _, e := range wi.State.NewEvents {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
 				return err
@@ -303,13 +304,13 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	}
 
 	// Save outbound activity tasks
-	newActivityCount := len(wi.State.PendingTasks())
+	newActivityCount := len(wi.State.PendingTasks)
 	if newActivityCount > 0 {
 		insertSql := "INSERT INTO NewTasks ([InstanceID], [EventPayload]) VALUES (?, ?)" +
 			strings.Repeat(", (?, ?)", newActivityCount-1)
 
 		sqlInsertArgs := make([]interface{}, 0, newActivityCount*2)
-		for _, e := range wi.State.PendingTasks() {
+		for _, e := range wi.State.PendingTasks {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
 				return err
@@ -325,13 +326,13 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	}
 
 	// Save outbound orchestrator events
-	newEventCount := len(wi.State.PendingTimers()) + len(wi.State.PendingMessages())
+	newEventCount := len(wi.State.PendingTimers) + len(wi.State.PendingMessages)
 	if newEventCount > 0 {
 		insertSql := "INSERT INTO NewEvents ([InstanceID], [EventPayload], [VisibleTime]) VALUES (?, ?, ?)" +
 			strings.Repeat(", (?, ?, ?)", newEventCount-1)
 
 		sqlInsertArgs := make([]interface{}, 0, newEventCount*3)
-		for _, e := range wi.State.PendingTimers() {
+		for _, e := range wi.State.PendingTimers {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
 				return err
@@ -341,14 +342,14 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 			sqlInsertArgs = append(sqlInsertArgs, string(wi.InstanceID), eventPayload, visibileTime)
 		}
 
-		for _, msg := range wi.State.PendingMessages() {
+		for _, msg := range wi.State.PendingMessages {
 			if es := msg.HistoryEvent.GetExecutionStarted(); es != nil {
 				// Need to insert a new row into the DB
 				if _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, backend.WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
 					OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED},
 					Action:          api.REUSE_ID_ACTION_TERMINATE,
 				})); err != nil {
-					if err == backend.ErrDuplicateEvent {
+					if err == runtimestate.ErrDuplicateEvent {
 						be.logger.Warnf(
 							"%v: dropping sub-orchestration creation event because an instance with the target ID (%v) already exists.",
 							wi.InstanceID,
@@ -779,7 +780,7 @@ func (be *sqliteBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *b
 		existingEvents = append(existingEvents, e)
 	}
 
-	state := backend.NewOrchestrationRuntimeState(wi.InstanceID, existingEvents)
+	state := runtimestate.NewOrchestrationRuntimeState(string(wi.InstanceID), existingEvents)
 	return state, nil
 }
 
