@@ -231,14 +231,15 @@ func makeOrchestrationMetadata(resp *protos.GetInstanceResponse) (*backend.Orche
 		return nil, fmt.Errorf("orchestration state is nil")
 	}
 	metadata := &backend.OrchestrationMetadata{
-		InstanceId:    resp.OrchestrationState.InstanceId,
-		Name:          resp.OrchestrationState.Name,
-		RuntimeStatus: resp.OrchestrationState.OrchestrationStatus,
-		Input:         resp.OrchestrationState.Input,
-		CustomStatus:  resp.OrchestrationState.CustomStatus,
-		Output:        resp.OrchestrationState.Output,
-		CreatedAt:     resp.OrchestrationState.CreatedTimestamp,
-		LastUpdatedAt: resp.OrchestrationState.LastUpdatedTimestamp,
+		InstanceId:     resp.OrchestrationState.InstanceId,
+		Name:           resp.OrchestrationState.Name,
+		RuntimeStatus:  resp.OrchestrationState.OrchestrationStatus,
+		Input:          resp.OrchestrationState.Input,
+		CustomStatus:   resp.OrchestrationState.CustomStatus,
+		Output:         resp.OrchestrationState.Output,
+		CreatedAt:      resp.OrchestrationState.CreatedTimestamp,
+		LastUpdatedAt:  resp.OrchestrationState.LastUpdatedTimestamp,
+		FailureDetails: resp.OrchestrationState.FailureDetails,
 	}
 	return metadata, nil
 }
