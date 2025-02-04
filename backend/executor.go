@@ -425,7 +425,10 @@ func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInst
 	if err != nil {
 		return resp, fmt.Errorf("failed to purge orchestration state: %w", err)
 	}
-	return resp, nil
+
+	_, err = g.WaitForInstanceCompletion(ctx, &protos.GetInstanceRequest{InstanceId: req.GetInstanceId()})
+
+	return resp, err
 }
 
 // QueryInstances implements protos.TaskHubSidecarServiceServer
@@ -493,7 +496,10 @@ func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.Termin
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
 		return nil, fmt.Errorf("failed to submit termination request: %w", err)
 	}
-	return &protos.TerminateResponse{}, nil
+
+	_, err := g.WaitForInstanceCompletion(ctx, &protos.GetInstanceRequest{InstanceId: req.InstanceId})
+
+	return &protos.TerminateResponse{}, err
 }
 
 // SuspendInstance implements protos.TaskHubSidecarServiceServer
@@ -515,7 +521,14 @@ func (g *grpcExecutor) SuspendInstance(ctx context.Context, req *protos.SuspendR
 		return nil, err
 	}
 
-	return &protos.SuspendResponse{}, nil
+	_, err := g.waitForInstance(ctx, &protos.GetInstanceRequest{
+		InstanceId: req.InstanceId,
+	}, func(metadata *OrchestrationMetadata) bool {
+		return metadata.RuntimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED ||
+			api.OrchestrationMetadataIsComplete(metadata)
+	})
+
+	return &protos.SuspendResponse{}, err
 }
 
 // ResumeInstance implements protos.TaskHubSidecarServiceServer
@@ -537,7 +550,14 @@ func (g *grpcExecutor) ResumeInstance(ctx context.Context, req *protos.ResumeReq
 		return nil, err
 	}
 
-	return &protos.ResumeResponse{}, nil
+	_, err := g.waitForInstance(ctx, &protos.GetInstanceRequest{
+		InstanceId: req.InstanceId,
+	}, func(metadata *OrchestrationMetadata) bool {
+		return metadata.RuntimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING ||
+			api.OrchestrationMetadataIsComplete(metadata)
+	})
+
+	return &protos.ResumeResponse{}, err
 }
 
 // WaitForInstanceCompletion implements protos.TaskHubSidecarServiceServer

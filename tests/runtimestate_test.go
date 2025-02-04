@@ -231,7 +231,7 @@ func Test_RuntimeState_ContinueAsNew(t *testing.T) {
 					assert.Equal(t, expectedName, ec.Name)
 				}
 				if input, err := runtimestate.Input(state); assert.NoError(t, err) {
-					assert.Equal(t, continueAsNewInput, input)
+					assert.Equal(t, continueAsNewInput, input.GetValue())
 				}
 			}
 			assert.NotNil(t, state.NewEvents[2].Timestamp)

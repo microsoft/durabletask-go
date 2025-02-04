@@ -278,22 +278,22 @@ func Name(s *protos.OrchestrationRuntimeState) (string, error) {
 	return s.StartEvent.Name, nil
 }
 
-func Input(s *protos.OrchestrationRuntimeState) (string, error) {
+func Input(s *protos.OrchestrationRuntimeState) (*wrapperspb.StringValue, error) {
 	if s.StartEvent == nil {
-		return "", api.ErrNotStarted
+		return nil, api.ErrNotStarted
 	}
 
 	// REVIEW: Should we distinguish between no input and the empty string?
-	return s.StartEvent.Input.GetValue(), nil
+	return s.StartEvent.Input, nil
 }
 
-func Output(s *protos.OrchestrationRuntimeState) (string, error) {
+func Output(s *protos.OrchestrationRuntimeState) (*wrapperspb.StringValue, error) {
 	if s.CompletedEvent == nil {
-		return "", api.ErrNotCompleted
+		return nil, api.ErrNotCompleted
 	}
 
 	// REVIEW: Should we distinguish between no output and the empty string?
-	return s.CompletedEvent.Result.GetValue(), nil
+	return s.CompletedEvent.Result, nil
 }
 
 func RuntimeStatus(s *protos.OrchestrationRuntimeState) protos.OrchestrationStatus {
