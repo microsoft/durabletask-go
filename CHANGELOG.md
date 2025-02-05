@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make WaitForOrchestrationXXX gRPC APIs resilient ([#80](https://github.com/microsoft/durabletask-go/pull/80)) - by [@famarting](https://github.com/famarting)
 - Improve worker shutdown logic ([#77](https://github.com/microsoft/durabletask-go/pull/77)) - by [@famarting](https://github.com/famarting)
 - Fix GetInstance gRPC API to return not found when instance is not found ([#87](https://github.com/microsoft/durabletask-go/pull/87)) - by [@cgillum](https://github.com/cgillum)
+- Bump golang.org/x/crypto from 0.27.0 to 0.31.0 ([#91](https://github.com/microsoft/durabletask-go/pull/91)) - by [@dependabot](https://github.com/apps/dependabot)
 
 ## [v0.5.0] - 2024-06-28
 
