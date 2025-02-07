@@ -100,11 +100,10 @@ func Test_Grpc_WaitForInstanceStart_Timeout(t *testing.T) {
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
 
-	id, err := grpcClient.ScheduleNewOrchestration(ctx, "WaitForInstanceStartThrowsException", api.WithInput("世界"))
-	require.NoError(t, err)
+	go grpcClient.ScheduleNewOrchestration(ctx, "WaitForInstanceStartThrowsException", api.WithInput("世界"), api.WithInstanceID("helloworld"))
 	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, time.Second)
 	defer cancelTimeout()
-	_, err = grpcClient.WaitForOrchestrationStart(timeoutCtx, id, api.WithFetchPayloads(true))
+	_, err := grpcClient.WaitForOrchestrationStart(timeoutCtx, "helloworld", api.WithFetchPayloads(true))
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "context deadline exceeded")
 	}
@@ -121,11 +120,10 @@ func Test_Grpc_WaitForInstanceStart_ConnectionResume(t *testing.T) {
 
 	cancelListener := startGrpcListener(t, r)
 
-	id, err := grpcClient.ScheduleNewOrchestration(ctx, "WaitForInstanceStartThrowsException", api.WithInput("世界"))
-	require.NoError(t, err)
+	go grpcClient.ScheduleNewOrchestration(ctx, "WaitForInstanceStartThrowsException", api.WithInput("世界"), api.WithInstanceID("worldhello"))
 	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, time.Second)
 	defer cancelTimeout()
-	_, err = grpcClient.WaitForOrchestrationStart(timeoutCtx, id, api.WithFetchPayloads(true))
+	_, err := grpcClient.WaitForOrchestrationStart(timeoutCtx, "worldhello", api.WithFetchPayloads(true))
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "context deadline exceeded")
 	}
@@ -139,7 +137,7 @@ func Test_Grpc_WaitForInstanceStart_ConnectionResume(t *testing.T) {
 	// workitem should be retried and completed.
 	timeoutCtx, cancelTimeout = context.WithTimeout(ctx, 30*time.Second)
 	defer cancelTimeout()
-	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
+	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, "worldhello", api.WithFetchPayloads(true))
 	require.NoError(t, err)
 	assert.True(t, api.OrchestrationMetadataIsComplete(metadata))
 	assert.Equal(t, "42", metadata.Output.Value)

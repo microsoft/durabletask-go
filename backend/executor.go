@@ -478,6 +478,11 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 		return nil, err
 	}
 
+	_, err := g.WaitForInstanceStart(ctx, &protos.GetInstanceRequest{InstanceId: instanceID})
+	if err != nil {
+		return nil, err
+	}
+
 	return &protos.CreateInstanceResponse{InstanceId: instanceID}, nil
 }
 
