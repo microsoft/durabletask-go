@@ -10,16 +10,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
 	"github.com/dapr/durabletask-go/backend/sqlite"
 	"github.com/dapr/durabletask-go/client"
 	"github.com/dapr/durabletask-go/task"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 var (
@@ -177,6 +178,10 @@ func Test_Grpc_HelloOrchestration(t *testing.T) {
 	assert.Equal(t, `"Hello, 世界!"`, metadata.Output.Value)
 	assert.Equal(t, "hello-test", metadata.CustomStatus.Value)
 	time.Sleep(1 * time.Second)
+
+	err = grpcClient.PurgeOrchestrationState(ctx, id)
+	assert.NoError(t, err)
+
 }
 
 func Test_Grpc_SuspendResume(t *testing.T) {
