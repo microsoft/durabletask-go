@@ -426,9 +426,7 @@ func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInst
 		return resp, fmt.Errorf("failed to purge orchestration state: %w", err)
 	}
 
-	_, err = g.WaitForInstanceCompletion(ctx, &protos.GetInstanceRequest{InstanceId: req.GetInstanceId()})
-
-	return resp, err
+	return resp, nil
 }
 
 // QueryInstances implements protos.TaskHubSidecarServiceServer
