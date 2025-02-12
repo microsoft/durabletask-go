@@ -425,9 +425,7 @@ func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInst
 	if err != nil {
 		return resp, fmt.Errorf("failed to purge orchestration state: %w", err)
 	}
-
-	_, err = g.WaitForInstanceCompletion(ctx, &protos.GetInstanceRequest{InstanceId: req.GetInstanceId()})
-
+	
 	return resp, err
 }
 
