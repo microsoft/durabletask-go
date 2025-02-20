@@ -780,7 +780,7 @@ func (be *sqliteBackend) GetOrchestrationRuntimeState(ctx context.Context, wi *b
 		existingEvents = append(existingEvents, e)
 	}
 
-	state := runtimestate.NewOrchestrationRuntimeState(string(wi.InstanceID), existingEvents)
+	state := runtimestate.NewOrchestrationRuntimeState(string(wi.InstanceID), nil, existingEvents)
 	return state, nil
 }
 

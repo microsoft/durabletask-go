@@ -101,7 +101,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 	}
 
 	// Empty orchestration runtime state since we're starting a new execution from scratch
-	state := runtimestate.NewOrchestrationRuntimeState(string(iid), []*protos.HistoryEvent{})
+	state := runtimestate.NewOrchestrationRuntimeState(string(iid), nil, []*protos.HistoryEvent{})
 
 	ctx, cancel := context.WithCancel(ctx)
 	be := mocks.NewBackend(t)

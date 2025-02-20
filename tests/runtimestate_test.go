@@ -30,7 +30,7 @@ func Test_NewOrchestration(t *testing.T) {
 		},
 	}
 
-	s := runtimestate.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{e})
+	s := runtimestate.NewOrchestrationRuntimeState(iid, nil, []*protos.HistoryEvent{e})
 	assert.Equal(t, api.InstanceID(iid), api.InstanceID(s.InstanceId))
 
 	actualName, err := runtimestate.Name(s)
@@ -83,7 +83,7 @@ func Test_CompletedOrchestration(t *testing.T) {
 		},
 	}}
 
-	s := runtimestate.NewOrchestrationRuntimeState(iid, events)
+	s := runtimestate.NewOrchestrationRuntimeState(iid, nil, events)
 	assert.Equal(t, api.InstanceID(iid), api.InstanceID(s.InstanceId))
 
 	actualName, err := runtimestate.Name(s)
@@ -114,7 +114,7 @@ func Test_CompletedSubOrchestration(t *testing.T) {
 	// TODO: Loop through different completion status values
 	status := protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
 
-	s := runtimestate.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
+	s := runtimestate.NewOrchestrationRuntimeState("abc", nil, []*protos.HistoryEvent{
 		{
 			EventId:   -1,
 			Timestamp: timestamppb.New(time.Now()),
@@ -148,7 +148,7 @@ func Test_CompletedSubOrchestration(t *testing.T) {
 		},
 	}
 
-	continuedAsNew, err := runtimestate.ApplyActions(s, actions, nil)
+	continuedAsNew, err := runtimestate.ApplyActions(s, nil, actions, nil)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, s.NewEvents, 1) {
 			e := s.NewEvents[0]
@@ -179,7 +179,7 @@ func Test_RuntimeState_ContinueAsNew(t *testing.T) {
 	eventName := "MyRaisedEvent"
 	eventPayload := "MyEventPayload"
 
-	state := runtimestate.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{
+	state := runtimestate.NewOrchestrationRuntimeState(iid, nil, []*protos.HistoryEvent{
 		{
 			EventId:   -1,
 			Timestamp: timestamppb.New(time.Now()),
@@ -217,7 +217,7 @@ func Test_RuntimeState_ContinueAsNew(t *testing.T) {
 		},
 	}
 
-	continuedAsNew, err := runtimestate.ApplyActions(state, actions, nil)
+	continuedAsNew, err := runtimestate.ApplyActions(state, nil, actions, nil)
 	if assert.NoError(t, err) && assert.True(t, continuedAsNew) {
 		if assert.Len(t, state.NewEvents, 3) {
 			assert.NotNil(t, state.NewEvents[0].Timestamp)
@@ -250,7 +250,7 @@ func Test_CreateTimer(t *testing.T) {
 	const iid = "abc"
 	expectedFireAt := time.Now().UTC().Add(72 * time.Hour)
 
-	s := runtimestate.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{
+	s := runtimestate.NewOrchestrationRuntimeState(iid, nil, []*protos.HistoryEvent{
 		{
 			EventId:   -1,
 			Timestamp: timestamppb.New(time.Now()),
@@ -278,7 +278,7 @@ func Test_CreateTimer(t *testing.T) {
 
 	}
 
-	continuedAsNew, err := runtimestate.ApplyActions(s, actions, nil)
+	continuedAsNew, err := runtimestate.ApplyActions(s, nil, actions, nil)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, s.NewEvents, timerCount) {
 			for _, e := range s.NewEvents {
@@ -307,7 +307,7 @@ func Test_ScheduleTask(t *testing.T) {
 	expectedName := "MyActivity"
 	expectedInput := "{\"Foo\":5}"
 
-	state := runtimestate.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{
+	state := runtimestate.NewOrchestrationRuntimeState(iid, nil, []*protos.HistoryEvent{
 		{
 			EventId:   -1,
 			Timestamp: timestamppb.New(time.Now()),
@@ -334,7 +334,7 @@ func Test_ScheduleTask(t *testing.T) {
 	}
 
 	tc := &protos.TraceContext{TraceParent: "trace", TraceState: wrapperspb.String("state")}
-	continuedAsNew, err := runtimestate.ApplyActions(state, actions, tc)
+	continuedAsNew, err := runtimestate.ApplyActions(state, nil, actions, tc)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, state.NewEvents, 1) {
 			e := state.NewEvents[0]
@@ -372,7 +372,7 @@ func Test_CreateSubOrchestration(t *testing.T) {
 	expectedTraceParent := "trace"
 	expectedTraceState := "trace_state"
 
-	state := runtimestate.NewOrchestrationRuntimeState(iid, []*protos.HistoryEvent{
+	state := runtimestate.NewOrchestrationRuntimeState(iid, nil, []*protos.HistoryEvent{
 		{
 			EventId:   -1,
 			Timestamp: timestamppb.New(time.Now()),
@@ -405,7 +405,7 @@ func Test_CreateSubOrchestration(t *testing.T) {
 		TraceParent: expectedTraceParent,
 		TraceState:  wrapperspb.String(expectedTraceState),
 	}
-	continuedAsNew, err := runtimestate.ApplyActions(state, actions, tc)
+	continuedAsNew, err := runtimestate.ApplyActions(state, nil, actions, tc)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, state.NewEvents, 1) {
 			e := state.NewEvents[0]
@@ -449,7 +449,7 @@ func Test_SendEvent(t *testing.T) {
 	expectedEventName := "MyEvent"
 	expectedInput := "foo"
 
-	s := runtimestate.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
+	s := runtimestate.NewOrchestrationRuntimeState("abc", nil, []*protos.HistoryEvent{
 		{
 			EventId:   -1,
 			Timestamp: timestamppb.New(time.Now()),
@@ -479,7 +479,7 @@ func Test_SendEvent(t *testing.T) {
 		},
 	}
 
-	continuedAsNew, err := runtimestate.ApplyActions(s, actions, nil)
+	continuedAsNew, err := runtimestate.ApplyActions(s, nil, actions, nil)
 	if assert.NoError(t, err) && assert.False(t, continuedAsNew) {
 		if assert.Len(t, s.NewEvents, 1) {
 			e := s.NewEvents[0]
@@ -501,9 +501,9 @@ func Test_SendEvent(t *testing.T) {
 }
 
 func Test_StateIsValid(t *testing.T) {
-	s := runtimestate.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+	s := runtimestate.NewOrchestrationRuntimeState("abc", nil, []*protos.HistoryEvent{})
 	assert.True(t, runtimestate.IsValid(s))
-	s = runtimestate.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
+	s = runtimestate.NewOrchestrationRuntimeState("abc", nil, []*protos.HistoryEvent{
 		{
 			EventId:   -1,
 			Timestamp: timestamppb.New(time.Now()),
@@ -519,7 +519,7 @@ func Test_StateIsValid(t *testing.T) {
 		},
 	})
 	assert.True(t, runtimestate.IsValid(s))
-	s = runtimestate.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{
+	s = runtimestate.NewOrchestrationRuntimeState("abc", nil, []*protos.HistoryEvent{
 		{
 			EventId:   -1,
 			Timestamp: timestamppb.New(time.Now()),
@@ -534,7 +534,7 @@ func Test_StateIsValid(t *testing.T) {
 }
 
 func Test_DuplicateEvents(t *testing.T) {
-	s := runtimestate.NewOrchestrationRuntimeState("abc", []*protos.HistoryEvent{})
+	s := runtimestate.NewOrchestrationRuntimeState("abc", nil, []*protos.HistoryEvent{})
 	err := runtimestate.AddEvent(s, &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.New(time.Now()),
