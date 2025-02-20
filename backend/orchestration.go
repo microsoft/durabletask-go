@@ -95,11 +95,10 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, wi *Orchest
 			w.logger.Debugf("%v: orchestrator returned %d action(s): %s", wi.InstanceID, len(results.Response.Actions), helpers.ActionListSummary(results.Response.Actions))
 
 			// Apply the orchestrator outputs to the orchestration state.
-			continuedAsNew, err := runtimestate.ApplyActions(wi.State, results.Response.Actions, helpers.TraceContextFromSpan(span))
+			continuedAsNew, err := runtimestate.ApplyActions(wi.State, results.Response.CustomStatus, results.Response.Actions, helpers.TraceContextFromSpan(span))
 			if err != nil {
 				return fmt.Errorf("failed to apply the execution result actions: %w", err)
 			}
-			wi.State.CustomStatus = results.Response.CustomStatus
 
 			// When continuing-as-new, we re-execute the orchestrator from the beginning with a truncated state in a tight loop
 			// until the orchestrator performs some non-continue-as-new action.

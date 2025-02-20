@@ -15,11 +15,12 @@ import (
 
 var ErrDuplicateEvent = errors.New("duplicate event")
 
-func NewOrchestrationRuntimeState(instanceID string, existingHistory []*protos.HistoryEvent) *protos.OrchestrationRuntimeState {
+func NewOrchestrationRuntimeState(instanceID string, customStatus *wrapperspb.StringValue, existingHistory []*protos.HistoryEvent) *protos.OrchestrationRuntimeState {
 	s := &protos.OrchestrationRuntimeState{
-		InstanceId: instanceID,
-		OldEvents:  make([]*protos.HistoryEvent, 0, len(existingHistory)),
-		NewEvents:  make([]*protos.HistoryEvent, 0, 10),
+		InstanceId:   instanceID,
+		OldEvents:    make([]*protos.HistoryEvent, 0, len(existingHistory)),
+		NewEvents:    make([]*protos.HistoryEvent, 0, 10),
+		CustomStatus: customStatus,
 	}
 
 	for _, e := range existingHistory {
@@ -77,11 +78,12 @@ func IsValid(s *protos.OrchestrationRuntimeState) bool {
 }
 
 // ApplyActions takes a set of actions and updates its internal state, including populating the outbox.
-func ApplyActions(s *protos.OrchestrationRuntimeState, actions []*protos.OrchestratorAction, currentTraceContext *protos.TraceContext) (bool, error) {
+func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.StringValue, actions []*protos.OrchestratorAction, currentTraceContext *protos.TraceContext) (bool, error) {
+	s.CustomStatus = customStatus
 	for _, action := range actions {
 		if completedAction := action.GetCompleteOrchestration(); completedAction != nil {
 			if completedAction.OrchestrationStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW {
-				newState := NewOrchestrationRuntimeState(s.InstanceId, []*protos.HistoryEvent{})
+				newState := NewOrchestrationRuntimeState(s.InstanceId, customStatus, []*protos.HistoryEvent{})
 				newState.ContinuedAsNew = true
 				AddEvent(newState, &protos.HistoryEvent{
 					EventId:   -1,

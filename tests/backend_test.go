@@ -429,7 +429,7 @@ func workItemProcessingTestLogic(
 				}
 
 				actions := getOrchestratorActions()
-				_, err := runtimestate.ApplyActions(state, actions, nil)
+				_, err := runtimestate.ApplyActions(state, nil, actions, nil)
 				if assert.NoError(t, err) {
 					wi.State = state
 					err := be.CompleteOrchestrationWorkItem(ctx, wi)
