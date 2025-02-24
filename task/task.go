@@ -63,8 +63,7 @@ func (t *completableTask) Await(v any) error {
 
 		ok, err := t.orchestrationCtx.processNextEvent()
 		if err != nil {
-			// TODO: If there is an error here, we need some kind of well-known panic to kill the orchestration
-			panic(err)
+			return err
 		}
 		if !ok {
 			break
