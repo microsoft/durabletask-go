@@ -164,7 +164,10 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 				EventId:   action.Id,
 				Timestamp: timestamppb.New(time.Now()),
 				EventType: &protos.HistoryEvent_TimerCreated{
-					TimerCreated: &protos.TimerCreatedEvent{FireAt: createtimer.FireAt},
+					TimerCreated: &protos.TimerCreatedEvent{
+						FireAt: createtimer.FireAt,
+						Name:   createtimer.Name,
+					},
 				},
 			})
 			// TODO cant pass trace context

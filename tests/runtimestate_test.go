@@ -248,6 +248,7 @@ func Test_RuntimeState_ContinueAsNew(t *testing.T) {
 
 func Test_CreateTimer(t *testing.T) {
 	const iid = "abc"
+	timerName := "foo"
 	expectedFireAt := time.Now().UTC().Add(72 * time.Hour)
 
 	s := runtimestate.NewOrchestrationRuntimeState(iid, nil, []*protos.HistoryEvent{
@@ -272,7 +273,10 @@ func Test_CreateTimer(t *testing.T) {
 		actions = append(actions, &protos.OrchestratorAction{
 			Id: int32(i),
 			OrchestratorActionType: &protos.OrchestratorAction_CreateTimer{
-				CreateTimer: &protos.CreateTimerAction{FireAt: timestamppb.New(expectedFireAt)},
+				CreateTimer: &protos.CreateTimerAction{
+					FireAt: timestamppb.New(expectedFireAt),
+					Name:   timerName,
+				},
 			},
 		})
 
@@ -285,6 +289,7 @@ func Test_CreateTimer(t *testing.T) {
 				assert.NotNil(t, e.Timestamp)
 				if timerCreated := e.GetTimerCreated(); assert.NotNil(t, timerCreated) {
 					assert.WithinDuration(t, expectedFireAt, timerCreated.FireAt.AsTime(), 0)
+					assert.Equal(t, timerName, timerCreated.GetName())
 				}
 			}
 		}

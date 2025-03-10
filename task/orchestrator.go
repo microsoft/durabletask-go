@@ -258,20 +258,22 @@ func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...call
 		}
 	}
 
+	activityName := helpers.GetTaskFunctionName(activity)
+
 	if options.retryPolicy != nil {
-		return ctx.internalScheduleTaskWithRetries(ctx.CurrentTimeUtc, func() Task {
-			return ctx.internalScheduleActivity(activity, options)
+		return ctx.internalScheduleTaskWithRetries(activityName+"-retry", ctx.CurrentTimeUtc, func() Task {
+			return ctx.internalScheduleActivity(activityName, options)
 		}, *options.retryPolicy, 0)
 	}
 
-	return ctx.internalScheduleActivity(activity, options)
+	return ctx.internalScheduleActivity(activityName, options)
 }
 
-func (ctx *OrchestrationContext) internalScheduleActivity(activity interface{}, options *callActivityOptions) Task {
+func (ctx *OrchestrationContext) internalScheduleActivity(activityName string, options *callActivityOptions) Task {
 	scheduleTaskAction := &protos.OrchestratorAction{
 		Id: ctx.getNextSequenceNumber(),
 		OrchestratorActionType: &protos.OrchestratorAction_ScheduleTask{
-			ScheduleTask: &protos.ScheduleTaskAction{Name: helpers.GetTaskFunctionName(activity), Input: options.rawInput},
+			ScheduleTask: &protos.ScheduleTaskAction{Name: activityName, Input: options.rawInput},
 		},
 	}
 
@@ -295,21 +297,23 @@ func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, o
 		}
 	}
 
+	orchestratorName := helpers.GetTaskFunctionName(orchestrator)
+
 	if options.retryPolicy != nil {
-		return ctx.internalScheduleTaskWithRetries(ctx.CurrentTimeUtc, func() Task {
-			return ctx.internalCallSubOrchestrator(orchestrator, options)
+		return ctx.internalScheduleTaskWithRetries(orchestratorName+"-retry", ctx.CurrentTimeUtc, func() Task {
+			return ctx.internalCallSubOrchestrator(orchestratorName, options)
 		}, *options.retryPolicy, 0)
 	}
 
-	return ctx.internalCallSubOrchestrator(orchestrator, options)
+	return ctx.internalCallSubOrchestrator(orchestratorName, options)
 }
 
-func (ctx *OrchestrationContext) internalCallSubOrchestrator(orchestrator interface{}, options *callSubOrchestratorOptions) Task {
+func (ctx *OrchestrationContext) internalCallSubOrchestrator(orchestratorName string, options *callSubOrchestratorOptions) Task {
 	createSubOrchestrationAction := &protos.OrchestratorAction{
 		Id: ctx.getNextSequenceNumber(),
 		OrchestratorActionType: &protos.OrchestratorAction_CreateSubOrchestration{
 			CreateSubOrchestration: &protos.CreateSubOrchestrationAction{
-				Name:       helpers.GetTaskFunctionName(orchestrator),
+				Name:       orchestratorName,
 				Input:      options.rawInput,
 				InstanceId: options.instanceID,
 			},
@@ -322,7 +326,7 @@ func (ctx *OrchestrationContext) internalCallSubOrchestrator(orchestrator interf
 	return task
 }
 
-func (ctx *OrchestrationContext) internalScheduleTaskWithRetries(initialAttempt time.Time, schedule func() Task, policy RetryPolicy, retryCount int) Task {
+func (ctx *OrchestrationContext) internalScheduleTaskWithRetries(name string, initialAttempt time.Time, schedule func() Task, policy RetryPolicy, retryCount int) Task {
 	return &taskWrapper{
 		delegate: schedule(),
 		onAwaitResult: func(v any, err error) error {
@@ -340,13 +344,13 @@ func (ctx *OrchestrationContext) internalScheduleTaskWithRetries(initialAttempt 
 				return err
 			}
 
-			timerErr := ctx.createTimerInternal(nextDelay).Await(nil)
+			timerErr := ctx.createTimerInternal(name, nextDelay).Await(nil)
 			if timerErr != nil {
 				// TODO use errors.Join when updating golang
 				return fmt.Errorf("%v %w", timerErr, err)
 			}
 
-			err = ctx.internalScheduleTaskWithRetries(initialAttempt, schedule, policy, retryCount+1).Await(v)
+			err = ctx.internalScheduleTaskWithRetries(name, initialAttempt, schedule, policy, retryCount+1).Await(v)
 			if err == nil {
 				return nil
 			}
@@ -373,16 +377,30 @@ func computeNextDelay(currentTimeUtc time.Time, policy RetryPolicy, attempt int,
 }
 
 // CreateTimer schedules a durable timer that expires after the specified delay.
-func (ctx *OrchestrationContext) CreateTimer(delay time.Duration) Task {
-	return ctx.createTimerInternal(delay)
+func (ctx *OrchestrationContext) CreateTimer(delay time.Duration, opts ...createTimerOption) Task {
+	options := new(createTimerOptions)
+	for _, configure := range opts {
+		if err := configure(options); err != nil {
+			failedTask := newTask(ctx)
+			failedTask.fail(&protos.TaskFailureDetails{
+				ErrorType:    reflect.TypeOf(err).String(),
+				ErrorMessage: err.Error(),
+			})
+			return failedTask
+		}
+	}
+	return ctx.createTimerInternal(options.name, delay)
 }
 
-func (ctx *OrchestrationContext) createTimerInternal(delay time.Duration) *completableTask {
+func (ctx *OrchestrationContext) createTimerInternal(name string, delay time.Duration) *completableTask {
 	fireAt := ctx.CurrentTimeUtc.Add(delay)
 	timerAction := &protos.OrchestratorAction{
 		Id: ctx.getNextSequenceNumber(),
 		OrchestratorActionType: &protos.OrchestratorAction_CreateTimer{
-			CreateTimer: &protos.CreateTimerAction{FireAt: timestamppb.New(fireAt)},
+			CreateTimer: &protos.CreateTimerAction{
+				FireAt: timestamppb.New(fireAt),
+				Name:   name,
+			},
 		},
 	}
 	ctx.pendingActions[timerAction.Id] = timerAction
@@ -432,7 +450,7 @@ func (ctx *OrchestrationContext) WaitForSingleEvent(eventName string, timeout ti
 		taskElement := taskList.PushBack(task)
 
 		if timeout > 0 {
-			ctx.createTimerInternal(timeout).onCompleted(func() {
+			ctx.createTimerInternal(eventName, timeout).onCompleted(func() {
 				task.cancel()
 				if taskList.Len() > 1 {
 					taskList.Remove(taskElement)

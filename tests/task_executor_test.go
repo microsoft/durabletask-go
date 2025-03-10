@@ -58,6 +58,7 @@ func Test_Executor_WaitForEventSchedulesTimer(t *testing.T) {
 	createTimerAction := results.Response.Actions[0].GetCreateTimer()
 	require.NotNil(t, createTimerAction, "Expected the scheduled action to be a timer")
 	require.WithinDuration(t, startEvent.Timestamp.AsTime().Add(timerDuration), createTimerAction.FireAt.AsTime(), 0)
+	require.Equal(t, "MyEvent", createTimerAction.GetName())
 }
 
 // This is a regression test for an issue where suspended orchestrations would continue to return
