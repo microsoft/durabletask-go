@@ -460,9 +460,9 @@ func workItemProcessingTestLogic(
 							// Validate orchestration metadata
 							if metadata, ok := getOrchestrationMetadata(t, be, api.InstanceID(state.InstanceId)); ok {
 								assert.Equal(t, defaultName, metadata.Name)
-								assert.Equal(t, defaultInput, metadata.SerializedInput)
-								assert.Less(t, createdTime.Sub(metadata.CreatedAt).Abs(), time.Microsecond) // Some database backends (like postgres) don't support sub-microsecond precision
-								assert.Equal(t, state.RuntimeStatus(), metadata.RuntimeStatus)
+								assert.Equal(t, defaultInput, metadata.Input.Value)
+								assert.Less(t, createdTime.Sub(metadata.CreatedAt.AsTime()).Abs(), time.Microsecond) // Some database backends (like postgres) don't support sub-microsecond precision
+								assert.Equal(t, runtimestate.RuntimeStatus(state), metadata.GetRuntimeStatus())
 
 								validateMetadata(metadata)
 							}
