@@ -23,28 +23,32 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	TaskHubSidecarService_Hello_FullMethodName                     = "/TaskHubSidecarService/Hello"
-	TaskHubSidecarService_StartInstance_FullMethodName             = "/TaskHubSidecarService/StartInstance"
-	TaskHubSidecarService_GetInstance_FullMethodName               = "/TaskHubSidecarService/GetInstance"
-	TaskHubSidecarService_RewindInstance_FullMethodName            = "/TaskHubSidecarService/RewindInstance"
-	TaskHubSidecarService_WaitForInstanceStart_FullMethodName      = "/TaskHubSidecarService/WaitForInstanceStart"
-	TaskHubSidecarService_WaitForInstanceCompletion_FullMethodName = "/TaskHubSidecarService/WaitForInstanceCompletion"
-	TaskHubSidecarService_RaiseEvent_FullMethodName                = "/TaskHubSidecarService/RaiseEvent"
-	TaskHubSidecarService_TerminateInstance_FullMethodName         = "/TaskHubSidecarService/TerminateInstance"
-	TaskHubSidecarService_SuspendInstance_FullMethodName           = "/TaskHubSidecarService/SuspendInstance"
-	TaskHubSidecarService_ResumeInstance_FullMethodName            = "/TaskHubSidecarService/ResumeInstance"
-	TaskHubSidecarService_QueryInstances_FullMethodName            = "/TaskHubSidecarService/QueryInstances"
-	TaskHubSidecarService_PurgeInstances_FullMethodName            = "/TaskHubSidecarService/PurgeInstances"
-	TaskHubSidecarService_GetWorkItems_FullMethodName              = "/TaskHubSidecarService/GetWorkItems"
-	TaskHubSidecarService_CompleteActivityTask_FullMethodName      = "/TaskHubSidecarService/CompleteActivityTask"
-	TaskHubSidecarService_CompleteOrchestratorTask_FullMethodName  = "/TaskHubSidecarService/CompleteOrchestratorTask"
-	TaskHubSidecarService_CompleteEntityTask_FullMethodName        = "/TaskHubSidecarService/CompleteEntityTask"
-	TaskHubSidecarService_CreateTaskHub_FullMethodName             = "/TaskHubSidecarService/CreateTaskHub"
-	TaskHubSidecarService_DeleteTaskHub_FullMethodName             = "/TaskHubSidecarService/DeleteTaskHub"
-	TaskHubSidecarService_SignalEntity_FullMethodName              = "/TaskHubSidecarService/SignalEntity"
-	TaskHubSidecarService_GetEntity_FullMethodName                 = "/TaskHubSidecarService/GetEntity"
-	TaskHubSidecarService_QueryEntities_FullMethodName             = "/TaskHubSidecarService/QueryEntities"
-	TaskHubSidecarService_CleanEntityStorage_FullMethodName        = "/TaskHubSidecarService/CleanEntityStorage"
+	TaskHubSidecarService_Hello_FullMethodName                           = "/TaskHubSidecarService/Hello"
+	TaskHubSidecarService_StartInstance_FullMethodName                   = "/TaskHubSidecarService/StartInstance"
+	TaskHubSidecarService_GetInstance_FullMethodName                     = "/TaskHubSidecarService/GetInstance"
+	TaskHubSidecarService_RewindInstance_FullMethodName                  = "/TaskHubSidecarService/RewindInstance"
+	TaskHubSidecarService_WaitForInstanceStart_FullMethodName            = "/TaskHubSidecarService/WaitForInstanceStart"
+	TaskHubSidecarService_WaitForInstanceCompletion_FullMethodName       = "/TaskHubSidecarService/WaitForInstanceCompletion"
+	TaskHubSidecarService_RaiseEvent_FullMethodName                      = "/TaskHubSidecarService/RaiseEvent"
+	TaskHubSidecarService_TerminateInstance_FullMethodName               = "/TaskHubSidecarService/TerminateInstance"
+	TaskHubSidecarService_SuspendInstance_FullMethodName                 = "/TaskHubSidecarService/SuspendInstance"
+	TaskHubSidecarService_ResumeInstance_FullMethodName                  = "/TaskHubSidecarService/ResumeInstance"
+	TaskHubSidecarService_QueryInstances_FullMethodName                  = "/TaskHubSidecarService/QueryInstances"
+	TaskHubSidecarService_PurgeInstances_FullMethodName                  = "/TaskHubSidecarService/PurgeInstances"
+	TaskHubSidecarService_GetWorkItems_FullMethodName                    = "/TaskHubSidecarService/GetWorkItems"
+	TaskHubSidecarService_CompleteActivityTask_FullMethodName            = "/TaskHubSidecarService/CompleteActivityTask"
+	TaskHubSidecarService_CompleteOrchestratorTask_FullMethodName        = "/TaskHubSidecarService/CompleteOrchestratorTask"
+	TaskHubSidecarService_CompleteEntityTask_FullMethodName              = "/TaskHubSidecarService/CompleteEntityTask"
+	TaskHubSidecarService_StreamInstanceHistory_FullMethodName           = "/TaskHubSidecarService/StreamInstanceHistory"
+	TaskHubSidecarService_CreateTaskHub_FullMethodName                   = "/TaskHubSidecarService/CreateTaskHub"
+	TaskHubSidecarService_DeleteTaskHub_FullMethodName                   = "/TaskHubSidecarService/DeleteTaskHub"
+	TaskHubSidecarService_SignalEntity_FullMethodName                    = "/TaskHubSidecarService/SignalEntity"
+	TaskHubSidecarService_GetEntity_FullMethodName                       = "/TaskHubSidecarService/GetEntity"
+	TaskHubSidecarService_QueryEntities_FullMethodName                   = "/TaskHubSidecarService/QueryEntities"
+	TaskHubSidecarService_CleanEntityStorage_FullMethodName              = "/TaskHubSidecarService/CleanEntityStorage"
+	TaskHubSidecarService_AbandonTaskActivityWorkItem_FullMethodName     = "/TaskHubSidecarService/AbandonTaskActivityWorkItem"
+	TaskHubSidecarService_AbandonTaskOrchestratorWorkItem_FullMethodName = "/TaskHubSidecarService/AbandonTaskOrchestratorWorkItem"
+	TaskHubSidecarService_AbandonTaskEntityWorkItem_FullMethodName       = "/TaskHubSidecarService/AbandonTaskEntityWorkItem"
 )
 
 // TaskHubSidecarServiceClient is the client API for TaskHubSidecarService service.
@@ -77,6 +81,8 @@ type TaskHubSidecarServiceClient interface {
 	CompleteActivityTask(ctx context.Context, in *ActivityResponse, opts ...grpc.CallOption) (*CompleteTaskResponse, error)
 	CompleteOrchestratorTask(ctx context.Context, in *OrchestratorResponse, opts ...grpc.CallOption) (*CompleteTaskResponse, error)
 	CompleteEntityTask(ctx context.Context, in *EntityBatchResult, opts ...grpc.CallOption) (*CompleteTaskResponse, error)
+	// Gets the history of an orchestration instance as a stream of events.
+	StreamInstanceHistory(ctx context.Context, in *StreamInstanceHistoryRequest, opts ...grpc.CallOption) (TaskHubSidecarService_StreamInstanceHistoryClient, error)
 	// Deletes and Creates the necessary resources for the orchestration service and the instance store
 	CreateTaskHub(ctx context.Context, in *CreateTaskHubRequest, opts ...grpc.CallOption) (*CreateTaskHubResponse, error)
 	// Deletes the resources for the orchestration service and optionally the instance store
@@ -89,6 +95,12 @@ type TaskHubSidecarServiceClient interface {
 	QueryEntities(ctx context.Context, in *QueryEntitiesRequest, opts ...grpc.CallOption) (*QueryEntitiesResponse, error)
 	// clean entity storage
 	CleanEntityStorage(ctx context.Context, in *CleanEntityStorageRequest, opts ...grpc.CallOption) (*CleanEntityStorageResponse, error)
+	// Abandons a single work item
+	AbandonTaskActivityWorkItem(ctx context.Context, in *AbandonActivityTaskRequest, opts ...grpc.CallOption) (*AbandonActivityTaskResponse, error)
+	// Abandon an orchestration work item
+	AbandonTaskOrchestratorWorkItem(ctx context.Context, in *AbandonOrchestrationTaskRequest, opts ...grpc.CallOption) (*AbandonOrchestrationTaskResponse, error)
+	// Abandon an entity work item
+	AbandonTaskEntityWorkItem(ctx context.Context, in *AbandonEntityTaskRequest, opts ...grpc.CallOption) (*AbandonEntityTaskResponse, error)
 }
 
 type taskHubSidecarServiceClient struct {
@@ -266,6 +278,38 @@ func (c *taskHubSidecarServiceClient) CompleteEntityTask(ctx context.Context, in
 	return out, nil
 }
 
+func (c *taskHubSidecarServiceClient) StreamInstanceHistory(ctx context.Context, in *StreamInstanceHistoryRequest, opts ...grpc.CallOption) (TaskHubSidecarService_StreamInstanceHistoryClient, error) {
+	stream, err := c.cc.NewStream(ctx, &TaskHubSidecarService_ServiceDesc.Streams[1], TaskHubSidecarService_StreamInstanceHistory_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &taskHubSidecarServiceStreamInstanceHistoryClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type TaskHubSidecarService_StreamInstanceHistoryClient interface {
+	Recv() (*HistoryChunk, error)
+	grpc.ClientStream
+}
+
+type taskHubSidecarServiceStreamInstanceHistoryClient struct {
+	grpc.ClientStream
+}
+
+func (x *taskHubSidecarServiceStreamInstanceHistoryClient) Recv() (*HistoryChunk, error) {
+	m := new(HistoryChunk)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *taskHubSidecarServiceClient) CreateTaskHub(ctx context.Context, in *CreateTaskHubRequest, opts ...grpc.CallOption) (*CreateTaskHubResponse, error) {
 	out := new(CreateTaskHubResponse)
 	err := c.cc.Invoke(ctx, TaskHubSidecarService_CreateTaskHub_FullMethodName, in, out, opts...)
@@ -320,6 +364,33 @@ func (c *taskHubSidecarServiceClient) CleanEntityStorage(ctx context.Context, in
 	return out, nil
 }
 
+func (c *taskHubSidecarServiceClient) AbandonTaskActivityWorkItem(ctx context.Context, in *AbandonActivityTaskRequest, opts ...grpc.CallOption) (*AbandonActivityTaskResponse, error) {
+	out := new(AbandonActivityTaskResponse)
+	err := c.cc.Invoke(ctx, TaskHubSidecarService_AbandonTaskActivityWorkItem_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskHubSidecarServiceClient) AbandonTaskOrchestratorWorkItem(ctx context.Context, in *AbandonOrchestrationTaskRequest, opts ...grpc.CallOption) (*AbandonOrchestrationTaskResponse, error) {
+	out := new(AbandonOrchestrationTaskResponse)
+	err := c.cc.Invoke(ctx, TaskHubSidecarService_AbandonTaskOrchestratorWorkItem_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskHubSidecarServiceClient) AbandonTaskEntityWorkItem(ctx context.Context, in *AbandonEntityTaskRequest, opts ...grpc.CallOption) (*AbandonEntityTaskResponse, error) {
+	out := new(AbandonEntityTaskResponse)
+	err := c.cc.Invoke(ctx, TaskHubSidecarService_AbandonTaskEntityWorkItem_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TaskHubSidecarServiceServer is the server API for TaskHubSidecarService service.
 // All implementations must embed UnimplementedTaskHubSidecarServiceServer
 // for forward compatibility
@@ -350,6 +421,8 @@ type TaskHubSidecarServiceServer interface {
 	CompleteActivityTask(context.Context, *ActivityResponse) (*CompleteTaskResponse, error)
 	CompleteOrchestratorTask(context.Context, *OrchestratorResponse) (*CompleteTaskResponse, error)
 	CompleteEntityTask(context.Context, *EntityBatchResult) (*CompleteTaskResponse, error)
+	// Gets the history of an orchestration instance as a stream of events.
+	StreamInstanceHistory(*StreamInstanceHistoryRequest, TaskHubSidecarService_StreamInstanceHistoryServer) error
 	// Deletes and Creates the necessary resources for the orchestration service and the instance store
 	CreateTaskHub(context.Context, *CreateTaskHubRequest) (*CreateTaskHubResponse, error)
 	// Deletes the resources for the orchestration service and optionally the instance store
@@ -362,6 +435,12 @@ type TaskHubSidecarServiceServer interface {
 	QueryEntities(context.Context, *QueryEntitiesRequest) (*QueryEntitiesResponse, error)
 	// clean entity storage
 	CleanEntityStorage(context.Context, *CleanEntityStorageRequest) (*CleanEntityStorageResponse, error)
+	// Abandons a single work item
+	AbandonTaskActivityWorkItem(context.Context, *AbandonActivityTaskRequest) (*AbandonActivityTaskResponse, error)
+	// Abandon an orchestration work item
+	AbandonTaskOrchestratorWorkItem(context.Context, *AbandonOrchestrationTaskRequest) (*AbandonOrchestrationTaskResponse, error)
+	// Abandon an entity work item
+	AbandonTaskEntityWorkItem(context.Context, *AbandonEntityTaskRequest) (*AbandonEntityTaskResponse, error)
 	mustEmbedUnimplementedTaskHubSidecarServiceServer()
 }
 
@@ -417,6 +496,9 @@ func (UnimplementedTaskHubSidecarServiceServer) CompleteOrchestratorTask(context
 func (UnimplementedTaskHubSidecarServiceServer) CompleteEntityTask(context.Context, *EntityBatchResult) (*CompleteTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CompleteEntityTask not implemented")
 }
+func (UnimplementedTaskHubSidecarServiceServer) StreamInstanceHistory(*StreamInstanceHistoryRequest, TaskHubSidecarService_StreamInstanceHistoryServer) error {
+	return status.Errorf(codes.Unimplemented, "method StreamInstanceHistory not implemented")
+}
 func (UnimplementedTaskHubSidecarServiceServer) CreateTaskHub(context.Context, *CreateTaskHubRequest) (*CreateTaskHubResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateTaskHub not implemented")
 }
@@ -434,6 +516,15 @@ func (UnimplementedTaskHubSidecarServiceServer) QueryEntities(context.Context, *
 }
 func (UnimplementedTaskHubSidecarServiceServer) CleanEntityStorage(context.Context, *CleanEntityStorageRequest) (*CleanEntityStorageResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CleanEntityStorage not implemented")
+}
+func (UnimplementedTaskHubSidecarServiceServer) AbandonTaskActivityWorkItem(context.Context, *AbandonActivityTaskRequest) (*AbandonActivityTaskResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AbandonTaskActivityWorkItem not implemented")
+}
+func (UnimplementedTaskHubSidecarServiceServer) AbandonTaskOrchestratorWorkItem(context.Context, *AbandonOrchestrationTaskRequest) (*AbandonOrchestrationTaskResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AbandonTaskOrchestratorWorkItem not implemented")
+}
+func (UnimplementedTaskHubSidecarServiceServer) AbandonTaskEntityWorkItem(context.Context, *AbandonEntityTaskRequest) (*AbandonEntityTaskResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AbandonTaskEntityWorkItem not implemented")
 }
 func (UnimplementedTaskHubSidecarServiceServer) mustEmbedUnimplementedTaskHubSidecarServiceServer() {}
 
@@ -739,6 +830,27 @@ func _TaskHubSidecarService_CompleteEntityTask_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskHubSidecarService_StreamInstanceHistory_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamInstanceHistoryRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(TaskHubSidecarServiceServer).StreamInstanceHistory(m, &taskHubSidecarServiceStreamInstanceHistoryServer{stream})
+}
+
+type TaskHubSidecarService_StreamInstanceHistoryServer interface {
+	Send(*HistoryChunk) error
+	grpc.ServerStream
+}
+
+type taskHubSidecarServiceStreamInstanceHistoryServer struct {
+	grpc.ServerStream
+}
+
+func (x *taskHubSidecarServiceStreamInstanceHistoryServer) Send(m *HistoryChunk) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 func _TaskHubSidecarService_CreateTaskHub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateTaskHubRequest)
 	if err := dec(in); err != nil {
@@ -847,6 +959,60 @@ func _TaskHubSidecarService_CleanEntityStorage_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskHubSidecarService_AbandonTaskActivityWorkItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AbandonActivityTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskHubSidecarServiceServer).AbandonTaskActivityWorkItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskHubSidecarService_AbandonTaskActivityWorkItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskHubSidecarServiceServer).AbandonTaskActivityWorkItem(ctx, req.(*AbandonActivityTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskHubSidecarService_AbandonTaskOrchestratorWorkItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AbandonOrchestrationTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskHubSidecarServiceServer).AbandonTaskOrchestratorWorkItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskHubSidecarService_AbandonTaskOrchestratorWorkItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskHubSidecarServiceServer).AbandonTaskOrchestratorWorkItem(ctx, req.(*AbandonOrchestrationTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskHubSidecarService_AbandonTaskEntityWorkItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AbandonEntityTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskHubSidecarServiceServer).AbandonTaskEntityWorkItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskHubSidecarService_AbandonTaskEntityWorkItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskHubSidecarServiceServer).AbandonTaskEntityWorkItem(ctx, req.(*AbandonEntityTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TaskHubSidecarService_ServiceDesc is the grpc.ServiceDesc for TaskHubSidecarService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -938,11 +1104,28 @@ var TaskHubSidecarService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "CleanEntityStorage",
 			Handler:    _TaskHubSidecarService_CleanEntityStorage_Handler,
 		},
+		{
+			MethodName: "AbandonTaskActivityWorkItem",
+			Handler:    _TaskHubSidecarService_AbandonTaskActivityWorkItem_Handler,
+		},
+		{
+			MethodName: "AbandonTaskOrchestratorWorkItem",
+			Handler:    _TaskHubSidecarService_AbandonTaskOrchestratorWorkItem_Handler,
+		},
+		{
+			MethodName: "AbandonTaskEntityWorkItem",
+			Handler:    _TaskHubSidecarService_AbandonTaskEntityWorkItem_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "GetWorkItems",
 			Handler:       _TaskHubSidecarService_GetWorkItems_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamInstanceHistory",
+			Handler:       _TaskHubSidecarService_StreamInstanceHistory_Handler,
 			ServerStreams: true,
 		},
 	},
