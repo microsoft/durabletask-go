@@ -76,8 +76,8 @@ func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) N
 	return func(req *protos.CreateInstanceRequest) error {
 		// initialize CreateInstanceOption
 		req.OrchestrationIdReusePolicy = &protos.OrchestrationIdReusePolicy{
-			Action:          policy.Action,
 			OperationStatus: policy.OperationStatus,
+			Action:          policy.Action,
 		}
 		return nil
 	}
