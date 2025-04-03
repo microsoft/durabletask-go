@@ -275,7 +275,7 @@ func Test_CreateTimer(t *testing.T) {
 			OrchestratorActionType: &protos.OrchestratorAction_CreateTimer{
 				CreateTimer: &protos.CreateTimerAction{
 					FireAt: timestamppb.New(expectedFireAt),
-					Name:   timerName,
+					Name:   &timerName,
 				},
 			},
 		})

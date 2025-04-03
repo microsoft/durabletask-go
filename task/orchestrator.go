@@ -394,12 +394,16 @@ func (ctx *OrchestrationContext) CreateTimer(delay time.Duration, opts ...create
 
 func (ctx *OrchestrationContext) createTimerInternal(name string, delay time.Duration) *completableTask {
 	fireAt := ctx.CurrentTimeUtc.Add(delay)
+	var timerName *string = nil
+	if name != "" {
+		timerName = &name
+	}
 	timerAction := &protos.OrchestratorAction{
 		Id: ctx.getNextSequenceNumber(),
 		OrchestratorActionType: &protos.OrchestratorAction_CreateTimer{
 			CreateTimer: &protos.CreateTimerAction{
 				FireAt: timestamppb.New(fireAt),
-				Name:   name,
+				Name:   timerName,
 			},
 		},
 	}
