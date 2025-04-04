@@ -455,8 +455,8 @@ func workItemProcessingTestLogic(
 							}
 
 							// State should be initialized with only "old" events
-							assert.Empty(t, state.NewEvents())
-							assert.NotEmpty(t, state.OldEvents())
+							assert.Empty(t, state.GetNewEvents())
+							assert.NotEmpty(t, state.GetOldEvents())
 							// Validate orchestration metadata
 							if metadata, ok := getOrchestrationMetadata(t, be, api.InstanceID(state.InstanceId)); ok {
 								assert.Equal(t, defaultName, metadata.Name)
