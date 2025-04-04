@@ -344,7 +344,7 @@ func (ctx *OrchestrationContext) internalScheduleTaskWithRetries(name string, in
 				return err
 			}
 
-			timerErr := ctx.createTimerInternal(name, nextDelay).Await(nil)
+			timerErr := ctx.createTimerInternal(&name, nextDelay).Await(nil)
 			if timerErr != nil {
 				// TODO use errors.Join when updating golang
 				return fmt.Errorf("%v %w", timerErr, err)
@@ -392,18 +392,14 @@ func (ctx *OrchestrationContext) CreateTimer(delay time.Duration, opts ...create
 	return ctx.createTimerInternal(options.name, delay)
 }
 
-func (ctx *OrchestrationContext) createTimerInternal(name string, delay time.Duration) *completableTask {
+func (ctx *OrchestrationContext) createTimerInternal(name *string, delay time.Duration) *completableTask {
 	fireAt := ctx.CurrentTimeUtc.Add(delay)
-	var timerName *string = nil
-	if name != "" {
-		timerName = &name
-	}
 	timerAction := &protos.OrchestratorAction{
 		Id: ctx.getNextSequenceNumber(),
 		OrchestratorActionType: &protos.OrchestratorAction_CreateTimer{
 			CreateTimer: &protos.CreateTimerAction{
 				FireAt: timestamppb.New(fireAt),
-				Name:   timerName,
+				Name:   name,
 			},
 		},
 	}
@@ -454,7 +450,7 @@ func (ctx *OrchestrationContext) WaitForSingleEvent(eventName string, timeout ti
 		taskElement := taskList.PushBack(task)
 
 		if timeout > 0 {
-			ctx.createTimerInternal(eventName, timeout).onCompleted(func() {
+			ctx.createTimerInternal(&eventName, timeout).onCompleted(func() {
 				task.cancel()
 				if taskList.Len() > 1 {
 					taskList.Remove(taskElement)
