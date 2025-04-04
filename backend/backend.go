@@ -39,8 +39,8 @@ type OrchestrationIdReusePolicyOptions func(*protos.OrchestrationIdReusePolicy) 
 func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) OrchestrationIdReusePolicyOptions {
 	return func(po *protos.OrchestrationIdReusePolicy) error {
 		if policy != nil {
-			po.Action = policy.Action
 			po.OperationStatus = policy.OperationStatus
+			po.Action = policy.Action
 		}
 		return nil
 	}

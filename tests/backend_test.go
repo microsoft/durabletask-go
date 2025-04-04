@@ -3,10 +3,13 @@ package tests
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/dapr/durabletask-go/backend/postgres"
 
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/protos"
@@ -25,10 +28,20 @@ var (
 	sqliteFileOptions     = sqlite.NewSqliteOptions("test.sqlite3")
 )
 
-var backends = []backend.Backend{
-	sqlite.NewSqliteBackend(sqliteFileOptions, logger),
-	sqlite.NewSqliteBackend(sqliteInMemoryOptions, logger),
+func getRunnableBackends() []backend.Backend {
+	var runnableBackends []backend.Backend
+
+	runnableBackends = append(runnableBackends, sqlite.NewSqliteBackend(sqliteFileOptions, logger))
+	runnableBackends = append(runnableBackends, sqlite.NewSqliteBackend(sqliteInMemoryOptions, logger))
+
+	if os.Getenv("POSTGRES_ENABLED") == "true" {
+		runnableBackends = append(runnableBackends, postgres.NewPostgresBackend(nil, logger))
+	}
+
+	return runnableBackends
 }
+
+var backends = getRunnableBackends()
 
 var completionStatusValues = []protos.OrchestrationStatus{
 	protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
@@ -442,15 +455,14 @@ func workItemProcessingTestLogic(
 							}
 
 							// State should be initialized with only "old" events
-							assert.Empty(t, state.NewEvents)
-							assert.NotEmpty(t, state.OldEvents)
-
+							assert.Empty(t, state.GetNewEvents())
+							assert.NotEmpty(t, state.GetOldEvents())
 							// Validate orchestration metadata
 							if metadata, ok := getOrchestrationMetadata(t, be, api.InstanceID(state.InstanceId)); ok {
 								assert.Equal(t, defaultName, metadata.Name)
 								assert.Equal(t, defaultInput, metadata.Input.Value)
-								assert.Equal(t, createdTime, metadata.CreatedAt.AsTime())
-								assert.Equal(t, runtimestate.RuntimeStatus(state), metadata.RuntimeStatus)
+								assert.Less(t, createdTime.Sub(metadata.CreatedAt.AsTime()).Abs(), time.Microsecond) // Some database backends (like postgres) don't support sub-microsecond precision
+								assert.Equal(t, runtimestate.RuntimeStatus(state), metadata.GetRuntimeStatus())
 
 								validateMetadata(metadata)
 							}
