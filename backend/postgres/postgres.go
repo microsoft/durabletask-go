@@ -9,12 +9,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
+	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/api/helpers"
+	"github.com/dapr/durabletask-go/api/protos"
+	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/backend/runtimestate"
 	"github.com/google/uuid"
-	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/backend"
-	"github.com/microsoft/durabletask-go/internal/helpers"
-	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,6 +28,8 @@ import (
 var schema string
 
 var emptyString string = ""
+
+var errNoWorkItems = errors.New("no work items were found")
 
 type PostgresOptions struct {
 	PgOptions                *pgxpool.Config
@@ -76,6 +82,109 @@ func NewPostgresBackend(opts *PostgresOptions, logger backend.Logger) backend.Ba
 		options:    opts,
 		logger:     logger,
 	}
+}
+
+func (be *postgresBackend) NextActivityWorkItem(ctx context.Context) (*backend.ActivityWorkItem, error) {
+	b := backoff.WithContext(&backoff.ExponentialBackOff{
+		InitialInterval:     50 * time.Millisecond,
+		MaxInterval:         5 * time.Second,
+		Multiplier:          1.05,
+		RandomizationFactor: 0.05,
+		Stop:                backoff.Stop,
+		Clock:               backoff.SystemClock,
+	}, ctx)
+
+	for {
+		wi, err := be.getActivityWorkItem(ctx)
+		if err == nil {
+			return wi, nil
+		}
+
+		if !errors.Is(err, errNoWorkItems) {
+			return nil, err
+		}
+
+		t := time.NewTimer(b.NextBackOff())
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
+			be.logger.Info("Activity: received cancellation signal")
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (be *postgresBackend) NextOrchestrationWorkItem(ctx context.Context) (*backend.OrchestrationWorkItem, error) {
+	b := backoff.WithContext(&backoff.ExponentialBackOff{
+		InitialInterval:     50 * time.Millisecond,
+		MaxInterval:         5 * time.Second,
+		Multiplier:          1.05,
+		RandomizationFactor: 0.05,
+		Stop:                backoff.Stop,
+		Clock:               backoff.SystemClock,
+	}, ctx)
+
+	for {
+		wi, err := be.GetOrchestrationWorkItem(ctx)
+		if err == nil {
+			return wi, nil
+		}
+
+		if !errors.Is(err, errNoWorkItems) {
+			return nil, err
+		}
+
+		t := time.NewTimer(b.NextBackOff())
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
+			be.logger.Info("Activity: received cancellation signal")
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (be *postgresBackend) WatchOrchestrationRuntimeStatus(ctx context.Context, id api.InstanceID, ch chan<- *backend.OrchestrationMetadata) error {
+	b := backoff.ExponentialBackOff{
+		InitialInterval:     100 * time.Millisecond,
+		MaxInterval:         10 * time.Second,
+		Multiplier:          1.5,
+		RandomizationFactor: 0.05,
+		Stop:                backoff.Stop,
+		Clock:               backoff.SystemClock,
+	}
+	b.Reset()
+
+	for {
+		t := time.NewTimer(b.NextBackOff())
+
+		select {
+		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
+			return ctx.Err()
+		case <-t.C:
+			meta, err := be.GetOrchestrationMetadata(ctx, id)
+			if err != nil {
+				return err
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case ch <- meta:
+			}
+		}
+	}
+
+	return nil
 }
 
 // CreateTaskHub creates the postgres database and applies the schema
@@ -210,7 +319,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	isCompleted := false
 
 	currIndex := 1
-	for _, e := range wi.State.NewEvents() {
+	for _, e := range wi.State.GetNewEvents() {
 		if es := e.GetExecutionStarted(); es != nil {
 			if isCreated {
 				// TODO: Log warning about duplicate start event
@@ -253,7 +362,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	// TODO: Support for stickiness, which would extend the LockExpiration
 	sqlSB.WriteString(fmt.Sprintf("RuntimeStatus = $%d, LastUpdatedTime = $%d, LockExpiration = NULL WHERE InstanceID = $%d AND LockedBy = $%d", currIndex, currIndex+1, currIndex+2, currIndex+3))
 	currIndex += 4
-	sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()), now, string(wi.InstanceID), wi.LockedBy)
+	sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(runtimestate.RuntimeStatus(wi.State)), now, string(wi.InstanceID), wi.LockedBy)
 
 	result, err := tx.Exec(ctx, sqlSB.String(), sqlUpdateArgs...)
 	if err != nil {
@@ -268,14 +377,14 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	}
 
 	// If continue-as-new, delete all existing history
-	if wi.State.ContinuedAsNew() {
+	if wi.State.GetContinuedAsNew() {
 		if _, err := tx.Exec(ctx, "DELETE FROM History WHERE InstanceID = $1", string(wi.InstanceID)); err != nil {
 			return fmt.Errorf("failed to delete from History table: %w", err)
 		}
 	}
 
 	// Save new history events
-	newHistoryCount := len(wi.State.NewEvents())
+	newHistoryCount := len(wi.State.GetNewEvents())
 	if newHistoryCount > 0 {
 		builder := strings.Builder{}
 		builder.WriteString("INSERT INTO History (InstanceID, SequenceNumber, EventPayload) VALUES ")
@@ -288,8 +397,8 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		query := builder.String()
 
 		args := make([]interface{}, 0, newHistoryCount*3)
-		nextSequenceNumber := len(wi.State.OldEvents())
-		for _, e := range wi.State.NewEvents() {
+		nextSequenceNumber := len(wi.State.GetOldEvents())
+		for _, e := range wi.State.GetNewEvents() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
 				return err
@@ -306,7 +415,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	}
 
 	// Save outbound activity tasks
-	newActivityCount := len(wi.State.PendingTasks())
+	newActivityCount := len(wi.State.GetPendingTasks())
 	if newActivityCount > 0 {
 		builder := strings.Builder{}
 		builder.WriteString("INSERT INTO NewTasks (InstanceID, EventPayload) VALUES ")
@@ -319,7 +428,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		insertSql := builder.String()
 
 		sqlInsertArgs := make([]interface{}, 0, newActivityCount*2)
-		for _, e := range wi.State.PendingTasks() {
+		for _, e := range wi.State.GetPendingTasks() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
 				return err
@@ -335,7 +444,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	}
 
 	// Save outbound orchestrator events
-	newEventCount := len(wi.State.PendingTimers()) + len(wi.State.PendingMessages())
+	newEventCount := len(wi.State.GetPendingTimers()) + len(wi.State.GetPendingMessages())
 	if newEventCount > 0 {
 		builder := strings.Builder{}
 		builder.WriteString("INSERT INTO NewEvents (InstanceID, EventPayload, VisibleTime) VALUES ")
@@ -348,7 +457,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		insertSql := builder.String()
 
 		sqlInsertArgs := make([]interface{}, 0, newEventCount*3)
-		for _, e := range wi.State.PendingTimers() {
+		for _, e := range wi.State.GetPendingTimers() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
 				return err
@@ -358,11 +467,11 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 			sqlInsertArgs = append(sqlInsertArgs, string(wi.InstanceID), eventPayload, visibileTime)
 		}
 
-		for _, msg := range wi.State.PendingMessages() {
+		for _, msg := range wi.State.GetPendingMessages() {
 			if es := msg.HistoryEvent.GetExecutionStarted(); es != nil {
 				// Need to insert a new row into the DB
 				if _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx); err != nil {
-					if errors.Is(err, backend.ErrDuplicateEvent) {
+					if errors.Is(err, runtimestate.ErrDuplicateEvent) {
 						be.logger.Warnf(
 							"%v: dropping sub-orchestration creation event because an instance with the target ID (%v) already exists.",
 							wi.InstanceID,
@@ -652,7 +761,7 @@ func (be *postgresBackend) AddNewOrchestrationEvent(ctx context.Context, iid api
 }
 
 // GetOrchestrationMetadata implements backend.Backend
-func (be *postgresBackend) GetOrchestrationMetadata(ctx context.Context, iid api.InstanceID) (*api.OrchestrationMetadata, error) {
+func (be *postgresBackend) GetOrchestrationMetadata(ctx context.Context, iid api.InstanceID) (*backend.OrchestrationMetadata, error) {
 	if err := be.ensureDB(); err != nil {
 		return nil, err
 	}
@@ -701,18 +810,30 @@ func (be *postgresBackend) GetOrchestrationMetadata(ctx context.Context, iid api
 		}
 	}
 
-	metadata := api.NewOrchestrationMetadata(
-		iid,
-		*name,
-		helpers.FromRuntimeStatusString(*runtimeStatus),
-		*createdAt,
-		*lastUpdatedAt,
-		*input,
-		*output,
-		*customStatus,
-		failureDetails,
-	)
-	return metadata, nil
+	var inputw *wrapperspb.StringValue
+	var outputw *wrapperspb.StringValue
+	var customStatusw *wrapperspb.StringValue
+	if input != nil {
+		inputw = wrapperspb.String(*input)
+	}
+	if output != nil {
+		outputw = wrapperspb.String(*output)
+	}
+	if customStatus != nil {
+		customStatusw = wrapperspb.String(*customStatus)
+	}
+
+	return &backend.OrchestrationMetadata{
+		InstanceId:     string(iid),
+		Name:           *name,
+		RuntimeStatus:  helpers.FromRuntimeStatusString(*runtimeStatus),
+		CreatedAt:      timestamppb.New(*createdAt),
+		LastUpdatedAt:  timestamppb.New(*lastUpdatedAt),
+		Input:          inputw,
+		Output:         outputw,
+		CustomStatus:   customStatusw,
+		FailureDetails: failureDetails,
+	}, nil
 }
 
 // GetOrchestrationRuntimeState implements backend.Backend
@@ -746,7 +867,7 @@ func (be *postgresBackend) GetOrchestrationRuntimeState(ctx context.Context, wi 
 		existingEvents = append(existingEvents, e)
 	}
 
-	state := backend.NewOrchestrationRuntimeState(wi.InstanceID, existingEvents)
+	state := runtimestate.NewOrchestrationRuntimeState(string(wi.InstanceID), nil, existingEvents)
 	return state, nil
 }
 
@@ -787,7 +908,7 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	if err := row.Scan(&instanceID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// No new events to process
-			return nil, backend.ErrNoWorkItems
+			return nil, errNoWorkItems
 		}
 
 		return nil, fmt.Errorf("failed to scan the orchestration work-item: %w", err)
@@ -847,7 +968,7 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	return wi, nil
 }
 
-func (be *postgresBackend) GetActivityWorkItem(ctx context.Context) (*backend.ActivityWorkItem, error) {
+func (be *postgresBackend) getActivityWorkItem(ctx context.Context) (*backend.ActivityWorkItem, error) {
 	if err := be.ensureDB(); err != nil {
 		return nil, err
 	}
@@ -875,7 +996,7 @@ func (be *postgresBackend) GetActivityWorkItem(ctx context.Context) (*backend.Ac
 	if err := row.Scan(&sequenceNumber, &instanceID, &eventPayload); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// No new activity tasks to process
-			return nil, backend.ErrNoWorkItems
+			return nil, errNoWorkItems
 		}
 
 		return nil, fmt.Errorf("failed to scan the activity work-item: %w", err)
