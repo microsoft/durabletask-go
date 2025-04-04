@@ -7,7 +7,6 @@ require (
 	github.com/dapr/kit v0.13.1-0.20250110192255-fb195706966f
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.4
-	github.com/microsoft/durabletask-go v0.6.0
 	github.com/stretchr/testify v1.10.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.59.0
 	go.opentelemetry.io/otel v1.34.0
@@ -25,11 +24,9 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/marusama/semaphore/v2 v2.5.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/openzipkin/zipkin-go v0.4.3 // indirect

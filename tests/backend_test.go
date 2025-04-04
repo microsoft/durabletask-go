@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/microsoft/durabletask-go/backend/postgres"
+	"github.com/dapr/durabletask-go/backend/postgres"
 
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/protos"
