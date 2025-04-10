@@ -8,8 +8,6 @@ This project is largely a Go clone of the [.NET-based Durable Task Framework](ht
 
 The Durable Task engine is also intended to be used as the basis for the [Dapr embedded workflow engine](https://github.com/dapr/dapr/issues/4576).
 
-> This project is a work-in-progress and should not be used for production workloads. The public API surface is also not yet stable. The project itself is also in the very early stages and is missing some of the basics, such as contribution guidelines, etc.
-
 ## Storage providers
 
 This project includes a [sqlite](https://sqlite.org/) storage provider for persisting app state to disk.
