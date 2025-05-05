@@ -17,6 +17,8 @@ import (
 	"github.com/dapr/durabletask-go/backend"
 	"github.com/dapr/durabletask-go/backend/runtimestate"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -1107,4 +1109,8 @@ func (be *sqliteBackend) ensureDB() error {
 
 func (be *sqliteBackend) String() string {
 	return fmt.Sprintf("sqlite::%s", be.options.FilePath)
+}
+
+func (be *sqliteBackend) RerunWorkflowFromEvent(ctx context.Context, req *backend.RerunWorkflowFromEventRequest) (api.InstanceID, error) {
+	return "", status.Error(codes.Unimplemented, "not implemented")
 }

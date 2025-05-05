@@ -32,6 +32,7 @@ type (
 	DurableTimer                     = protos.DurableTimer
 	OrchestrationRuntimeState        = protos.OrchestrationRuntimeState
 	OrchestrationRuntimeStateMessage = protos.OrchestrationRuntimeStateMessage
+	RerunWorkflowFromEventRequest    = protos.RerunWorkflowFromEventRequest
 )
 
 type OrchestrationIdReusePolicyOptions func(*protos.OrchestrationIdReusePolicy) error
@@ -67,6 +68,12 @@ type Backend interface {
 	// CreateOrchestrationInstance creates a new orchestration instance with a history event that
 	// wraps a ExecutionStarted event.
 	CreateOrchestrationInstance(context.Context, *HistoryEvent, ...OrchestrationIdReusePolicyOptions) error
+
+	// RerunWorkflowFromEvent reruns a workflow from a specific event ID of some
+	// source instance ID. If not given, a random new instance ID will be
+	// generated and returned. Can optionally give a new input to the target
+	// event ID to rerun from.
+	RerunWorkflowFromEvent(ctx context.Context, req *protos.RerunWorkflowFromEventRequest) (api.InstanceID, error)
 
 	// AddNewEvent adds a new orchestration event to the specified orchestration instance.
 	AddNewOrchestrationEvent(context.Context, api.InstanceID, *HistoryEvent) error

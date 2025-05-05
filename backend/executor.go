@@ -48,6 +48,7 @@ type Executor interface {
 
 type grpcExecutor struct {
 	protos.UnimplementedTaskHubSidecarServiceServer
+
 	workItemQueue        chan *protos.WorkItem
 	pendingOrchestrators *sync.Map // map[api.InstanceID]*ExecutionResults
 	pendingActivities    *sync.Map // map[string]*activityExecutionResult
@@ -488,6 +489,24 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 	return &protos.CreateInstanceResponse{InstanceId: instanceID}, nil
 }
 
+// RerunWorkflowFromEvent reruns a workflow from a specific event ID of some
+// source instance ID. If not given, a random new instance ID will be
+// generated and returned. Can optionally give a new input to the target
+// event ID to rerun from.
+func (g *grpcExecutor) RerunWorkflowFromEvent(ctx context.Context, req *protos.RerunWorkflowFromEventRequest) (*protos.RerunWorkflowFromEventResponse, error) {
+	newInstanceID, err := g.backend.RerunWorkflowFromEvent(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = g.WaitForInstanceStart(ctx, &protos.GetInstanceRequest{InstanceId: newInstanceID.String()})
+	if err != nil {
+		return nil, err
+	}
+
+	return &protos.RerunWorkflowFromEventResponse{NewInstanceID: newInstanceID.String()}, nil
+}
+
 // TerminateInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) TerminateInstance(ctx context.Context, req *protos.TerminateRequest) (*protos.TerminateResponse, error) {
 	e := &protos.HistoryEvent{
@@ -613,10 +632,6 @@ func (g *grpcExecutor) waitForInstance(ctx context.Context, req *protos.GetInsta
 	return createGetInstanceResponse(req, metadata), nil
 }
 
-// mustEmbedUnimplementedTaskHubSidecarServiceServer implements protos.TaskHubSidecarServiceServer
-func (grpcExecutor) mustEmbedUnimplementedTaskHubSidecarServiceServer() {
-}
-
 func createGetInstanceResponse(req *protos.GetInstanceRequest, metadata *OrchestrationMetadata) *protos.GetInstanceResponse {
 	state := &protos.OrchestrationState{
 		InstanceId:           req.InstanceId,
@@ -635,3 +650,45 @@ func createGetInstanceResponse(req *protos.GetInstanceRequest, metadata *Orchest
 
 	return &protos.GetInstanceResponse{Exists: true, OrchestrationState: state}
 }
+
+func (g *grpcExecutor) AbandonTaskActivityWorkItem(ctx context.Context, req *protos.AbandonActivityTaskRequest) (*protos.AbandonActivityTaskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (g *grpcExecutor) AbandonTaskEntityWorkItem(ctx context.Context, req *protos.AbandonEntityTaskRequest) (*protos.AbandonEntityTaskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (g *grpcExecutor) AbandonTaskOrchestratorWorkItem(ctx context.Context, req *protos.AbandonOrchestrationTaskRequest) (*protos.AbandonOrchestrationTaskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (g *grpcExecutor) CleanEntityStorage(ctx context.Context, req *protos.CleanEntityStorageRequest) (*protos.CleanEntityStorageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (g *grpcExecutor) CompleteEntityTask(ctx context.Context, req *protos.EntityBatchResult) (*protos.CompleteTaskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (g *grpcExecutor) GetEntity(ctx context.Context, req *protos.GetEntityRequest) (*protos.GetEntityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (g *grpcExecutor) QueryEntities(ctx context.Context, req *protos.QueryEntitiesRequest) (*protos.QueryEntitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (g *grpcExecutor) RewindInstance(ctx context.Context, req *protos.RewindInstanceRequest) (*protos.RewindInstanceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (g *grpcExecutor) SignalEntity(ctx context.Context, req *protos.SignalEntityRequest) (*protos.SignalEntityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (g *grpcExecutor) StreamInstanceHistory(req *protos.StreamInstanceHistoryRequest, stream protos.TaskHubSidecarService_StreamInstanceHistoryServer) error {
+	return status.Error(codes.Unimplemented, "")
+}
+
+func (grpcExecutor) mustEmbedUnimplementedTaskHubSidecarServiceServer() {}

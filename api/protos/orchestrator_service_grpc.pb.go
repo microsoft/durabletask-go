@@ -49,6 +49,7 @@ const (
 	TaskHubSidecarService_AbandonTaskActivityWorkItem_FullMethodName     = "/TaskHubSidecarService/AbandonTaskActivityWorkItem"
 	TaskHubSidecarService_AbandonTaskOrchestratorWorkItem_FullMethodName = "/TaskHubSidecarService/AbandonTaskOrchestratorWorkItem"
 	TaskHubSidecarService_AbandonTaskEntityWorkItem_FullMethodName       = "/TaskHubSidecarService/AbandonTaskEntityWorkItem"
+	TaskHubSidecarService_RerunWorkflowFromEvent_FullMethodName          = "/TaskHubSidecarService/RerunWorkflowFromEvent"
 )
 
 // TaskHubSidecarServiceClient is the client API for TaskHubSidecarService service.
@@ -101,6 +102,8 @@ type TaskHubSidecarServiceClient interface {
 	AbandonTaskOrchestratorWorkItem(ctx context.Context, in *AbandonOrchestrationTaskRequest, opts ...grpc.CallOption) (*AbandonOrchestrationTaskResponse, error)
 	// Abandon an entity work item
 	AbandonTaskEntityWorkItem(ctx context.Context, in *AbandonEntityTaskRequest, opts ...grpc.CallOption) (*AbandonEntityTaskResponse, error)
+	// Rerun a Workflow from a specific event ID of a workflow instance.
+	RerunWorkflowFromEvent(ctx context.Context, in *RerunWorkflowFromEventRequest, opts ...grpc.CallOption) (*RerunWorkflowFromEventResponse, error)
 }
 
 type taskHubSidecarServiceClient struct {
@@ -391,6 +394,15 @@ func (c *taskHubSidecarServiceClient) AbandonTaskEntityWorkItem(ctx context.Cont
 	return out, nil
 }
 
+func (c *taskHubSidecarServiceClient) RerunWorkflowFromEvent(ctx context.Context, in *RerunWorkflowFromEventRequest, opts ...grpc.CallOption) (*RerunWorkflowFromEventResponse, error) {
+	out := new(RerunWorkflowFromEventResponse)
+	err := c.cc.Invoke(ctx, TaskHubSidecarService_RerunWorkflowFromEvent_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TaskHubSidecarServiceServer is the server API for TaskHubSidecarService service.
 // All implementations must embed UnimplementedTaskHubSidecarServiceServer
 // for forward compatibility
@@ -441,6 +453,8 @@ type TaskHubSidecarServiceServer interface {
 	AbandonTaskOrchestratorWorkItem(context.Context, *AbandonOrchestrationTaskRequest) (*AbandonOrchestrationTaskResponse, error)
 	// Abandon an entity work item
 	AbandonTaskEntityWorkItem(context.Context, *AbandonEntityTaskRequest) (*AbandonEntityTaskResponse, error)
+	// Rerun a Workflow from a specific event ID of a workflow instance.
+	RerunWorkflowFromEvent(context.Context, *RerunWorkflowFromEventRequest) (*RerunWorkflowFromEventResponse, error)
 	mustEmbedUnimplementedTaskHubSidecarServiceServer()
 }
 
@@ -525,6 +539,9 @@ func (UnimplementedTaskHubSidecarServiceServer) AbandonTaskOrchestratorWorkItem(
 }
 func (UnimplementedTaskHubSidecarServiceServer) AbandonTaskEntityWorkItem(context.Context, *AbandonEntityTaskRequest) (*AbandonEntityTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AbandonTaskEntityWorkItem not implemented")
+}
+func (UnimplementedTaskHubSidecarServiceServer) RerunWorkflowFromEvent(context.Context, *RerunWorkflowFromEventRequest) (*RerunWorkflowFromEventResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RerunWorkflowFromEvent not implemented")
 }
 func (UnimplementedTaskHubSidecarServiceServer) mustEmbedUnimplementedTaskHubSidecarServiceServer() {}
 
@@ -1013,6 +1030,24 @@ func _TaskHubSidecarService_AbandonTaskEntityWorkItem_Handler(srv interface{}, c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskHubSidecarService_RerunWorkflowFromEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RerunWorkflowFromEventRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskHubSidecarServiceServer).RerunWorkflowFromEvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskHubSidecarService_RerunWorkflowFromEvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskHubSidecarServiceServer).RerunWorkflowFromEvent(ctx, req.(*RerunWorkflowFromEventRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TaskHubSidecarService_ServiceDesc is the grpc.ServiceDesc for TaskHubSidecarService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1115,6 +1150,10 @@ var TaskHubSidecarService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AbandonTaskEntityWorkItem",
 			Handler:    _TaskHubSidecarService_AbandonTaskEntityWorkItem_Handler,
+		},
+		{
+			MethodName: "RerunWorkflowFromEvent",
+			Handler:    _TaskHubSidecarService_RerunWorkflowFromEvent_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

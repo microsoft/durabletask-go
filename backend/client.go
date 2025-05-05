@@ -28,6 +28,7 @@ type TaskHubClient interface {
 	SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	ResumeOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	PurgeOrchestrationState(ctx context.Context, id api.InstanceID, opts ...api.PurgeOptions) error
+	RerunWorkflowFromEvent(ctx context.Context, source api.InstanceID, eventID uint32, opts ...api.RerunOptions) (api.InstanceID, error)
 }
 
 type backendClient struct {
@@ -256,4 +257,20 @@ func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.Inst
 		return fmt.Errorf("failed to purge orchestration state: %w", err)
 	}
 	return nil
+}
+
+// RerunWorkflowFromEvent reruns a workflow from a specific event ID of some
+// source instance ID. If not given, a random new instance ID will be generated
+// and returned. Can optionally give a new input to the target event ID to
+// rerun from.
+func (c *backendClient) RerunWorkflowFromEvent(ctx context.Context, id api.InstanceID, eventID uint32, opts ...api.RerunOptions) (api.InstanceID, error) {
+	req := &protos.RerunWorkflowFromEventRequest{SourceInstanceID: string(id), EventID: eventID}
+	for _, configure := range opts {
+		if err := configure(req); err != nil {
+			return "", fmt.Errorf("failed to configure rerun request: %w", err)
+		}
+	}
+
+	id, err := c.be.RerunWorkflowFromEvent(ctx, req)
+	return id, err
 }

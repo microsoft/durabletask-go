@@ -47,6 +47,10 @@ type OrchestrationIdReusePolicy = protos.OrchestrationIdReusePolicy
 // InstanceID is a unique identifier for an orchestration instance.
 type InstanceID string
 
+func (i InstanceID) String() string {
+	return string(i)
+}
+
 // NewOrchestrationOptions configures options for starting a new orchestration.
 type NewOrchestrationOptions func(*protos.CreateInstanceRequest) error
 
@@ -61,6 +65,8 @@ type TerminateOptions func(*protos.TerminateRequest) error
 
 // PurgeOptions is a set of options for purging an orchestration.
 type PurgeOptions func(*protos.PurgeInstancesRequest) error
+
+type RerunOptions func(*protos.RerunWorkflowFromEventRequest) error
 
 // WithInstanceID configures an explicit orchestration instance ID. If not specified,
 // a random UUID value will be used for the orchestration instance ID.
@@ -181,8 +187,34 @@ func OrchestrationMetadataIsRunning(o *protos.OrchestrationMetadata) bool {
 }
 
 func OrchestrationMetadataIsComplete(o *protos.OrchestrationMetadata) bool {
-	return o.RuntimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED ||
-		o.RuntimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED ||
-		o.RuntimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED ||
-		o.RuntimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED
+	return o.GetRuntimeStatus() == protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED ||
+		o.GetRuntimeStatus() == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED ||
+		o.GetRuntimeStatus() == protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED ||
+		o.GetRuntimeStatus() == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CANCELED
+}
+
+func WithRerunInput(input any) RerunOptions {
+	return func(req *protos.RerunWorkflowFromEventRequest) error {
+		req.OverwriteInput = true
+
+		if input == nil {
+			return nil
+		}
+
+		bytes, err := json.Marshal(input)
+		if err != nil {
+			return err
+		}
+
+		req.Input = wrapperspb.String(string(bytes))
+
+		return nil
+	}
+}
+
+func WithRerunNewInstanceID(id InstanceID) RerunOptions {
+	return func(req *protos.RerunWorkflowFromEventRequest) error {
+		req.NewInstanceID = id.String()
+		return nil
+	}
 }
