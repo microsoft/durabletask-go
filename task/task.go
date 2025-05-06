@@ -70,6 +70,8 @@ func (t *completableTask) Await(v any) error {
 		}
 	}
 	// TODO: Need a rule about using "defer" in orchestrations because planned panics will invoke them unexpectedly
+	// TODO: @joshvanl: remove panic- panic is something that should
+	// _never_ be called in normal operation.
 	panic(ErrTaskBlocked)
 }
 
