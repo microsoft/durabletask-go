@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dapr/durabletask-go/api/protos"
+	"github.com/dapr/kit/ptr"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -214,7 +215,7 @@ func WithRerunInput(input any) RerunOptions {
 
 func WithRerunNewInstanceID(id InstanceID) RerunOptions {
 	return func(req *protos.RerunWorkflowFromEventRequest) error {
-		req.NewInstanceID = id.String()
+		req.NewInstanceID = ptr.Of(id.String())
 		return nil
 	}
 }
