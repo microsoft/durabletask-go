@@ -1,6 +1,6 @@
 module github.com/microsoft/durabletask-go
 
-go 1.21
+go 1.23
 
 require (
 	github.com/cenkalti/backoff/v4 v4.1.3
