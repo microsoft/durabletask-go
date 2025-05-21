@@ -330,32 +330,9 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 				}
 			}
 
-			var sendErr error
-			if g.streamSendTimeout != nil {
-				sendCtx, sendCtxCancel := context.WithTimeout(stream.Context(), *g.streamSendTimeout)
-				// Use a channel to communicate the result of the send operation
-				sendDone := make(chan error, 1)
-				go func() {
-					select {
-					case <-sendCtx.Done():
-						g.logger.Errorf("timed out after 3 seconds while sending work item")
-						sendDone <- sendCtx.Err()
-						return
-					case sendDone <- stream.Send(wi):
-						return
-					}
-				}()
-
-				// Wait for either the send to complete or the timeout to expire
-				sendErr = <-sendDone
-				sendCtxCancel()
-			} else {
-				sendErr = stream.Send(wi)
-			}
-
-			if sendErr != nil {
-				g.logger.Errorf("encountered an error while sending work item: %v", sendErr)
-				return sendErr
+			if err := g.sendWorkItem(stream, wi); err != nil {
+				g.logger.Errorf("encountered an error while sending work item: %v", err)
+				return err
 			}
 		case key := <-pendingActivityCh:
 			delete(pendingActivities, key)
@@ -365,6 +342,27 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 			return errShuttingDown
 		}
 	}
+}
+
+func (g *grpcExecutor) sendWorkItem(stream protos.TaskHubSidecarService_GetWorkItemsServer, wi *protos.WorkItem) error {
+	ctx := stream.Context()
+	if g.streamSendTimeout != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *g.streamSendTimeout)
+		defer cancel()
+	}
+
+	errCh := make(chan error, 2)
+	go func() {
+		select {
+		case errCh <- stream.Send(wi):
+		case <-ctx.Done():
+			g.logger.Errorf("timed out while sending work item")
+			errCh <- ctx.Err()
+		}
+	}()
+
+	return <-errCh
 }
 
 // CompleteOrchestratorTask implements protos.TaskHubSidecarServiceServer
