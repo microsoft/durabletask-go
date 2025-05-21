@@ -57,6 +57,7 @@ type grpcExecutor struct {
 	onWorkItemConnection func(context.Context) error
 	onWorkItemDisconnect func(context.Context) error
 	streamShutdownChan   <-chan any
+	streamSendTimeout    *time.Duration
 }
 
 type grpcExecutorOptions func(g *grpcExecutor)
@@ -88,6 +89,12 @@ func WithOnGetWorkItemsDisconnectCallback(callback func(context.Context) error) 
 func WithStreamShutdownChannel(c <-chan any) grpcExecutorOptions {
 	return func(g *grpcExecutor) {
 		g.streamShutdownChan = c
+	}
+}
+
+func WithStreamSendTimeout(d time.Duration) grpcExecutorOptions {
+	return func(g *grpcExecutor) {
+		g.streamSendTimeout = &d
 	}
 }
 
@@ -323,9 +330,32 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 				}
 			}
 
-			if err := stream.Send(wi); err != nil {
-				g.logger.Errorf("encountered an error while sending work item: %v", err)
-				return err
+			var sendErr error
+			if g.streamSendTimeout != nil {
+				sendCtx, sendCtxCancel := context.WithTimeout(stream.Context(), *g.streamSendTimeout)
+				// Use a channel to communicate the result of the send operation
+				sendDone := make(chan error, 1)
+				go func() {
+					select {
+					case <-sendCtx.Done():
+						g.logger.Errorf("timed out after 3 seconds while sending work item")
+						sendDone <- sendCtx.Err()
+						return
+					case sendDone <- stream.Send(wi):
+						return
+					}
+				}()
+
+				// Wait for either the send to complete or the timeout to expire
+				sendErr = <-sendDone
+				sendCtxCancel()
+			} else {
+				sendErr = stream.Send(wi)
+			}
+
+			if sendErr != nil {
+				g.logger.Errorf("encountered an error while sending work item: %v", sendErr)
+				return sendErr
 			}
 		case key := <-pendingActivityCh:
 			delete(pendingActivities, key)
