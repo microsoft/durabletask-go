@@ -57,6 +57,7 @@ type grpcExecutor struct {
 	onWorkItemConnection func(context.Context) error
 	onWorkItemDisconnect func(context.Context) error
 	streamShutdownChan   <-chan any
+	streamSendTimeout    *time.Duration
 }
 
 type grpcExecutorOptions func(g *grpcExecutor)
@@ -88,6 +89,12 @@ func WithOnGetWorkItemsDisconnectCallback(callback func(context.Context) error) 
 func WithStreamShutdownChannel(c <-chan any) grpcExecutorOptions {
 	return func(g *grpcExecutor) {
 		g.streamShutdownChan = c
+	}
+}
+
+func WithStreamSendTimeout(d time.Duration) grpcExecutorOptions {
+	return func(g *grpcExecutor) {
+		g.streamSendTimeout = &d
 	}
 }
 
@@ -323,7 +330,7 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 				}
 			}
 
-			if err := stream.Send(wi); err != nil {
+			if err := g.sendWorkItem(stream, wi); err != nil {
 				g.logger.Errorf("encountered an error while sending work item: %v", err)
 				return err
 			}
@@ -335,6 +342,27 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 			return errShuttingDown
 		}
 	}
+}
+
+func (g *grpcExecutor) sendWorkItem(stream protos.TaskHubSidecarService_GetWorkItemsServer, wi *protos.WorkItem) error {
+	ctx := stream.Context()
+	if g.streamSendTimeout != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *g.streamSendTimeout)
+		defer cancel()
+	}
+
+	errCh := make(chan error, 2)
+	go func() {
+		select {
+		case errCh <- stream.Send(wi):
+		case <-ctx.Done():
+			g.logger.Errorf("timed out while sending work item")
+			errCh <- ctx.Err()
+		}
+	}()
+
+	return <-errCh
 }
 
 // CompleteOrchestratorTask implements protos.TaskHubSidecarServiceServer
