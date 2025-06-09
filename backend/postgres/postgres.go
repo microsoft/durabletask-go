@@ -999,6 +999,7 @@ func (be *postgresBackend) ensureDB() error {
 }
 
 func (be *postgresBackend) String() string {
-	connectionURI := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", be.options.PgOptions.ConnConfig.User, be.options.PgOptions.ConnConfig.Password, be.options.PgOptions.ConnConfig.Host, be.options.PgOptions.ConnConfig.Port, be.options.PgOptions.ConnConfig.Database)
+	maskedPassword := strings.Repeat("*", len(be.options.PgOptions.ConnConfig.Password))
+	connectionURI := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", be.options.PgOptions.ConnConfig.User, maskedPassword, be.options.PgOptions.ConnConfig.Host, be.options.PgOptions.ConnConfig.Port, be.options.PgOptions.ConnConfig.Database)
 	return connectionURI
 }
