@@ -208,6 +208,10 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 					FailureDetails:  failureDetails,
 				},
 			},
+			Router: &protos.TaskRouter{
+				Source: e.Router.GetSource(),
+				Target: e.Router.GetTarget(),
+			},
 		}
 	} else {
 		responseEvent = &protos.HistoryEvent{
@@ -218,6 +222,10 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 					TaskScheduledId: result.response.TaskId,
 					Result:          result.response.Result,
 				},
+			},
+			Router: &protos.TaskRouter{
+				Source: e.Router.GetSource(),
+				Target: e.Router.GetTarget(),
 			},
 		}
 	}
@@ -504,6 +512,7 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 				ScheduledStartTimestamp: req.ScheduledStartTimestamp,
 			},
 		},
+		Router: &protos.TaskRouter{},
 	}
 	if err := g.backend.CreateOrchestrationInstance(ctx, e, WithOrchestrationIdReusePolicy(req.OrchestrationIdReusePolicy)); err != nil {
 		return nil, err

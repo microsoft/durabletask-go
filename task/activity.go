@@ -15,6 +15,7 @@ type callActivityOption func(*callActivityOptions) error
 type callActivityOptions struct {
 	rawInput    *wrapperspb.StringValue
 	retryPolicy *RetryPolicy
+	AppID       string
 }
 
 type RetryPolicy struct {
@@ -55,6 +56,13 @@ func (policy *RetryPolicy) Validate() error {
 		}
 	}
 	return nil
+}
+
+func WithAppID(appID string) callActivityOption {
+	return func(opt *callActivityOptions) error {
+		opt.AppID = appID
+		return nil
+	}
 }
 
 // WithActivityInput configures an input for an activity invocation.

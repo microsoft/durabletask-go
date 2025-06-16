@@ -27,6 +27,7 @@ type OrchestrationContext struct {
 	Name           string
 	IsReplaying    bool
 	CurrentTimeUtc time.Time
+	AppID          string
 
 	registry            *TaskRegistry
 	rawInput            []byte
@@ -200,6 +201,10 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 		// OrchestratorStarted is only used to update the current orchestration time
 		ctx.CurrentTimeUtc = e.Timestamp.AsTime()
 	} else if es := e.GetExecutionStarted(); es != nil {
+		// Extract source AppID from HistoryEvent Router if this is ExecutionStartedEvent
+		if ctx.AppID == "" && e.GetRouter() != nil && e.GetRouter().GetSource() != "" {
+			ctx.AppID = e.GetRouter().GetSource()
+		}
 		err = ctx.onExecutionStarted(es)
 	} else if ts := e.GetTaskScheduled(); ts != nil {
 		err = ctx.onTaskScheduled(e.EventId, ts)
@@ -277,6 +282,19 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName string, o
 		},
 	}
 
+	// Add TaskRouter support for cross-app activities
+	if options.AppID != "" {
+		router := &protos.TaskRouter{
+			Source: ctx.AppID,     // Current orchestrator app ID
+			Target: options.AppID, // Target activity app ID
+		}
+
+		// Set router on both the ScheduleTaskAction and the parent OrchestratorAction
+		scheduleTaskAction.GetScheduleTask().Router = router
+		scheduleTaskAction.Router = router
+
+	}
+
 	ctx.pendingActions[scheduleTaskAction.Id] = scheduleTaskAction
 
 	task := newTask(ctx)
@@ -284,6 +302,7 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName string, o
 	return task
 }
 
+// TODO: cassie wire appID into suborchestration options too for cross app wf
 func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, opts ...subOrchestratorOption) Task {
 	options := new(callSubOrchestratorOptions)
 	for _, configure := range opts {
@@ -513,6 +532,7 @@ func (ctx *OrchestrationContext) onTaskScheduled(taskID int32, ts *protos.TaskSc
 			taskID,
 		)
 	}
+
 	delete(ctx.pendingActions, taskID)
 	return nil
 }

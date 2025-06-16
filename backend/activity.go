@@ -50,6 +50,15 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, awi *ActivityWo
 		return fmt.Errorf("%v: invalid TaskScheduled event", awi.InstanceID)
 	}
 
+	if awi.NewEvent.Router == nil {
+		awi.NewEvent.Router = &protos.TaskRouter{}
+	}
+
+	if eventRouter := awi.NewEvent.GetRouter(); eventRouter != nil {
+		awi.NewEvent.Router.Source = eventRouter.GetSource()
+		awi.NewEvent.Router.Target = eventRouter.GetTarget()
+	}
+
 	// Create span as child of spanContext found in TaskScheduledEvent
 	ctx, err := helpers.ContextFromTraceContext(ctx, ts.ParentTraceContext)
 	if err != nil {
@@ -74,6 +83,17 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, awi *ActivityWo
 			span.SetStatus(codes.Error, err.Error())
 		}
 		return err
+	}
+
+	if result != nil {
+		if result.Router == nil {
+			result.Router = &protos.TaskRouter{}
+		}
+		// Copy Router info from the NewEvent to preserve cross-app routing context
+		if awi.NewEvent.Router != nil {
+			result.Router.Source = awi.NewEvent.Router.Source
+			result.Router.Target = awi.NewEvent.Router.Target
+		}
 	}
 
 	awi.Result = result

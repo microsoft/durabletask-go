@@ -243,46 +243,6 @@ You can find this code in the [distributedtracing](./samples/distributedtracing)
 
 Note that each orchestration is represented as a single span with activities, timers, and sub-orchestrations as child spans. The generated spans contain a variety of attributes that include information such as orchestration instance IDs, task names, task IDs, etc.
 
-## Cloning this repository
-
-This repository contains submodules. Be sure to clone it with the option to include submodules. Otherwise you will not be able to generate the protobuf code.
-
-```bash
-git clone --recurse-submodules https://github.com/dapr/durabletask-go 
-```
-
-## Building the project
-
-This project requires go v1.19.x or greater. You can build a standalone executable by simply running `go build` at the project root.
-
-### Generating protobuf
-
-Use the following command to regenerate the protobuf from the submodule. Use this whenever updating the submodule reference.
-
-```bash
-# NOTE: assumes the .proto file defines: option go_package = "/api/protos"
-# NOTE: currently the .proto file actually defines: option go_package = "/internal/protos"; , we are manually changing that to be /api/protos
-protoc --go_out=. --go-grpc_out=. -I submodules/durabletask-protobuf/protos orchestrator_service.proto
-```
-
-### Generating mocks for testing
-
-Test mocks were generated using [mockery](https://github.com/vektra/mockery). Use the following command at the project root to regenerate the mocks.
-
-```bash
-mockery --dir ./backend --name="^Backend|^Executor|^TaskWorker" --output ./tests/mocks --with-expecter
-```
-
-## Running tests
-
-All automated tests are under `./tests`. A separate test package hierarchy was chosen intentionally to prioritize [black box testing](https://en.wikipedia.org/wiki/Black-box_testing). This strategy also makes it easier to catch accidental breaking API changes.
-
-Run tests with the following command.
-
-```bash
-go test ./tests/... -coverpkg ./api,./task,./client,./backend/...,./api/helpers
-```
-
 ## Running integration tests
 
 You can run pre-built container images to run full integration tests against the durable task host over gRPC.

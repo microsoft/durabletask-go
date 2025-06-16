@@ -91,6 +91,10 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 					EventType: &protos.HistoryEvent_OrchestratorStarted{
 						OrchestratorStarted: &protos.OrchestratorStartedEvent{},
 					},
+					Router: &protos.TaskRouter{
+						Source: action.Router.GetSource(),
+						Target: action.Router.GetTarget(),
+					},
 				})
 
 				// Duplicate the start event info, updating just the input
@@ -109,6 +113,10 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 								},
 								ParentTraceContext: s.StartEvent.ParentTraceContext,
 							},
+						},
+						Router: &protos.TaskRouter{
+							Source: action.Router.GetSource(),
+							Target: action.Router.GetTarget(),
 						},
 					},
 				)
@@ -133,6 +141,10 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 							Result:              completedAction.Result,
 							FailureDetails:      completedAction.FailureDetails,
 						},
+					},
+					Router: &protos.TaskRouter{
+						Source: action.Router.GetSource(),
+						Target: action.Router.GetTarget(),
 					},
 				})
 				if s.StartEvent.GetParentInstance() != nil {
@@ -169,6 +181,10 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						Name:   createtimer.Name,
 					},
 				},
+				Router: &protos.TaskRouter{
+					Source: action.Router.GetSource(),
+					Target: action.Router.GetTarget(),
+				},
 			})
 			// TODO cant pass trace context
 			s.PendingTimers = append(s.PendingTimers, &protos.HistoryEvent{
@@ -193,6 +209,10 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						ParentTraceContext: currentTraceContext,
 					},
 				},
+				Router: &protos.TaskRouter{
+					Source: action.Router.GetSource(),
+					Target: action.Router.GetTarget(),
+				},
 			}
 			AddEvent(s, scheduledEvent)
 			s.PendingTasks = append(s.PendingTasks, scheduledEvent)
@@ -214,6 +234,10 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						ParentTraceContext: currentTraceContext,
 					},
 				},
+				Router: &protos.TaskRouter{
+					Source: action.Router.GetSource(),
+					Target: action.Router.GetTarget(),
+				},
 			})
 			startEvent := &protos.HistoryEvent{
 				EventId:   -1,
@@ -234,6 +258,10 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						ParentTraceContext: currentTraceContext,
 					},
 				},
+				Router: &protos.TaskRouter{
+					Source: action.Router.GetSource(),
+					Target: action.Router.GetTarget(),
+				},
 			}
 
 			s.PendingMessages = append(s.PendingMessages, &protos.OrchestrationRuntimeStateMessage{HistoryEvent: startEvent, TargetInstanceID: createSO.InstanceId})
@@ -247,6 +275,10 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						Name:       sendEvent.Name,
 						Input:      sendEvent.Data,
 					},
+				},
+				Router: &protos.TaskRouter{
+					Source: action.Router.GetSource(),
+					Target: action.Router.GetTarget(),
 				},
 			}
 			AddEvent(s, e)
@@ -263,6 +295,10 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 							Input:   terminate.Reason,
 							Recurse: terminate.Recurse,
 						},
+					},
+					Router: &protos.TaskRouter{
+						Source: action.Router.GetSource(),
+						Target: action.Router.GetTarget(),
 					},
 				},
 			}
