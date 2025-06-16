@@ -59,7 +59,7 @@ func Init(ctx context.Context, r *task.TaskRegistry) (backend.TaskHubClient, bac
 
 	// Create a new backend
 	// Use the in-memory sqlite provider by specifying ""
-	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions("/Users/javi/projects/javi-durabletask-go/backend/sqlite/retries"), logger)
+	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions(""), logger)
 	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
 	activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
 	taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
