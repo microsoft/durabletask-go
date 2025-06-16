@@ -2,16 +2,14 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend/runtimestate"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -133,15 +131,6 @@ type Backend interface {
 // MarshalHistoryEvent serializes the [HistoryEvent] into a protobuf byte array.
 func MarshalHistoryEvent(e *HistoryEvent) ([]byte, error) {
 	if bytes, err := proto.Marshal(e); err != nil {
-		return nil, fmt.Errorf("failed to marshal history event: %w", err)
-	} else {
-		return bytes, nil
-	}
-}
-
-// MarshalJsonHistoryEvent serializes the [HistoryEvent] into a protobuf byte array.
-func MarshalJsonHistoryEvent(e *HistoryEvent) ([]byte, error) {
-	if bytes, err := json.Marshal(e); err != nil {
 		return nil, fmt.Errorf("failed to marshal history event: %w", err)
 	} else {
 		return bytes, nil
