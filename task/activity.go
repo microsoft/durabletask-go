@@ -14,9 +14,8 @@ import (
 type callActivityOption func(*callActivityOptions) error
 
 type callActivityOptions struct {
-	rawInput        *wrapperspb.StringValue
-	retryPolicy     *RetryPolicy
-	taskExecutionId string
+	rawInput    *wrapperspb.StringValue
+	retryPolicy *RetryPolicy
 }
 
 type RetryPolicy struct {

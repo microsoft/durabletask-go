@@ -263,20 +263,18 @@ func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...call
 
 	if options.retryPolicy != nil {
 		return ctx.internalScheduleTaskWithRetries(activityName+"-retry", ctx.CurrentTimeUtc, func(taskExecutionId string) Task {
-			options.taskExecutionId = taskExecutionId
-			return ctx.internalScheduleActivity(activityName, options)
+			return ctx.internalScheduleActivity(activityName, taskExecutionId, options)
 		}, *options.retryPolicy, 0, uuid.NewString())
 	}
 
-	options.taskExecutionId = uuid.NewString()
-	return ctx.internalScheduleActivity(activityName, options)
+	return ctx.internalScheduleActivity(activityName, uuid.NewString(), options)
 }
 
-func (ctx *OrchestrationContext) internalScheduleActivity(activityName string, options *callActivityOptions) Task {
+func (ctx *OrchestrationContext) internalScheduleActivity(activityName, taskExecutionId string, options *callActivityOptions) Task {
 	scheduleTaskAction := &protos.OrchestratorAction{
 		Id: ctx.getNextSequenceNumber(),
 		OrchestratorActionType: &protos.OrchestratorAction_ScheduleTask{
-			ScheduleTask: &protos.ScheduleTaskAction{Name: activityName, TaskExecutionId: options.taskExecutionId, Input: options.rawInput},
+			ScheduleTask: &protos.ScheduleTaskAction{Name: activityName, TaskExecutionId: taskExecutionId, Input: options.rawInput},
 		},
 	}
 
