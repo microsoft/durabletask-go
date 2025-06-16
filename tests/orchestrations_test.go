@@ -259,7 +259,7 @@ func Test_ActivityRetries(t *testing.T) {
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("ActivityRetries", func(ctx *task.OrchestrationContext) (any, error) {
 		if err := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
-			MaxAttempts:          3,
+			MaxAttempts:          8,
 			InitialRetryInterval: 10 * time.Millisecond,
 		})).Await(nil); err != nil {
 			return nil, err
@@ -1343,7 +1343,7 @@ func Test_SingleActivity_ReuseInstanceIDError(t *testing.T) {
 func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {
 	// TODO: Switch to options pattern
 	logger := backend.DefaultLogger()
-	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions(""), logger)
+	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions("/Users/javi/projects/javi-durabletask-go/backend/sqlite/retries"), logger)
 	executor := task.NewTaskExecutor(r)
 	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger, opts...)
 	activityWorker := backend.NewActivityTaskWorker(be, executor, logger, opts...)

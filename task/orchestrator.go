@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -261,11 +262,13 @@ func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...call
 	activityName := helpers.GetTaskFunctionName(activity)
 
 	if options.retryPolicy != nil {
-		return ctx.internalScheduleTaskWithRetries(activityName+"-retry", ctx.CurrentTimeUtc, func() Task {
+		return ctx.internalScheduleTaskWithRetries(activityName+"-retry", ctx.CurrentTimeUtc, func(taskExecutionId string) Task {
+			options.taskExecutionId = taskExecutionId
 			return ctx.internalScheduleActivity(activityName, options)
-		}, *options.retryPolicy, 0)
+		}, *options.retryPolicy, 0, uuid.NewString())
 	}
 
+	options.taskExecutionId = uuid.NewString()
 	return ctx.internalScheduleActivity(activityName, options)
 }
 
@@ -273,7 +276,7 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName string, o
 	scheduleTaskAction := &protos.OrchestratorAction{
 		Id: ctx.getNextSequenceNumber(),
 		OrchestratorActionType: &protos.OrchestratorAction_ScheduleTask{
-			ScheduleTask: &protos.ScheduleTaskAction{Name: activityName, Input: options.rawInput},
+			ScheduleTask: &protos.ScheduleTaskAction{Name: activityName, TaskExecutionId: options.taskExecutionId, Input: options.rawInput},
 		},
 	}
 
@@ -300,9 +303,9 @@ func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, o
 	orchestratorName := helpers.GetTaskFunctionName(orchestrator)
 
 	if options.retryPolicy != nil {
-		return ctx.internalScheduleTaskWithRetries(orchestratorName+"-retry", ctx.CurrentTimeUtc, func() Task {
+		return ctx.internalScheduleTaskWithRetries(orchestratorName+"-retry", ctx.CurrentTimeUtc, func(_ string) Task {
 			return ctx.internalCallSubOrchestrator(orchestratorName, options)
-		}, *options.retryPolicy, 0)
+		}, *options.retryPolicy, 0, uuid.NewString())
 	}
 
 	return ctx.internalCallSubOrchestrator(orchestratorName, options)
@@ -326,10 +329,10 @@ func (ctx *OrchestrationContext) internalCallSubOrchestrator(orchestratorName st
 	return task
 }
 
-func (ctx *OrchestrationContext) internalScheduleTaskWithRetries(name string, initialAttempt time.Time, schedule func() Task, policy RetryPolicy, retryCount int) Task {
+func (ctx *OrchestrationContext) internalScheduleTaskWithRetries(name string, initialAttempt time.Time, schedule func(taskExecutionId string) Task, policy RetryPolicy, retryCount int, taskExecutionId string) Task {
 	return &taskWrapper{
-		delegate: schedule(),
-		onAwaitResult: func(v any, err error) error {
+		delegate: schedule(taskExecutionId),
+		onAwaitResult: func(v any, taskExecutionId string, err error) error {
 			if err == nil {
 				return nil
 			}
@@ -343,17 +346,18 @@ func (ctx *OrchestrationContext) internalScheduleTaskWithRetries(name string, in
 			if nextDelay == 0 {
 				return err
 			}
-
 			timerErr := ctx.createTimerInternal(&name, nextDelay).Await(nil)
 			if timerErr != nil {
 				// TODO use errors.Join when updating golang
 				return fmt.Errorf("%v %w", timerErr, err)
 			}
 
-			err = ctx.internalScheduleTaskWithRetries(name, initialAttempt, schedule, policy, retryCount+1).Await(v)
+			t := ctx.internalScheduleTaskWithRetries(name, initialAttempt, schedule, policy, retryCount+1, taskExecutionId)
+			err = t.Await(v)
 			if err == nil {
 				return nil
 			}
+
 			return err
 		},
 	}
@@ -549,6 +553,7 @@ func (ctx *OrchestrationContext) onTaskFailed(tf *protos.TaskFailedEvent) error 
 
 	// completing a task will resume the corresponding Await() call
 	task.fail(tf.FailureDetails)
+	task.taskExecutionId = tf.TaskExecutionId
 	return nil
 }
 

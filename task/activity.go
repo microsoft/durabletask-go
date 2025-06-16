@@ -6,15 +6,17 @@ import (
 	"math"
 	"time"
 
-	"github.com/dapr/durabletask-go/api/protos"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/dapr/durabletask-go/api/protos"
 )
 
 type callActivityOption func(*callActivityOptions) error
 
 type callActivityOptions struct {
-	rawInput    *wrapperspb.StringValue
-	retryPolicy *RetryPolicy
+	rawInput        *wrapperspb.StringValue
+	retryPolicy     *RetryPolicy
+	taskExecutionId string
 }
 
 type RetryPolicy struct {
@@ -95,12 +97,15 @@ func WithActivityRetryPolicy(policy *RetryPolicy) callActivityOption {
 // ActivityContext is the context parameter type for activity implementations.
 type ActivityContext interface {
 	GetInput(resultPtr any) error
+	GetTaskID() int32
+	GetTaskExecutionId() string
 	Context() context.Context
 }
 
 type activityContext struct {
-	TaskID int32
-	Name   string
+	TaskID          int32
+	TaskExecutionId string
+	Name            string
 
 	rawInput []byte
 	ctx      context.Context
@@ -111,10 +116,11 @@ type Activity func(ctx ActivityContext) (any, error)
 
 func newTaskActivityContext(ctx context.Context, taskID int32, ts *protos.TaskScheduledEvent) *activityContext {
 	return &activityContext{
-		TaskID:   taskID,
-		Name:     ts.Name,
-		rawInput: []byte(ts.Input.GetValue()),
-		ctx:      ctx,
+		TaskID:          taskID,
+		TaskExecutionId: ts.TaskExecutionId,
+		Name:            ts.Name,
+		rawInput:        []byte(ts.Input.GetValue()),
+		ctx:             ctx,
 	}
 }
 
@@ -125,4 +131,12 @@ func (actx *activityContext) GetInput(v any) error {
 
 func (actx *activityContext) Context() context.Context {
 	return actx.ctx
+}
+
+func (actx *activityContext) GetTaskID() int32 {
+	return actx.TaskID
+}
+
+func (actx *activityContext) GetTaskExecutionId() string {
+	return actx.TaskExecutionId
 }

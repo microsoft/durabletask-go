@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
-	"google.golang.org/protobuf/types/known/timestamppb"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type taskExecutor struct {
@@ -42,6 +43,7 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 				EventType: &protos.HistoryEvent_TaskFailed{
 					TaskFailed: &protos.TaskFailedEvent{
 						TaskScheduledId: e.EventId,
+						TaskExecutionId: ts.GetTaskExecutionId(),
 						FailureDetails: &protos.TaskFailureDetails{
 							ErrorType:    "TaskActivityNotRegistered",
 							ErrorMessage: fmt.Sprintf("no task activity named '%s' was registered", ts.Name),
@@ -81,6 +83,7 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 			EventType: &protos.HistoryEvent_TaskFailed{
 				TaskFailed: &protos.TaskFailedEvent{
 					TaskScheduledId: e.EventId,
+					TaskExecutionId: ts.GetTaskExecutionId(),
 					FailureDetails: &protos.TaskFailureDetails{
 						ErrorType:    fmt.Sprintf("%T", err),
 						ErrorMessage: fmt.Sprintf("%+v", err),
@@ -98,6 +101,7 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 			EventType: &protos.HistoryEvent_TaskFailed{
 				TaskFailed: &protos.TaskFailedEvent{
 					TaskScheduledId: e.EventId,
+					TaskExecutionId: ts.GetTaskExecutionId(),
 					FailureDetails: &protos.TaskFailureDetails{
 						ErrorType:    fmt.Sprintf("%T", err),
 						ErrorMessage: fmt.Sprintf("%+v", err),
@@ -116,6 +120,7 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 		EventType: &protos.HistoryEvent_TaskCompleted{
 			TaskCompleted: &protos.TaskCompletedEvent{
 				TaskScheduledId: e.EventId,
+				TaskExecutionId: ts.GetTaskExecutionId(),
 				Result:          rawResult,
 			},
 		},

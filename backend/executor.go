@@ -1,7 +1,7 @@
 package backend
 
 import (
-	context "context"
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -179,6 +179,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 				Input:                 task.Input,
 				OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: string(iid)},
 				TaskId:                e.EventId,
+				TaskExecutionId:       task.TaskExecutionId,
 			},
 		},
 	}
