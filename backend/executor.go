@@ -213,6 +213,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 			EventType: &protos.HistoryEvent_TaskFailed{
 				TaskFailed: &protos.TaskFailedEvent{
 					TaskScheduledId: result.response.TaskId,
+					TaskExecutionId: task.TaskExecutionId,
 					FailureDetails:  failureDetails,
 				},
 			},
@@ -225,6 +226,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 				TaskCompleted: &protos.TaskCompletedEvent{
 					TaskScheduledId: result.response.TaskId,
 					Result:          result.response.Result,
+					TaskExecutionId: task.TaskExecutionId,
 				},
 			},
 		}
