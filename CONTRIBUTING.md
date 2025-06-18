@@ -25,9 +25,13 @@ This project requires go v1.19.x or greater. You can build a standalone executab
 Use the following command to regenerate the protobuf from the submodule. Use this whenever updating the submodule reference.
 
 ```bash
-# NOTE: assumes the .proto file defines: option go_package = "/api/protos"
-# NOTE: currently the .proto file actually defines: option go_package = "/internal/protos"; , we are manually changing that to be /api/protos
-protoc --go_out=. --go-grpc_out=. -I submodules/durabletask-protobuf/protos orchestrator_service.proto backend_service.proto runtime_state.proto
+# Run from the repo root and specify the output directory
+# This will place the generated files directly in api/protos/, matching the go_package and your repo structure.
+protoc --go_out=api/protos --go-grpc_out=api/protos \
+  -I submodules/durabletask-protobuf/protos \
+  submodules/durabletask-protobuf/protos/orchestrator_service.proto \
+  submodules/durabletask-protobuf/protos/backend_service.proto \
+  submodules/durabletask-protobuf/protos/runtime_state.proto
 ```
 
 For local development with protobuf changes:
@@ -38,7 +42,11 @@ For local development with protobuf changes:
 replace github.com/dapr/durabletask-protobuf => ../durabletask-protobuf
 
 # Regenerate protobuf files using your local proto definitions
-protoc --go_out=. --go-grpc_out=. -I ../durabletask-protobuf/protos orchestrator_service.proto backend_service.proto runtime_state.proto
+protoc --go_out=api/protos --go-grpc_out=api/protos \
+  -I ../durabletask-protobuf/protos \
+  ../durabletask-protobuf/protos/orchestrator_service.proto \
+  ../durabletask-protobuf/protos/backend_service.proto \
+  ../durabletask-protobuf/protos/runtime_state.proto
 ```
 
 This will use your local proto files instead of the ones in the submodule, which is useful when testing protobuf changes before submitting them upstream.
