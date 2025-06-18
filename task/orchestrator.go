@@ -530,7 +530,6 @@ func (ctx *OrchestrationContext) onTaskScheduled(taskID int32, ts *protos.TaskSc
 			taskID,
 		)
 	}
-
 	delete(ctx.pendingActions, taskID)
 	return nil
 }
