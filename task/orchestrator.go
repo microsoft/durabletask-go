@@ -290,7 +290,6 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName string, o
 		}
 
 		scheduleTaskAction.Router = router
-
 	}
 
 	ctx.pendingActions[scheduleTaskAction.Id] = scheduleTaskAction
