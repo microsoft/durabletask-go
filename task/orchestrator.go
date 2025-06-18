@@ -289,8 +289,6 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName string, o
 			Target: options.AppID, // Target activity app ID
 		}
 
-		// Set router on both the ScheduleTaskAction and the parent OrchestratorAction
-		scheduleTaskAction.GetScheduleTask().Router = router
 		scheduleTaskAction.Router = router
 
 	}
