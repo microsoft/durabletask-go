@@ -124,9 +124,9 @@ var (
 	countersLock sync.RWMutex
 )
 
-// GetCounter returns a Counter instance for the specified taskExecutionId.
+// getCounter returns a Counter instance for the specified taskExecutionId.
 // If no counter exists for the taskExecutionId, a new one is created.
-func GetCounter(taskExecutionId string) *Counter {
+func getCounter(taskExecutionId string) *Counter {
 	countersLock.RLock()
 	counter, exists := counters[taskExecutionId]
 	countersLock.RUnlock()
@@ -148,10 +148,10 @@ func GetCounter(taskExecutionId string) *Counter {
 func RandomFailActivity(ctx task.ActivityContext) (any, error) {
 	log.Println(fmt.Sprintf("#### [%v] activity %v failure", ctx.GetTaskExecutionId(), ctx.GetTaskID()))
 
-	// 70% possibility for activity failure
-	if GetCounter(ctx.GetTaskExecutionId()).GetValue() != 5 {
+	// The activity should fail 5 times before succeeding.
+	if getCounter(ctx.GetTaskExecutionId()).GetValue() != 5 {
 		log.Println("random activity failure")
-		GetCounter(ctx.GetTaskExecutionId()).Increment()
+		getCounter(ctx.GetTaskExecutionId()).Increment()
 		return "", errors.New("random activity failure")
 	}
 
