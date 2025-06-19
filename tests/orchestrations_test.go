@@ -1343,7 +1343,7 @@ func Test_SingleActivity_ReuseInstanceIDError(t *testing.T) {
 func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {
 	// TODO: Switch to options pattern
 	logger := backend.DefaultLogger()
-	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions("/Users/javi/projects/javi-durabletask-go/backend/sqlite/retries"), logger)
+	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions(""), logger)
 	executor := task.NewTaskExecutor(r)
 	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger, opts...)
 	activityWorker := backend.NewActivityTaskWorker(be, executor, logger, opts...)
