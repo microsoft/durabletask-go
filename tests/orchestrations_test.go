@@ -1359,9 +1359,9 @@ func Test_TaskExecutionId(t *testing.T) {
 		executionMap := make(map[string]int)
 		var executionId string
 		require.NoError(t, r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
-			executionMap[ctx.GetTaskExecutionId()] = executionMap[ctx.GetTaskExecutionId()] + 1
 			executionId = ctx.GetTaskExecutionId()
-			if executionMap[ctx.GetTaskExecutionId()] == 3 {
+			executionMap[executionId]++
+			if executionMap[executionId] == 3 {
 				return nil, nil
 			}
 			return nil, errors.New("activity failure")
