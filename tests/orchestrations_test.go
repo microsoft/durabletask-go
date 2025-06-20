@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -259,7 +261,7 @@ func Test_ActivityRetries(t *testing.T) {
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("ActivityRetries", func(ctx *task.OrchestrationContext) (any, error) {
 		if err := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
-			MaxAttempts:          8,
+			MaxAttempts:          3,
 			InitialRetryInterval: 10 * time.Millisecond,
 		})).Await(nil); err != nil {
 			return nil, err
@@ -1338,6 +1340,153 @@ func Test_SingleActivity_ReuseInstanceIDError(t *testing.T) {
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}
+}
+
+func Test_TaskExecutionId(t *testing.T) {
+	t.Run("SingleActivityWithRetry", func(t *testing.T) {
+		// Registration
+		r := task.NewTaskRegistry()
+		require.NoError(t, r.AddOrchestratorN("TaskExecutionId", func(ctx *task.OrchestrationContext) (any, error) {
+			if err := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
+				MaxAttempts:          3,
+				InitialRetryInterval: 10 * time.Millisecond,
+			})).Await(nil); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}))
+
+		executionMap := make(map[string]int)
+		var executionId string
+		require.NoError(t, r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
+			executionMap[ctx.GetTaskExecutionId()] = executionMap[ctx.GetTaskExecutionId()] + 1
+			executionId = ctx.GetTaskExecutionId()
+			if executionMap[ctx.GetTaskExecutionId()] == 3 {
+				return nil, nil
+			}
+			return nil, errors.New("activity failure")
+		}))
+
+		// Initialization
+		ctx := context.Background()
+
+		client, worker := initTaskHubWorker(ctx, r)
+		defer worker.Shutdown(ctx)
+
+		// Run the orchestration
+		id, err := client.ScheduleNewOrchestration(ctx, "TaskExecutionId")
+		require.NoError(t, err)
+
+		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+		require.NoError(t, err)
+
+		assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+		// With 3 max attempts there will be two retries with 10 millis delay before each
+		require.GreaterOrEqual(t, metadata.LastUpdatedAt.AsTime(), metadata.CreatedAt.AsTime().Add(2*10*time.Millisecond))
+		assert.NotEmpty(t, executionId)
+		assert.Equal(t, 1, len(executionMap))
+		assert.Equal(t, 3, executionMap[executionId])
+	})
+
+	t.Run("ParallelActivityWithRetry", func(t *testing.T) {
+		// Registration
+		r := task.NewTaskRegistry()
+		require.NoError(t, r.AddOrchestratorN("TaskExecutionId", func(ctx *task.OrchestrationContext) (any, error) {
+			t1 := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
+				MaxAttempts:          3,
+				InitialRetryInterval: 10 * time.Millisecond,
+			}))
+
+			t2 := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
+				MaxAttempts:          3,
+				InitialRetryInterval: 10 * time.Millisecond,
+			}))
+
+			err := t1.Await(nil)
+			if err != nil {
+				return nil, err
+			}
+
+			err = t2.Await(nil)
+			if err != nil {
+				return nil, err
+			}
+
+			return nil, nil
+		}))
+
+		executionMap := make(map[string]int)
+
+		lock := sync.Mutex{}
+		require.NoError(t, r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
+			lock.Lock()
+			defer lock.Unlock()
+			executionMap[ctx.GetTaskExecutionId()] = executionMap[ctx.GetTaskExecutionId()] + 1
+			if executionMap[ctx.GetTaskExecutionId()] == 3 {
+				return nil, nil
+			}
+			return nil, errors.New("activity failure")
+		}))
+
+		// Initialization
+		ctx := context.Background()
+
+		client, worker := initTaskHubWorker(ctx, r)
+		defer worker.Shutdown(ctx)
+
+		// Run the orchestration
+		id, err := client.ScheduleNewOrchestration(ctx, "TaskExecutionId")
+		require.NoError(t, err)
+
+		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+		require.NoError(t, err)
+
+		assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+		// With 3 max attempts there will be two retries with 10 millis delay before each
+		require.GreaterOrEqual(t, metadata.LastUpdatedAt.AsTime(), metadata.CreatedAt.AsTime().Add(2*10*time.Millisecond))
+
+		assert.Equal(t, 2, len(executionMap))
+		for k, v := range executionMap {
+			assert.NotEmpty(t, k)
+			assert.Equal(t, 3, v)
+		}
+
+	})
+
+	t.Run("SingleActivityWithNoRetry", func(t *testing.T) {
+		// Registration
+		r := task.NewTaskRegistry()
+		require.NoError(t, r.AddOrchestratorN("TaskExecutionId", func(ctx *task.OrchestrationContext) (any, error) {
+			if err := ctx.CallActivity("Activity").Await(nil); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}))
+
+		var executionId string
+		require.NoError(t, r.AddActivityN("Activity", func(ctx task.ActivityContext) (any, error) {
+			executionId = ctx.GetTaskExecutionId()
+			return nil, nil
+		}))
+
+		// Initialization
+		ctx := t.Context()
+
+		client, worker := initTaskHubWorker(ctx, r)
+		defer worker.Shutdown(ctx)
+
+		// Run the orchestration
+		id, err := client.ScheduleNewOrchestration(ctx, "TaskExecutionId")
+		require.NoError(t, err)
+
+		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+		require.NoError(t, err)
+
+		assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+		assert.NotEmpty(t, executionId)
+		uuid.MustParse(executionId)
+	})
+
 }
 
 func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {
