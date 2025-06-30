@@ -22,7 +22,7 @@ type OrchestratorExecutor interface {
 		ctx context.Context,
 		iid api.InstanceID,
 		oldEvents []*protos.HistoryEvent,
-		newEvents []*protos.HistoryEvent) (*ExecutionResults, error)
+		newEvents []*protos.HistoryEvent) (*protos.OrchestratorResponse, error)
 }
 
 type orchestratorProcessor struct {
@@ -92,10 +92,10 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, wi *Orchest
 			if err != nil {
 				return fmt.Errorf("error executing orchestrator: %w", err)
 			}
-			w.logger.Debugf("%v: orchestrator returned %d action(s): %s", wi.InstanceID, len(results.Response.Actions), helpers.ActionListSummary(results.Response.Actions))
+			w.logger.Debugf("%v: orchestrator returned %d action(s): %s", wi.InstanceID, len(results.Actions), helpers.ActionListSummary(results.Actions))
 
 			// Apply the orchestrator outputs to the orchestration state.
-			continuedAsNew, err := runtimestate.ApplyActions(wi.State, results.Response.CustomStatus, results.Response.Actions, helpers.TraceContextFromSpan(span))
+			continuedAsNew, err := runtimestate.ApplyActions(wi.State, results.CustomStatus, results.Actions, helpers.TraceContextFromSpan(span))
 			if err != nil {
 				return fmt.Errorf("failed to apply the execution result actions: %w", err)
 			}
