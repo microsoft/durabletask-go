@@ -27,7 +27,7 @@ type OrchestrationContext struct {
 	Name           string
 	IsReplaying    bool
 	CurrentTimeUtc time.Time
-	AppID          string
+	AppID          *string
 
 	registry            *TaskRegistry
 	rawInput            []byte
@@ -202,8 +202,9 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 		ctx.CurrentTimeUtc = e.Timestamp.AsTime()
 	} else if es := e.GetExecutionStarted(); es != nil {
 		// Extract source AppID from HistoryEvent Router if this is ExecutionStartedEvent
-		if ctx.AppID == "" && e.GetRouter() != nil && e.GetRouter().GetSource() != "" {
-			ctx.AppID = e.GetRouter().GetSource()
+		if e.GetRouter() != nil && e.GetRouter().GetSource() != "" {
+			source := e.GetRouter().GetSource()
+			ctx.AppID = &source
 		}
 		err = ctx.onExecutionStarted(es)
 	} else if ts := e.GetTaskScheduled(); ts != nil {
@@ -283,10 +284,10 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName string, o
 	}
 
 	// Add TaskRouter support for cross-app activities
-	if options.AppID != "" {
+	if options.AppID != nil {
 		router := &protos.TaskRouter{
-			Source: ctx.AppID,     // Current orchestrator app ID
-			Target: options.AppID, // Target activity app ID
+			Source: *ctx.AppID,     // Current orchestrator app ID
+			Target: *options.AppID, // Target activity app ID
 		}
 
 		scheduleTaskAction.Router = router
