@@ -19,6 +19,7 @@ var ErrTaskCanceled = errors.New("the task was canceled") // CONSIDER: More spec
 // Task is an interface for asynchronous durable tasks. A task is conceptually similar to a future.
 type Task interface {
 	Await(v any) error
+	TaskExecutionId() string
 }
 
 type completableTask struct {
@@ -28,6 +29,7 @@ type completableTask struct {
 	rawResult         []byte
 	failureDetails    *protos.TaskFailureDetails
 	completedCallback func()
+	taskExecutionId   string
 }
 
 func newTask(ctx *OrchestrationContext) *completableTask {
@@ -75,6 +77,10 @@ func (t *completableTask) Await(v any) error {
 	panic(ErrTaskBlocked)
 }
 
+func (t *completableTask) TaskExecutionId() string {
+	return t.taskExecutionId
+}
+
 func (t *completableTask) onCompleted(callback func()) {
 	t.completedCallback = callback
 }
@@ -103,11 +109,16 @@ func (t *completableTask) completeInternal() {
 
 type taskWrapper struct {
 	delegate      Task
-	onAwaitResult func(any, error) error
+	onAwaitResult func(any, string, error) error
 }
 
 var _ Task = &taskWrapper{}
 
 func (t *taskWrapper) Await(v any) error {
-	return t.onAwaitResult(v, t.delegate.Await(v))
+	err := t.delegate.Await(v)
+	return t.onAwaitResult(v, t.delegate.TaskExecutionId(), err)
+}
+
+func (t *taskWrapper) TaskExecutionId() string {
+	return t.delegate.TaskExecutionId()
 }
