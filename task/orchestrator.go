@@ -16,6 +16,7 @@ import (
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/kit/ptr"
 )
 
 // Orchestrator is the functional interface for orchestrator functions.
@@ -202,9 +203,8 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 		ctx.CurrentTimeUtc = e.Timestamp.AsTime()
 	} else if es := e.GetExecutionStarted(); es != nil {
 		// Extract source AppID from HistoryEvent Router if this is ExecutionStartedEvent
-		if e.GetRouter() != nil && e.GetRouter().GetSource() != "" {
-			sourceAppID := e.GetRouter().GetSource()
-			ctx.appID = &sourceAppID
+		if e.GetRouter() != nil {
+			ctx.appID = ptr.Of(e.GetRouter().GetSource())
 		}
 		err = ctx.onExecutionStarted(es)
 	} else if ts := e.GetTaskScheduled(); ts != nil {
@@ -285,12 +285,10 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName string, o
 
 	// Add TaskRouter support for cross-app activities
 	if options.targetAppID != nil && ctx.appID != nil {
-		router := &protos.TaskRouter{
+		scheduleTaskAction.Router = &protos.TaskRouter{
 			Source: *ctx.appID,           // Current orchestrator app ID
 			Target: *options.targetAppID, // Target activity app ID
 		}
-
-		scheduleTaskAction.Router = router
 	}
 
 	ctx.pendingActions[scheduleTaskAction.Id] = scheduleTaskAction

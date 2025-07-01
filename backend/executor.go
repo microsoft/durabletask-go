@@ -506,7 +506,6 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 				ScheduledStartTimestamp: req.ScheduledStartTimestamp,
 			},
 		},
-		Router: &protos.TaskRouter{},
 	}
 	if err := g.backend.CreateOrchestrationInstance(ctx, e, WithOrchestrationIdReusePolicy(req.OrchestrationIdReusePolicy)); err != nil {
 		return nil, err
