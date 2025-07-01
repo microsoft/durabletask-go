@@ -1127,7 +1127,7 @@ func (be *sqliteBackend) CancelOrchestratorTask(context.Context, api.InstanceID)
 //
 // [api.ErrTaskCancelled] is returned if the task was cancelled.
 func (be *sqliteBackend) WaitForOrchestratorCompletion(context.Context, *protos.OrchestratorRequest) (*protos.OrchestratorResponse, error) {
-	return nil, nil
+	return new(protos.OrchestratorResponse), nil
 }
 
 // CompleteActivityTask completes the activity task by saving the updated runtime state to durable storage.
@@ -1144,5 +1144,5 @@ func (be *sqliteBackend) CancelActivityTask(context.Context, api.InstanceID, int
 //
 // [api.ErrTaskCancelled] is returned if the task was cancelled.
 func (be *sqliteBackend) WaitForActivityCompletion(context.Context, *protos.ActivityRequest) (*protos.ActivityResponse, error) {
-	return nil, nil
+	return new(protos.ActivityResponse), nil
 }
