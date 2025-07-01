@@ -54,8 +54,8 @@ func Test_Executor_WaitForEventSchedulesTimer(t *testing.T) {
 	executor := task.NewTaskExecutor(r)
 	results, err := executor.ExecuteOrchestrator(ctx, iid, oldEvents, newEvents)
 	require.NoError(t, err)
-	require.Equal(t, 1, len(results.Response.Actions), "Expected a single action to be scheduled")
-	createTimerAction := results.Response.Actions[0].GetCreateTimer()
+	require.Equal(t, 1, len(results.Actions), "Expected a single action to be scheduled")
+	createTimerAction := results.Actions[0].GetCreateTimer()
 	require.NotNil(t, createTimerAction, "Expected the scheduled action to be a timer")
 	require.WithinDuration(t, startEvent.Timestamp.AsTime().Add(timerDuration), createTimerAction.FireAt.AsTime(), 0)
 	require.Equal(t, "MyEvent", createTimerAction.GetName())
@@ -109,5 +109,5 @@ func Test_Executor_SuspendStopsAllActions(t *testing.T) {
 	// Execute the orchestrator function and expect to get back no actions
 	results, err := executor.ExecuteOrchestrator(ctx, iid, oldEvents, newEvents)
 	require.NoError(t, err)
-	require.Empty(t, results.Response.Actions, "Suspended orchestrations should not have any actions")
+	require.Empty(t, results.Actions, "Suspended orchestrations should not have any actions")
 }

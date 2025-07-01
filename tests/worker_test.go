@@ -46,7 +46,7 @@ func Test_TryProcessSingleOrchestrationWorkItem_BasicFlow(t *testing.T) {
 		},
 	}
 	state := &backend.OrchestrationRuntimeState{}
-	result := &backend.ExecutionResults{Response: &protos.OrchestratorResponse{}}
+	result := &protos.OrchestratorResponse{}
 
 	ctx, cancel := context.WithCancel(ctx)
 	completed := atomic.Bool{}
@@ -116,16 +116,14 @@ func Test_TryProcessSingleOrchestrationWorkItem_ExecutionStartedAndCompleted(t *
 
 	// Return an execution completed action to simulate the completion of the orchestration (a no-op)
 	resultValue := "done"
-	result := &backend.ExecutionResults{
-		Response: &protos.OrchestratorResponse{
-			Actions: []*protos.OrchestratorAction{
-				{
-					Id: -1,
-					OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
-						CompleteOrchestration: &protos.CompleteOrchestrationAction{
-							OrchestrationStatus: protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
-							Result:              wrapperspb.String(resultValue),
-						},
+	result := &protos.OrchestratorResponse{
+		Actions: []*protos.OrchestratorAction{
+			{
+				Id: -1,
+				OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
+					CompleteOrchestration: &protos.CompleteOrchestrationAction{
+						OrchestrationStatus: protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
+						Result:              wrapperspb.String(resultValue),
 					},
 				},
 			},

@@ -60,7 +60,6 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 			}
 		}()
 		for {
-			// TODO: Manage concurrency
 			workItem, err := stream.Recv()
 
 			if err != nil {
