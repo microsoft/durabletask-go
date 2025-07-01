@@ -284,7 +284,7 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName string, o
 	}
 
 	// Add TaskRouter support for cross-app activities
-	if options.targetAppID != nil {
+	if options.targetAppID != nil && ctx.appID != nil {
 		router := &protos.TaskRouter{
 			Source: *ctx.appID,           // Current orchestrator app ID
 			Target: *options.targetAppID, // Target activity app ID
