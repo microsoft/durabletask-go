@@ -1470,7 +1470,7 @@ func Test_TaskExecutionId(t *testing.T) {
 		}))
 
 		// Initialization
-		ctx := t.Context()
+		ctx := context.Background()
 
 		client, worker := initTaskHubWorker(ctx, r)
 		defer worker.Shutdown(ctx)
