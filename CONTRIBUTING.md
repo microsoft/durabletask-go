@@ -14,6 +14,13 @@ If you already cloned the repository without `--recurse-submodules`, you can ini
 git submodule update --init --recursive
 ```
 
+To grab latest, do some variation of the following nuke your existing submodule folder then run:
+```bash
+rm -rf submodules/durabletask-protobuf
+git submodule add --force https://github.com/dapr/durabletask-protobuf.git submodules/durabletask-protobuf
+git submodule update --remote submodules/durabletask-protobuf
+```
+
 This will initialize and update the submodules.
 
 ## Building the project
