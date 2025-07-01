@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dapr/durabletask-go/backend"
@@ -102,56 +103,24 @@ func RetryActivityOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	return nil, nil
 }
 
-type Counter struct {
-	c    int32
-	lock sync.Mutex
-}
-
-func (c *Counter) Increment() {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	c.c++
-}
-
-func (c *Counter) GetValue() int32 {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	return c.c
-}
-
 var (
-	counters     = make(map[string]*Counter)
-	countersLock sync.RWMutex
+	counters = sync.Map{}
 )
 
 // getCounter returns a Counter instance for the specified taskExecutionId.
 // If no counter exists for the taskExecutionId, a new one is created.
-func getCounter(taskExecutionId string) *Counter {
-	countersLock.RLock()
-	counter, exists := counters[taskExecutionId]
-	countersLock.RUnlock()
-
-	if !exists {
-		countersLock.Lock()
-		// Check again to handle race conditions
-		counter, exists = counters[taskExecutionId]
-		if !exists {
-			counter = &Counter{}
-			counters[taskExecutionId] = counter
-		}
-		countersLock.Unlock()
-	}
-
-	return counter
+func getCounter(taskExecutionId string) *atomic.Int32 {
+	counter, _ := counters.LoadOrStore(taskExecutionId, &atomic.Int32{})
+	return counter.(*atomic.Int32)
 }
 
 func RandomFailActivity(ctx task.ActivityContext) (any, error) {
 	log.Println(fmt.Sprintf("#### [%v] activity %v failure", ctx.GetTaskExecutionId(), ctx.GetTaskID()))
-
+	counter := getCounter(ctx.GetTaskExecutionId())
 	// The activity should fail 5 times before succeeding.
-	if getCounter(ctx.GetTaskExecutionId()).GetValue() != 5 {
+	if counter.Load() != 5 {
 		log.Println("random activity failure")
-		getCounter(ctx.GetTaskExecutionId()).Increment()
+		counter.Add(1)
 		return "", errors.New("random activity failure")
 	}
 
