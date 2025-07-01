@@ -15,7 +15,7 @@ type callActivityOption func(*callActivityOptions) error
 type callActivityOptions struct {
 	rawInput    *wrapperspb.StringValue
 	retryPolicy *RetryPolicy
-	AppID       *string
+	targetAppID *string
 }
 
 type RetryPolicy struct {
@@ -58,9 +58,9 @@ func (policy *RetryPolicy) Validate() error {
 	return nil
 }
 
-func WithAppID(appID string) callActivityOption {
+func WithAppID(targetAppID string) callActivityOption {
 	return func(opt *callActivityOptions) error {
-		opt.AppID = &appID
+		opt.targetAppID = &targetAppID
 		return nil
 	}
 }
