@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/api/helpers"
-	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/api/helpers"
+	"github.com/dapr/durabletask-go/api/protos"
 )
 
 var ErrDuplicateEvent = errors.New("duplicate event")
@@ -192,6 +193,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 				EventType: &protos.HistoryEvent_TaskScheduled{
 					TaskScheduled: &protos.TaskScheduledEvent{
 						Name:               scheduleTask.Name,
+						TaskExecutionId:    scheduleTask.TaskExecutionId,
 						Version:            scheduleTask.Version,
 						Input:              scheduleTask.Input,
 						ParentTraceContext: currentTraceContext,

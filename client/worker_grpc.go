@@ -8,15 +8,16 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/api/protos"
-	"github.com/dapr/durabletask-go/backend"
-	"github.com/dapr/durabletask-go/task"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/api/protos"
+	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/task"
 )
 
 type workItemsStream interface {
@@ -183,6 +184,7 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 				Name:               req.Name,
 				Version:            req.Version,
 				Input:              req.Input,
+				TaskExecutionId:    req.TaskExecutionId,
 				ParentTraceContext: tc,
 			},
 		},

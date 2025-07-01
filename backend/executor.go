@@ -1,7 +1,7 @@
 package backend
 
 import (
-	context "context"
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -49,15 +49,16 @@ type Executor interface {
 type grpcExecutor struct {
 	protos.UnimplementedTaskHubSidecarServiceServer
 
-	workItemQueue        chan *protos.WorkItem
-	pendingOrchestrators *sync.Map // map[api.InstanceID]*ExecutionResults
-	pendingActivities    *sync.Map // map[string]*activityExecutionResult
-	backend              Backend
-	logger               Logger
-	onWorkItemConnection func(context.Context) error
-	onWorkItemDisconnect func(context.Context) error
-	streamShutdownChan   <-chan any
-	streamSendTimeout    *time.Duration
+	workItemQueue            chan *protos.WorkItem
+	pendingOrchestrators     *sync.Map // map[api.InstanceID]*ExecutionResults
+	pendingActivities        *sync.Map // map[string]*activityExecutionResult
+	backend                  Backend
+	logger                   Logger
+	onWorkItemConnection     func(context.Context) error
+	onWorkItemDisconnect     func(context.Context) error
+	streamShutdownChan       <-chan any
+	streamSendTimeout        *time.Duration
+	skipWaitForInstanceStart bool
 }
 
 type grpcExecutorOptions func(g *grpcExecutor)
@@ -95,6 +96,12 @@ func WithStreamShutdownChannel(c <-chan any) grpcExecutorOptions {
 func WithStreamSendTimeout(d time.Duration) grpcExecutorOptions {
 	return func(g *grpcExecutor) {
 		g.streamSendTimeout = &d
+	}
+}
+
+func WithSkipWaitForInstanceStart() grpcExecutorOptions {
+	return func(g *grpcExecutor) {
+		g.skipWaitForInstanceStart = true
 	}
 }
 
@@ -172,6 +179,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 				Input:                 task.Input,
 				OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: string(iid)},
 				TaskId:                e.EventId,
+				TaskExecutionId:       task.TaskExecutionId,
 			},
 		},
 	}
@@ -205,6 +213,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 			EventType: &protos.HistoryEvent_TaskFailed{
 				TaskFailed: &protos.TaskFailedEvent{
 					TaskScheduledId: result.response.TaskId,
+					TaskExecutionId: task.TaskExecutionId,
 					FailureDetails:  failureDetails,
 				},
 			},
@@ -218,6 +227,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 				TaskCompleted: &protos.TaskCompletedEvent{
 					TaskScheduledId: result.response.TaskId,
 					Result:          result.response.Result,
+					TaskExecutionId: task.TaskExecutionId,
 				},
 			},
 			Router: e.Router,
@@ -508,12 +518,14 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 		},
 	}
 	if err := g.backend.CreateOrchestrationInstance(ctx, e, WithOrchestrationIdReusePolicy(req.OrchestrationIdReusePolicy)); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create orchestration instance: %w", err)
 	}
 
-	_, err := g.WaitForInstanceStart(ctx, &protos.GetInstanceRequest{InstanceId: instanceID})
-	if err != nil {
-		return nil, err
+	if !g.skipWaitForInstanceStart {
+		_, err := g.WaitForInstanceStart(ctx, &protos.GetInstanceRequest{InstanceId: instanceID})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &protos.CreateInstanceResponse{InstanceId: instanceID}, nil
