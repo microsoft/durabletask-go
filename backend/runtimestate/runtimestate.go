@@ -92,6 +92,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 					EventType: &protos.HistoryEvent_OrchestratorStarted{
 						OrchestratorStarted: &protos.OrchestratorStartedEvent{},
 					},
+					Router: action.Router,
 				})
 
 				// Duplicate the start event info, updating just the input
@@ -111,6 +112,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 								ParentTraceContext: s.StartEvent.ParentTraceContext,
 							},
 						},
+						Router: action.Router,
 					},
 				)
 
@@ -135,6 +137,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 							FailureDetails:      completedAction.FailureDetails,
 						},
 					},
+					Router: action.Router,
 				})
 				if s.StartEvent.GetParentInstance() != nil {
 					msg := &protos.OrchestrationRuntimeStateMessage{
@@ -170,6 +173,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						Name:   createtimer.Name,
 					},
 				},
+				Router: action.Router,
 			})
 			// TODO cant pass trace context
 			s.PendingTimers = append(s.PendingTimers, &protos.HistoryEvent{
@@ -195,6 +199,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						ParentTraceContext: currentTraceContext,
 					},
 				},
+				Router: action.Router,
 			}
 			AddEvent(s, scheduledEvent)
 			s.PendingTasks = append(s.PendingTasks, scheduledEvent)
@@ -216,6 +221,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						ParentTraceContext: currentTraceContext,
 					},
 				},
+				Router: action.Router,
 			})
 			startEvent := &protos.HistoryEvent{
 				EventId:   -1,
@@ -236,6 +242,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						ParentTraceContext: currentTraceContext,
 					},
 				},
+				Router: action.Router,
 			}
 
 			s.PendingMessages = append(s.PendingMessages, &protos.OrchestrationRuntimeStateMessage{HistoryEvent: startEvent, TargetInstanceID: createSO.InstanceId})
@@ -250,6 +257,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						Input:      sendEvent.Data,
 					},
 				},
+				Router: action.Router,
 			}
 			AddEvent(s, e)
 			s.PendingMessages = append(s.PendingMessages, &protos.OrchestrationRuntimeStateMessage{HistoryEvent: e, TargetInstanceID: sendEvent.Instance.InstanceId})
@@ -266,6 +274,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 							Recurse: terminate.Recurse,
 						},
 					},
+					Router: action.Router,
 				},
 			}
 			s.PendingMessages = append(s.PendingMessages, msg)

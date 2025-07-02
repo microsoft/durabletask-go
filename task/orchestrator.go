@@ -17,6 +17,7 @@ import (
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/kit/ptr"
 )
 
 // Orchestrator is the functional interface for orchestrator functions.
@@ -28,6 +29,7 @@ type OrchestrationContext struct {
 	Name           string
 	IsReplaying    bool
 	CurrentTimeUtc time.Time
+	appID          *string
 
 	registry            *TaskRegistry
 	rawInput            []byte
@@ -201,6 +203,10 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 		// OrchestratorStarted is only used to update the current orchestration time
 		ctx.CurrentTimeUtc = e.Timestamp.AsTime()
 	} else if es := e.GetExecutionStarted(); es != nil {
+		// Extract source AppID from HistoryEvent Router if this is ExecutionStartedEvent
+		if e.GetRouter() != nil {
+			ctx.appID = ptr.Of(e.GetRouter().GetSource())
+		}
 		err = ctx.onExecutionStarted(es)
 	} else if ts := e.GetTaskScheduled(); ts != nil {
 		err = ctx.onTaskScheduled(e.EventId, ts)
@@ -278,6 +284,17 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName, taskExec
 		},
 	}
 
+	// Add TaskRouter support for cross-app activities
+	if ctx.appID != nil {
+		scheduleTaskAction.Router = &protos.TaskRouter{
+			Source: *ctx.appID, // Current orchestrator app ID
+		}
+
+		if options.targetAppID != nil {
+			scheduleTaskAction.Router.Target = options.targetAppID // Target activity app ID
+		}
+	}
+
 	ctx.pendingActions[scheduleTaskAction.Id] = scheduleTaskAction
 
 	task := newTask(ctx)
@@ -285,6 +302,7 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName, taskExec
 	return task
 }
 
+// TODO: cassie wire appID into suborchestration options too for cross app wf
 func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, opts ...subOrchestratorOption) Task {
 	options := new(callSubOrchestratorOptions)
 	for _, configure := range opts {

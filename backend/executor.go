@@ -217,6 +217,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 					FailureDetails:  failureDetails,
 				},
 			},
+			Router: e.Router,
 		}
 	} else {
 		responseEvent = &protos.HistoryEvent{
@@ -229,6 +230,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 					TaskExecutionId: task.TaskExecutionId,
 				},
 			},
+			Router: e.Router,
 		}
 	}
 
