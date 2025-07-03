@@ -14,6 +14,7 @@ import (
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/backend/local"
 	"github.com/dapr/durabletask-go/backend/runtimestate"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -44,6 +45,7 @@ type postgresBackend struct {
 	workerName string
 	logger     backend.Logger
 	options    *PostgresOptions
+	*local.TasksBackend
 }
 
 // NewPostgresOptions creates a new options object for the postgres backend provider.
@@ -79,10 +81,11 @@ func NewPostgresBackend(opts *PostgresOptions, logger backend.Logger) backend.Ba
 	}
 
 	return &postgresBackend{
-		db:         nil,
-		workerName: fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
-		options:    opts,
-		logger:     logger,
+		db:           nil,
+		workerName:   fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
+		options:      opts,
+		logger:       logger,
+		TasksBackend: local.NewTasksBackend(),
 	}
 }
 

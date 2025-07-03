@@ -15,6 +15,7 @@ import (
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/backend/local"
 	"github.com/dapr/durabletask-go/backend/runtimestate"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -45,9 +46,7 @@ type sqliteBackend struct {
 	workerName string
 	logger     backend.Logger
 	options    *SqliteOptions
-
-	activityWorker      *backend.TaskWorker[*backend.ActivityWorkItem]
-	orchestrationWorker *backend.TaskWorker[*backend.OrchestrationWorkItem]
+	*local.TasksBackend
 }
 
 // NewSqliteOptions creates a new options object for the sqlite backend provider.
@@ -73,10 +72,11 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 	uuidStr := uuid.NewString()
 
 	be := &sqliteBackend{
-		db:         nil,
-		workerName: fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
-		options:    opts,
-		logger:     logger,
+		db:           nil,
+		workerName:   fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
+		options:      opts,
+		logger:       logger,
+		TasksBackend: local.NewTasksBackend(),
 	}
 
 	if opts == nil {

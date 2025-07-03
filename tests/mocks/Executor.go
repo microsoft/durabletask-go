@@ -4,7 +4,6 @@ package mocks
 
 import (
 	api "github.com/dapr/durabletask-go/api"
-	backend "github.com/dapr/durabletask-go/backend"
 
 	context "context"
 
@@ -87,23 +86,23 @@ func (_c *Executor_ExecuteActivity_Call) RunAndReturn(run func(context.Context, 
 }
 
 // ExecuteOrchestrator provides a mock function with given fields: ctx, iid, oldEvents, newEvents
-func (_m *Executor) ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*backend.ExecutionResults, error) {
+func (_m *Executor) ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*protos.OrchestratorResponse, error) {
 	ret := _m.Called(ctx, iid, oldEvents, newEvents)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ExecuteOrchestrator")
 	}
 
-	var r0 *backend.ExecutionResults
+	var r0 *protos.OrchestratorResponse
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID, []*protos.HistoryEvent, []*protos.HistoryEvent) (*backend.ExecutionResults, error)); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID, []*protos.HistoryEvent, []*protos.HistoryEvent) (*protos.OrchestratorResponse, error)); ok {
 		return rf(ctx, iid, oldEvents, newEvents)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID, []*protos.HistoryEvent, []*protos.HistoryEvent) *backend.ExecutionResults); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID, []*protos.HistoryEvent, []*protos.HistoryEvent) *protos.OrchestratorResponse); ok {
 		r0 = rf(ctx, iid, oldEvents, newEvents)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*backend.ExecutionResults)
+			r0 = ret.Get(0).(*protos.OrchestratorResponse)
 		}
 	}
 
@@ -137,12 +136,12 @@ func (_c *Executor_ExecuteOrchestrator_Call) Run(run func(ctx context.Context, i
 	return _c
 }
 
-func (_c *Executor_ExecuteOrchestrator_Call) Return(_a0 *backend.ExecutionResults, _a1 error) *Executor_ExecuteOrchestrator_Call {
+func (_c *Executor_ExecuteOrchestrator_Call) Return(_a0 *protos.OrchestratorResponse, _a1 error) *Executor_ExecuteOrchestrator_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *Executor_ExecuteOrchestrator_Call) RunAndReturn(run func(context.Context, api.InstanceID, []*protos.HistoryEvent, []*protos.HistoryEvent) (*backend.ExecutionResults, error)) *Executor_ExecuteOrchestrator_Call {
+func (_c *Executor_ExecuteOrchestrator_Call) RunAndReturn(run func(context.Context, api.InstanceID, []*protos.HistoryEvent, []*protos.HistoryEvent) (*protos.OrchestratorResponse, error)) *Executor_ExecuteOrchestrator_Call {
 	_c.Call.Return(run)
 	return _c
 }

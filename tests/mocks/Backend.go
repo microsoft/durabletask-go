@@ -168,6 +168,148 @@ func (_c *Backend_AddNewOrchestrationEvent_Call) RunAndReturn(run func(context.C
 	return _c
 }
 
+// CancelActivityTask provides a mock function with given fields: _a0, _a1, _a2
+func (_m *Backend) CancelActivityTask(_a0 context.Context, _a1 api.InstanceID, _a2 int32) error {
+	ret := _m.Called(_a0, _a1, _a2)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CancelActivityTask")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID, int32) error); ok {
+		r0 = rf(_a0, _a1, _a2)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// Backend_CancelActivityTask_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CancelActivityTask'
+type Backend_CancelActivityTask_Call struct {
+	*mock.Call
+}
+
+// CancelActivityTask is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 api.InstanceID
+//   - _a2 int32
+func (_e *Backend_Expecter) CancelActivityTask(_a0 interface{}, _a1 interface{}, _a2 interface{}) *Backend_CancelActivityTask_Call {
+	return &Backend_CancelActivityTask_Call{Call: _e.mock.On("CancelActivityTask", _a0, _a1, _a2)}
+}
+
+func (_c *Backend_CancelActivityTask_Call) Run(run func(_a0 context.Context, _a1 api.InstanceID, _a2 int32)) *Backend_CancelActivityTask_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(api.InstanceID), args[2].(int32))
+	})
+	return _c
+}
+
+func (_c *Backend_CancelActivityTask_Call) Return(_a0 error) *Backend_CancelActivityTask_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Backend_CancelActivityTask_Call) RunAndReturn(run func(context.Context, api.InstanceID, int32) error) *Backend_CancelActivityTask_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CancelOrchestratorTask provides a mock function with given fields: _a0, _a1
+func (_m *Backend) CancelOrchestratorTask(_a0 context.Context, _a1 api.InstanceID) error {
+	ret := _m.Called(_a0, _a1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CancelOrchestratorTask")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, api.InstanceID) error); ok {
+		r0 = rf(_a0, _a1)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// Backend_CancelOrchestratorTask_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CancelOrchestratorTask'
+type Backend_CancelOrchestratorTask_Call struct {
+	*mock.Call
+}
+
+// CancelOrchestratorTask is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 api.InstanceID
+func (_e *Backend_Expecter) CancelOrchestratorTask(_a0 interface{}, _a1 interface{}) *Backend_CancelOrchestratorTask_Call {
+	return &Backend_CancelOrchestratorTask_Call{Call: _e.mock.On("CancelOrchestratorTask", _a0, _a1)}
+}
+
+func (_c *Backend_CancelOrchestratorTask_Call) Run(run func(_a0 context.Context, _a1 api.InstanceID)) *Backend_CancelOrchestratorTask_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(api.InstanceID))
+	})
+	return _c
+}
+
+func (_c *Backend_CancelOrchestratorTask_Call) Return(_a0 error) *Backend_CancelOrchestratorTask_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Backend_CancelOrchestratorTask_Call) RunAndReturn(run func(context.Context, api.InstanceID) error) *Backend_CancelOrchestratorTask_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CompleteActivityTask provides a mock function with given fields: _a0, _a1
+func (_m *Backend) CompleteActivityTask(_a0 context.Context, _a1 *protos.ActivityResponse) error {
+	ret := _m.Called(_a0, _a1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CompleteActivityTask")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *protos.ActivityResponse) error); ok {
+		r0 = rf(_a0, _a1)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// Backend_CompleteActivityTask_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CompleteActivityTask'
+type Backend_CompleteActivityTask_Call struct {
+	*mock.Call
+}
+
+// CompleteActivityTask is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 *protos.ActivityResponse
+func (_e *Backend_Expecter) CompleteActivityTask(_a0 interface{}, _a1 interface{}) *Backend_CompleteActivityTask_Call {
+	return &Backend_CompleteActivityTask_Call{Call: _e.mock.On("CompleteActivityTask", _a0, _a1)}
+}
+
+func (_c *Backend_CompleteActivityTask_Call) Run(run func(_a0 context.Context, _a1 *protos.ActivityResponse)) *Backend_CompleteActivityTask_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*protos.ActivityResponse))
+	})
+	return _c
+}
+
+func (_c *Backend_CompleteActivityTask_Call) Return(_a0 error) *Backend_CompleteActivityTask_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Backend_CompleteActivityTask_Call) RunAndReturn(run func(context.Context, *protos.ActivityResponse) error) *Backend_CompleteActivityTask_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CompleteActivityWorkItem provides a mock function with given fields: _a0, _a1
 func (_m *Backend) CompleteActivityWorkItem(_a0 context.Context, _a1 *backend.ActivityWorkItem) error {
 	ret := _m.Called(_a0, _a1)
@@ -258,6 +400,53 @@ func (_c *Backend_CompleteOrchestrationWorkItem_Call) Return(_a0 error) *Backend
 }
 
 func (_c *Backend_CompleteOrchestrationWorkItem_Call) RunAndReturn(run func(context.Context, *backend.OrchestrationWorkItem) error) *Backend_CompleteOrchestrationWorkItem_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CompleteOrchestratorTask provides a mock function with given fields: _a0, _a1
+func (_m *Backend) CompleteOrchestratorTask(_a0 context.Context, _a1 *protos.OrchestratorResponse) error {
+	ret := _m.Called(_a0, _a1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CompleteOrchestratorTask")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *protos.OrchestratorResponse) error); ok {
+		r0 = rf(_a0, _a1)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// Backend_CompleteOrchestratorTask_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CompleteOrchestratorTask'
+type Backend_CompleteOrchestratorTask_Call struct {
+	*mock.Call
+}
+
+// CompleteOrchestratorTask is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 *protos.OrchestratorResponse
+func (_e *Backend_Expecter) CompleteOrchestratorTask(_a0 interface{}, _a1 interface{}) *Backend_CompleteOrchestratorTask_Call {
+	return &Backend_CompleteOrchestratorTask_Call{Call: _e.mock.On("CompleteOrchestratorTask", _a0, _a1)}
+}
+
+func (_c *Backend_CompleteOrchestratorTask_Call) Run(run func(_a0 context.Context, _a1 *protos.OrchestratorResponse)) *Backend_CompleteOrchestratorTask_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*protos.OrchestratorResponse))
+	})
+	return _c
+}
+
+func (_c *Backend_CompleteOrchestratorTask_Call) Return(_a0 error) *Backend_CompleteOrchestratorTask_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Backend_CompleteOrchestratorTask_Call) RunAndReturn(run func(context.Context, *protos.OrchestratorResponse) error) *Backend_CompleteOrchestratorTask_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -842,6 +1031,124 @@ func (_c *Backend_Stop_Call) Return(_a0 error) *Backend_Stop_Call {
 }
 
 func (_c *Backend_Stop_Call) RunAndReturn(run func(context.Context) error) *Backend_Stop_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// WaitForActivityCompletion provides a mock function with given fields: _a0, _a1
+func (_m *Backend) WaitForActivityCompletion(_a0 context.Context, _a1 *protos.ActivityRequest) (*protos.ActivityResponse, error) {
+	ret := _m.Called(_a0, _a1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for WaitForActivityCompletion")
+	}
+
+	var r0 *protos.ActivityResponse
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, *protos.ActivityRequest) (*protos.ActivityResponse, error)); ok {
+		return rf(_a0, _a1)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, *protos.ActivityRequest) *protos.ActivityResponse); ok {
+		r0 = rf(_a0, _a1)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*protos.ActivityResponse)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, *protos.ActivityRequest) error); ok {
+		r1 = rf(_a0, _a1)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// Backend_WaitForActivityCompletion_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WaitForActivityCompletion'
+type Backend_WaitForActivityCompletion_Call struct {
+	*mock.Call
+}
+
+// WaitForActivityCompletion is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 *protos.ActivityRequest
+func (_e *Backend_Expecter) WaitForActivityCompletion(_a0 interface{}, _a1 interface{}) *Backend_WaitForActivityCompletion_Call {
+	return &Backend_WaitForActivityCompletion_Call{Call: _e.mock.On("WaitForActivityCompletion", _a0, _a1)}
+}
+
+func (_c *Backend_WaitForActivityCompletion_Call) Run(run func(_a0 context.Context, _a1 *protos.ActivityRequest)) *Backend_WaitForActivityCompletion_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*protos.ActivityRequest))
+	})
+	return _c
+}
+
+func (_c *Backend_WaitForActivityCompletion_Call) Return(_a0 *protos.ActivityResponse, _a1 error) *Backend_WaitForActivityCompletion_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *Backend_WaitForActivityCompletion_Call) RunAndReturn(run func(context.Context, *protos.ActivityRequest) (*protos.ActivityResponse, error)) *Backend_WaitForActivityCompletion_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// WaitForOrchestratorCompletion provides a mock function with given fields: _a0, _a1
+func (_m *Backend) WaitForOrchestratorCompletion(_a0 context.Context, _a1 *protos.OrchestratorRequest) (*protos.OrchestratorResponse, error) {
+	ret := _m.Called(_a0, _a1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for WaitForOrchestratorCompletion")
+	}
+
+	var r0 *protos.OrchestratorResponse
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, *protos.OrchestratorRequest) (*protos.OrchestratorResponse, error)); ok {
+		return rf(_a0, _a1)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, *protos.OrchestratorRequest) *protos.OrchestratorResponse); ok {
+		r0 = rf(_a0, _a1)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*protos.OrchestratorResponse)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, *protos.OrchestratorRequest) error); ok {
+		r1 = rf(_a0, _a1)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// Backend_WaitForOrchestratorCompletion_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WaitForOrchestratorCompletion'
+type Backend_WaitForOrchestratorCompletion_Call struct {
+	*mock.Call
+}
+
+// WaitForOrchestratorCompletion is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 *protos.OrchestratorRequest
+func (_e *Backend_Expecter) WaitForOrchestratorCompletion(_a0 interface{}, _a1 interface{}) *Backend_WaitForOrchestratorCompletion_Call {
+	return &Backend_WaitForOrchestratorCompletion_Call{Call: _e.mock.On("WaitForOrchestratorCompletion", _a0, _a1)}
+}
+
+func (_c *Backend_WaitForOrchestratorCompletion_Call) Run(run func(_a0 context.Context, _a1 *protos.OrchestratorRequest)) *Backend_WaitForOrchestratorCompletion_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*protos.OrchestratorRequest))
+	})
+	return _c
+}
+
+func (_c *Backend_WaitForOrchestratorCompletion_Call) Return(_a0 *protos.OrchestratorResponse, _a1 error) *Backend_WaitForOrchestratorCompletion_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *Backend_WaitForOrchestratorCompletion_Call) RunAndReturn(run func(context.Context, *protos.OrchestratorRequest) (*protos.OrchestratorResponse, error)) *Backend_WaitForOrchestratorCompletion_Call {
 	_c.Call.Return(run)
 	return _c
 }

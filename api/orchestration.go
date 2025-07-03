@@ -18,6 +18,7 @@ var (
 	ErrNoFailures        = errors.New("orchestration did not report failure details")
 	ErrDuplicateInstance = errors.New("orchestration instance already exists")
 	ErrIgnoreInstance    = errors.New("ignore creating orchestration instance")
+	ErrTaskCancelled     = errors.New("task was cancelled")
 
 	EmptyInstanceID = InstanceID("")
 )
