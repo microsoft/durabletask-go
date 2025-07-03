@@ -14,6 +14,7 @@ import (
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/backend/local"
 	"github.com/dapr/durabletask-go/backend/runtimestate"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -44,6 +45,7 @@ type postgresBackend struct {
 	workerName string
 	logger     backend.Logger
 	options    *PostgresOptions
+	*local.TasksBackend
 }
 
 // NewPostgresOptions creates a new options object for the postgres backend provider.
@@ -79,10 +81,11 @@ func NewPostgresBackend(opts *PostgresOptions, logger backend.Logger) backend.Ba
 	}
 
 	return &postgresBackend{
-		db:         nil,
-		workerName: fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
-		options:    opts,
-		logger:     logger,
+		db:           nil,
+		workerName:   fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
+		options:      opts,
+		logger:       logger,
+		TasksBackend: local.NewTasksBackend(),
 	}
 }
 
@@ -1128,36 +1131,4 @@ func (be *postgresBackend) String() string {
 
 func (be *postgresBackend) RerunWorkflowFromEvent(ctx context.Context, req *backend.RerunWorkflowFromEventRequest) (api.InstanceID, error) {
 	return "", status.Error(codes.Unimplemented, "not implemented")
-}
-
-// CompleteOrchestratorTask completes the orchestrator task by saving the updated runtime state to durable storage.
-func (be *postgresBackend) CompleteOrchestratorTask(context.Context, *protos.OrchestratorResponse) error {
-	return nil
-}
-
-// CancelOrchestratorTask cancels the orchestrator task so instances of WaitForOrchestratorCompletion will return an error.
-func (be *postgresBackend) CancelOrchestratorTask(context.Context, api.InstanceID) error { return nil }
-
-// WaitForOrchestratorCompletion blocks until the orchestrator completes and returns the final response.
-//
-// [api.ErrTaskCancelled] is returned if the task was cancelled.
-func (be *postgresBackend) WaitForOrchestratorCompletion(context.Context, *protos.OrchestratorRequest) (*protos.OrchestratorResponse, error) {
-	return nil, nil
-}
-
-// CompleteActivityTask completes the activity task by saving the updated runtime state to durable storage.
-func (be *postgresBackend) CompleteActivityTask(context.Context, *protos.ActivityResponse) error {
-	return nil
-}
-
-// CancelActivityTask cancels the activity task so instances of WaitForActivityCompletion will return an error.
-func (be *postgresBackend) CancelActivityTask(context.Context, api.InstanceID, int32) error {
-	return nil
-}
-
-// WaitForActivityCompletion blocks until the activity completes and returns the final response.
-//
-// [api.ErrTaskCancelled] is returned if the task was cancelled.
-func (be *postgresBackend) WaitForActivityCompletion(context.Context, *protos.ActivityRequest) (*protos.ActivityResponse, error) {
-	return nil, nil
 }

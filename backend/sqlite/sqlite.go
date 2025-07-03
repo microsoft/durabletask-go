@@ -15,6 +15,7 @@ import (
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
+	"github.com/dapr/durabletask-go/backend/local"
 	"github.com/dapr/durabletask-go/backend/runtimestate"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -45,9 +46,7 @@ type sqliteBackend struct {
 	workerName string
 	logger     backend.Logger
 	options    *SqliteOptions
-
-	activityWorker      *backend.TaskWorker[*backend.ActivityWorkItem]
-	orchestrationWorker *backend.TaskWorker[*backend.OrchestrationWorkItem]
+	*local.TasksBackend
 }
 
 // NewSqliteOptions creates a new options object for the sqlite backend provider.
@@ -73,10 +72,11 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 	uuidStr := uuid.NewString()
 
 	be := &sqliteBackend{
-		db:         nil,
-		workerName: fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
-		options:    opts,
-		logger:     logger,
+		db:           nil,
+		workerName:   fmt.Sprintf("%s,%d,%s", hostname, pid, uuidStr),
+		options:      opts,
+		logger:       logger,
+		TasksBackend: local.NewTasksBackend(),
 	}
 
 	if opts == nil {
@@ -1113,36 +1113,4 @@ func (be *sqliteBackend) String() string {
 
 func (be *sqliteBackend) RerunWorkflowFromEvent(ctx context.Context, req *backend.RerunWorkflowFromEventRequest) (api.InstanceID, error) {
 	return "", status.Error(codes.Unimplemented, "not implemented")
-}
-
-// CompleteOrchestratorTask completes the orchestrator task by saving the updated runtime state to durable storage.
-func (be *sqliteBackend) CompleteOrchestratorTask(context.Context, *protos.OrchestratorResponse) error {
-	return nil
-}
-
-// CancelOrchestratorTask cancels the orchestrator task so instances of WaitForOrchestratorCompletion will return an error.
-func (be *sqliteBackend) CancelOrchestratorTask(context.Context, api.InstanceID) error { return nil }
-
-// WaitForOrchestratorCompletion blocks until the orchestrator completes and returns the final response.
-//
-// [api.ErrTaskCancelled] is returned if the task was cancelled.
-func (be *sqliteBackend) WaitForOrchestratorCompletion(context.Context, *protos.OrchestratorRequest) (*protos.OrchestratorResponse, error) {
-	return new(protos.OrchestratorResponse), nil
-}
-
-// CompleteActivityTask completes the activity task by saving the updated runtime state to durable storage.
-func (be *sqliteBackend) CompleteActivityTask(context.Context, *protos.ActivityResponse) error {
-	return nil
-}
-
-// CancelActivityTask cancels the activity task so instances of WaitForActivityCompletion will return an error.
-func (be *sqliteBackend) CancelActivityTask(context.Context, api.InstanceID, int32) error {
-	return nil
-}
-
-// WaitForActivityCompletion blocks until the activity completes and returns the final response.
-//
-// [api.ErrTaskCancelled] is returned if the task was cancelled.
-func (be *sqliteBackend) WaitForActivityCompletion(context.Context, *protos.ActivityRequest) (*protos.ActivityResponse, error) {
-	return new(protos.ActivityResponse), nil
 }

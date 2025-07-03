@@ -91,8 +91,6 @@ func startGrpcListener(t *testing.T, r *task.TaskRegistry) context.CancelFunc {
 }
 
 func Test_Grpc_WaitForInstanceStart_Timeout(t *testing.T) {
-	t.Skip("TODO: @joshvanl: re-enable after sqlite implementation of new backend funcs")
-
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("WaitForInstanceStartThrowsException", func(ctx *task.OrchestrationContext) (any, error) {
 		// sleep 5 seconds
@@ -114,8 +112,6 @@ func Test_Grpc_WaitForInstanceStart_Timeout(t *testing.T) {
 }
 
 func Test_Grpc_WaitForInstanceStart_ConnectionResume(t *testing.T) {
-	t.Skip("TODO: @joshvanl: re-enable after sqlite implementation of new backend funcs")
-
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("WaitForInstanceStartThrowsException", func(ctx *task.OrchestrationContext) (any, error) {
 		// sleep 5 seconds
@@ -150,8 +146,6 @@ func Test_Grpc_WaitForInstanceStart_ConnectionResume(t *testing.T) {
 }
 
 func Test_Grpc_HelloOrchestration(t *testing.T) {
-	t.Skip("TODO: @joshvanl: re-enable after sqlite implementation of new backend funcs")
-
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
@@ -191,8 +185,6 @@ func Test_Grpc_HelloOrchestration(t *testing.T) {
 }
 
 func Test_Grpc_SuspendResume(t *testing.T) {
-	t.Skip("TODO: @joshvanl: re-enable after sqlite implementation of new backend funcs")
-
 	const eventCount = 10
 
 	r := task.NewTaskRegistry()
@@ -245,8 +237,6 @@ func Test_Grpc_SuspendResume(t *testing.T) {
 }
 
 func Test_Grpc_Terminate_Recursive(t *testing.T) {
-	t.Skip("TODO: @joshvanl: re-enable after sqlite implementation of new backend funcs")
-
 	delayTime := 4 * time.Second
 	executedActivity := false
 	r := task.NewTaskRegistry()
@@ -308,8 +298,6 @@ func Test_Grpc_Terminate_Recursive(t *testing.T) {
 }
 
 func Test_Grpc_ReuseInstanceIDIgnore(t *testing.T) {
-	t.Skip("TODO: @joshvanl: re-enable after sqlite implementation of new backend funcs")
-
 	delayTime := 2 * time.Second
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
@@ -358,8 +346,6 @@ func Test_Grpc_ReuseInstanceIDIgnore(t *testing.T) {
 }
 
 func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
-	t.Skip("TODO: @joshvanl: re-enable after sqlite implementation of new backend funcs")
-
 	delayTime := 2 * time.Second
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
@@ -408,8 +394,6 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 }
 
 func Test_Grpc_ReuseInstanceIDError(t *testing.T) {
-	t.Skip("TODO: @joshvanl: re-enable after sqlite implementation of new backend funcs")
-
 	delayTime := 4 * time.Second
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
@@ -443,8 +427,6 @@ func Test_Grpc_ReuseInstanceIDError(t *testing.T) {
 }
 
 func Test_Grpc_ActivityRetries(t *testing.T) {
-	t.Skip("TODO: @joshvanl: re-enable after sqlite implementation of new backend funcs")
-
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("ActivityRetries", func(ctx *task.OrchestrationContext) (any, error) {
 		if err := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
@@ -476,8 +458,6 @@ func Test_Grpc_ActivityRetries(t *testing.T) {
 }
 
 func Test_Grpc_SubOrchestratorRetries(t *testing.T) {
-	t.Skip("TODO: @joshvanl: re-enable after sqlite implementation of new backend funcs")
-
 	r := task.NewTaskRegistry()
 	r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
 		err := ctx.CallSubOrchestrator(

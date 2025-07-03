@@ -4,7 +4,7 @@ go 1.23.1
 
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0
-	github.com/dapr/kit v0.13.1-0.20250110192255-fb195706966f
+	github.com/dapr/kit v0.15.3-0.20250616160611-598b032bce69
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/stretchr/testify v1.10.0
