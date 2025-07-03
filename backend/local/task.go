@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 
 	"github.com/dapr/durabletask-go/api"
@@ -33,26 +34,24 @@ func NewTasksBackend() *TasksBackend {
 }
 
 func (be *TasksBackend) CompleteActivityTask(ctx context.Context, response *protos.ActivityResponse) error {
-	key := backend.GetActivityExecutionKey(response.GetInstanceId(), response.GetTaskId())
-	if be.deletePendingActivityTask(key, response) {
+	if be.deletePendingActivityTask(response.GetInstanceId(), response.GetTaskId(), response) {
 		return nil
 	}
-	return fmt.Errorf("unknown instance ID/task ID combo: %s", key)
+	return fmt.Errorf("unknown instance ID/task ID combo: %s", response.GetInstanceId()+"/"+strconv.FormatInt(int64(response.GetTaskId()), 10))
 }
 
 func (be *TasksBackend) CancelActivityTask(ctx context.Context, instanceID api.InstanceID, taskID int32) error {
-	key := backend.GetActivityExecutionKey(string(instanceID), taskID)
-	if be.deletePendingActivityTask(key, nil) {
+	if be.deletePendingActivityTask(string(instanceID), taskID, nil) {
 		return nil
 	}
-	return fmt.Errorf("unknown instance ID/task ID combo: %s", key)
+	return fmt.Errorf("unknown instance ID/task ID combo: %s", string(instanceID)+"/"+strconv.FormatInt(int64(taskID), 10))
 }
 
 func (be *TasksBackend) WaitForActivityCompletion(ctx context.Context, request *protos.ActivityRequest) (*protos.ActivityResponse, error) {
-	key := backend.GetActivityExecutionKey(string(request.GetOrchestrationInstance().GetInstanceId()), request.GetTaskId())
+	key := backend.GetActivityExecutionKey(request.GetOrchestrationInstance().GetInstanceId(), request.GetTaskId())
 	pending := &pendingActivity{
 		response: nil,
-		complete: make(chan struct{}),
+		complete: make(chan struct{}, 1),
 	}
 	be.pendingActivities.Store(key, pending)
 
@@ -68,14 +67,14 @@ func (be *TasksBackend) WaitForActivityCompletion(ctx context.Context, request *
 }
 
 func (be *TasksBackend) CompleteOrchestratorTask(ctx context.Context, response *protos.OrchestratorResponse) error {
-	if be.deletePendingOrchestrator(api.InstanceID(response.GetInstanceId()), response) {
+	if be.deletePendingOrchestrator(response.GetInstanceId(), response) {
 		return nil
 	}
 	return fmt.Errorf("unknown instance ID: %s", response.GetInstanceId())
 }
 
 func (be *TasksBackend) CancelOrchestratorTask(ctx context.Context, instanceID api.InstanceID) error {
-	if be.deletePendingOrchestrator(instanceID, nil) {
+	if be.deletePendingOrchestrator(string(instanceID), nil) {
 		return nil
 	}
 	return fmt.Errorf("unknown instance ID: %s", instanceID)
@@ -84,7 +83,7 @@ func (be *TasksBackend) CancelOrchestratorTask(ctx context.Context, instanceID a
 func (be *TasksBackend) WaitForOrchestratorCompletion(ctx context.Context, request *protos.OrchestratorRequest) (*protos.OrchestratorResponse, error) {
 	pending := &pendingOrchestrator{
 		response: nil,
-		complete: make(chan struct{}),
+		complete: make(chan struct{}, 1),
 	}
 	be.pendingOrchestrators.Store(request.GetInstanceId(), pending)
 
@@ -99,7 +98,8 @@ func (be *TasksBackend) WaitForOrchestratorCompletion(ctx context.Context, reque
 	}
 }
 
-func (be *TasksBackend) deletePendingActivityTask(key string, res *protos.ActivityResponse) bool {
+func (be *TasksBackend) deletePendingActivityTask(iid string, taskID int32, res *protos.ActivityResponse) bool {
+	key := backend.GetActivityExecutionKey(iid, taskID)
 	p, ok := be.pendingActivities.LoadAndDelete(key)
 	if !ok {
 		return false
@@ -112,8 +112,8 @@ func (be *TasksBackend) deletePendingActivityTask(key string, res *protos.Activi
 	return true
 }
 
-func (be *TasksBackend) deletePendingOrchestrator(iid api.InstanceID, res *protos.OrchestratorResponse) bool {
-	p, ok := be.pendingOrchestrators.LoadAndDelete(iid)
+func (be *TasksBackend) deletePendingOrchestrator(instanceID string, res *protos.OrchestratorResponse) bool {
+	p, ok := be.pendingOrchestrators.LoadAndDelete(instanceID)
 	if !ok {
 		return false
 	}
