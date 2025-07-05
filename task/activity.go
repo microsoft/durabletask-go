@@ -105,13 +105,13 @@ func WithActivityRetryPolicy(policy *RetryPolicy) callActivityOption {
 type ActivityContext interface {
 	GetInput(resultPtr any) error
 	GetTaskID() int32
-	GetTaskExecutionId() string
+	GetTaskExecutionID() string
 	Context() context.Context
 }
 
 type activityContext struct {
 	TaskID          int32
-	TaskExecutionId string
+	TaskExecutionID string
 	Name            string
 
 	rawInput []byte
@@ -124,7 +124,7 @@ type Activity func(ctx ActivityContext) (any, error)
 func newTaskActivityContext(ctx context.Context, taskID int32, ts *protos.TaskScheduledEvent) *activityContext {
 	return &activityContext{
 		TaskID:          taskID,
-		TaskExecutionId: ts.TaskExecutionId,
+		TaskExecutionID: ts.TaskExecutionId,
 		Name:            ts.Name,
 		rawInput:        []byte(ts.Input.GetValue()),
 		ctx:             ctx,
@@ -144,6 +144,6 @@ func (actx *activityContext) GetTaskID() int32 {
 	return actx.TaskID
 }
 
-func (actx *activityContext) GetTaskExecutionId() string {
-	return actx.TaskExecutionId
+func (actx *activityContext) GetTaskExecutionID() string {
+	return actx.TaskExecutionID
 }

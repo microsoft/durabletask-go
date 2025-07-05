@@ -1346,7 +1346,7 @@ func Test_TaskExecutionId(t *testing.T) {
 	t.Run("SingleActivityWithRetry", func(t *testing.T) {
 		// Registration
 		r := task.NewTaskRegistry()
-		require.NoError(t, r.AddOrchestratorN("TaskExecutionId", func(ctx *task.OrchestrationContext) (any, error) {
+		require.NoError(t, r.AddOrchestratorN("TaskExecutionID", func(ctx *task.OrchestrationContext) (any, error) {
 			if err := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
 				MaxAttempts:          3,
 				InitialRetryInterval: 10 * time.Millisecond,
@@ -1359,7 +1359,7 @@ func Test_TaskExecutionId(t *testing.T) {
 		executionMap := make(map[string]int)
 		var executionId string
 		require.NoError(t, r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
-			executionId = ctx.GetTaskExecutionId()
+			executionId = ctx.GetTaskExecutionID()
 			executionMap[executionId]++
 			if executionMap[executionId] == 3 {
 				return nil, nil
@@ -1374,7 +1374,7 @@ func Test_TaskExecutionId(t *testing.T) {
 		defer worker.Shutdown(ctx)
 
 		// Run the orchestration
-		id, err := client.ScheduleNewOrchestration(ctx, "TaskExecutionId")
+		id, err := client.ScheduleNewOrchestration(ctx, "TaskExecutionID")
 		require.NoError(t, err)
 
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
@@ -1391,7 +1391,7 @@ func Test_TaskExecutionId(t *testing.T) {
 	t.Run("ParallelActivityWithRetry", func(t *testing.T) {
 		// Registration
 		r := task.NewTaskRegistry()
-		require.NoError(t, r.AddOrchestratorN("TaskExecutionId", func(ctx *task.OrchestrationContext) (any, error) {
+		require.NoError(t, r.AddOrchestratorN("TaskExecutionID", func(ctx *task.OrchestrationContext) (any, error) {
 			t1 := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
 				MaxAttempts:          3,
 				InitialRetryInterval: 10 * time.Millisecond,
@@ -1421,8 +1421,8 @@ func Test_TaskExecutionId(t *testing.T) {
 		require.NoError(t, r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
 			lock.Lock()
 			defer lock.Unlock()
-			executionMap[ctx.GetTaskExecutionId()] = executionMap[ctx.GetTaskExecutionId()] + 1
-			if executionMap[ctx.GetTaskExecutionId()] == 3 {
+			executionMap[ctx.GetTaskExecutionID()] = executionMap[ctx.GetTaskExecutionID()] + 1
+			if executionMap[ctx.GetTaskExecutionID()] == 3 {
 				return nil, nil
 			}
 			return nil, errors.New("activity failure")
@@ -1435,7 +1435,7 @@ func Test_TaskExecutionId(t *testing.T) {
 		defer worker.Shutdown(ctx)
 
 		// Run the orchestration
-		id, err := client.ScheduleNewOrchestration(ctx, "TaskExecutionId")
+		id, err := client.ScheduleNewOrchestration(ctx, "TaskExecutionID")
 		require.NoError(t, err)
 
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
@@ -1456,7 +1456,7 @@ func Test_TaskExecutionId(t *testing.T) {
 	t.Run("SingleActivityWithNoRetry", func(t *testing.T) {
 		// Registration
 		r := task.NewTaskRegistry()
-		require.NoError(t, r.AddOrchestratorN("TaskExecutionId", func(ctx *task.OrchestrationContext) (any, error) {
+		require.NoError(t, r.AddOrchestratorN("TaskExecutionID", func(ctx *task.OrchestrationContext) (any, error) {
 			if err := ctx.CallActivity("Activity").Await(nil); err != nil {
 				return nil, err
 			}
@@ -1465,7 +1465,7 @@ func Test_TaskExecutionId(t *testing.T) {
 
 		var executionId string
 		require.NoError(t, r.AddActivityN("Activity", func(ctx task.ActivityContext) (any, error) {
-			executionId = ctx.GetTaskExecutionId()
+			executionId = ctx.GetTaskExecutionID()
 			return nil, nil
 		}))
 
@@ -1476,7 +1476,7 @@ func Test_TaskExecutionId(t *testing.T) {
 		defer worker.Shutdown(ctx)
 
 		// Run the orchestration
-		id, err := client.ScheduleNewOrchestration(ctx, "TaskExecutionId")
+		id, err := client.ScheduleNewOrchestration(ctx, "TaskExecutionID")
 		require.NoError(t, err)
 
 		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)

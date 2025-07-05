@@ -115,8 +115,8 @@ func getCounter(taskExecutionId string) *atomic.Int32 {
 }
 
 func RandomFailActivity(ctx task.ActivityContext) (any, error) {
-	log.Println(fmt.Sprintf("#### [%v] activity %v failure", ctx.GetTaskExecutionId(), ctx.GetTaskID()))
-	counter := getCounter(ctx.GetTaskExecutionId())
+	log.Println(fmt.Sprintf("#### [%v] activity %v failure", ctx.GetTaskExecutionID(), ctx.GetTaskID()))
+	counter := getCounter(ctx.GetTaskExecutionID())
 	// The activity should fail 5 times before succeeding.
 	if counter.Load() != 5 {
 		log.Println("random activity failure")
