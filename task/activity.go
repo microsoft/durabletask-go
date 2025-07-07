@@ -59,7 +59,7 @@ func (policy *RetryPolicy) Validate() error {
 	return nil
 }
 
-func WithAppID(targetAppID string) callActivityOption {
+func WithActivityAppID(targetAppID string) callActivityOption {
 	return func(opt *callActivityOptions) error {
 		opt.targetAppID = &targetAppID
 		return nil

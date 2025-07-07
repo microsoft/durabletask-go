@@ -140,8 +140,35 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 					Router: action.Router,
 				})
 				if s.StartEvent.GetParentInstance() != nil {
+					// Create a router for the completion event that routes back to the parent
+					var completionRouter *protos.TaskRouter
+					if action.Router != nil {
+						var parentAppID string
+
+						allEvents := append(s.OldEvents, s.NewEvents...)
+						for _, event := range allEvents {
+							if es := event.GetExecutionStarted(); es != nil && event.GetRouter() != nil {
+								parentAppID = event.GetRouter().GetSource()
+								break
+							}
+						}
+
+						if parentAppID != "" {
+							completionRouter = &protos.TaskRouter{
+								Source: action.Router.Source,
+								Target: &parentAppID,
+							}
+						} else {
+							completionRouter = action.Router
+						}
+					}
+
 					msg := &protos.OrchestrationRuntimeStateMessage{
-						HistoryEvent:     &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.Now()},
+						HistoryEvent: &protos.HistoryEvent{
+							EventId:   -1,
+							Timestamp: timestamppb.Now(),
+							Router:    completionRouter,
+						},
 						TargetInstanceID: s.StartEvent.GetParentInstance().OrchestrationInstance.InstanceId,
 					}
 					if completedAction.OrchestrationStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED {
