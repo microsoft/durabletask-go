@@ -216,10 +216,10 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 			router := e.GetRouter()
 			// For cross-app suborchestrations, if we have a target, use that as our appID
 			// since that's where we're actually executing
-			if router.Target != nil {
-				ctx.appID = ptr.Of(router.GetTarget())
+			if router.TargetAppID != nil {
+				ctx.appID = ptr.Of(router.GetTargetAppID())
 			} else {
-				ctx.appID = ptr.Of(router.GetSource())
+				ctx.appID = ptr.Of(router.GetSourceAppID())
 			}
 		}
 		err = ctx.onExecutionStarted(es)
@@ -302,11 +302,11 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activityName, taskExec
 	// Add TaskRouter support for cross-app activities
 	if ctx.appID != nil {
 		scheduleTaskAction.Router = &protos.TaskRouter{
-			Source: *ctx.appID, // Current orchestrator app ID
+			SourceAppID: *ctx.appID, // Current orchestrator app ID
 		}
 
 		if options.targetAppID != nil {
-			scheduleTaskAction.Router.Target = options.targetAppID // Target activity app ID
+			scheduleTaskAction.Router.TargetAppID = options.targetAppID // Target activity app ID
 		}
 	}
 
@@ -355,11 +355,11 @@ func (ctx *OrchestrationContext) internalCallSubOrchestrator(orchestratorName st
 	}
 	if ctx.appID != nil {
 		createSubOrchestrationAction.Router = &protos.TaskRouter{
-			Source: *ctx.appID,
+			SourceAppID: *ctx.appID,
 		}
 
 		if options.targetAppID != nil {
-			createSubOrchestrationAction.Router.Target = options.targetAppID
+			createSubOrchestrationAction.Router.TargetAppID = options.targetAppID
 		}
 	}
 	ctx.pendingActions[createSubOrchestrationAction.Id] = createSubOrchestrationAction
@@ -785,7 +785,7 @@ func (ctx *OrchestrationContext) setCompleteInternal(
 
 	if ctx.appID != nil {
 		completedAction.Router = &protos.TaskRouter{
-			Source: *ctx.appID,
+			SourceAppID: *ctx.appID,
 		}
 	}
 

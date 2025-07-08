@@ -149,15 +149,15 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 						allEvents := append(s.OldEvents, s.NewEvents...)
 						for _, event := range allEvents {
 							if es := event.GetExecutionStarted(); es != nil && event.GetRouter() != nil {
-								parentAppID = ptr.Of(event.GetRouter().GetSource())
+								parentAppID = ptr.Of(event.GetRouter().GetSourceAppID())
 								break
 							}
 						}
 
 						if parentAppID != nil {
 							completionRouter = &protos.TaskRouter{
-								Source: action.Router.Source,
-								Target: parentAppID,
+								SourceAppID: action.Router.SourceAppID,
+								TargetAppID: parentAppID,
 							}
 						} else {
 							completionRouter = action.Router
