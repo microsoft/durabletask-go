@@ -52,9 +52,9 @@ type OrchestrationContext struct {
 
 // callSubOrchestratorOptions is a struct that holds the options for the CallSubOrchestrator orchestrator method.
 type callSubOrchestratorOptions struct {
-	instanceID string
-	rawInput   *wrapperspb.StringValue
-
+	instanceID  string
+	rawInput    *wrapperspb.StringValue
+	targetAppID *string
 	retryPolicy *RetryPolicy
 }
 
@@ -63,6 +63,14 @@ type subOrchestratorOption func(*callSubOrchestratorOptions) error
 
 // ContinueAsNewOption is a functional option type for the ContinueAsNew orchestrator method.
 type ContinueAsNewOption func(*OrchestrationContext)
+
+// WithSubOrchestratorAppID is a functional option type for the CallSubOrchestrator orchestrator method that specifies the app ID of the target activity.
+func WithSubOrchestratorAppID(appID string) subOrchestratorOption {
+	return func(opts *callSubOrchestratorOptions) error {
+		opts.targetAppID = &appID
+		return nil
+	}
+}
 
 // WithKeepUnprocessedEvents returns a ContinueAsNewOptions struct that instructs the
 // runtime to carry forward any unprocessed external events to the new instance.
@@ -205,7 +213,14 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 	} else if es := e.GetExecutionStarted(); es != nil {
 		// Extract source AppID from HistoryEvent Router if this is ExecutionStartedEvent
 		if e.GetRouter() != nil {
-			ctx.appID = ptr.Of(e.GetRouter().GetSource())
+			router := e.GetRouter()
+			// For cross-app suborchestrations, if we have a target, use that as our appID
+			// since that's where we're actually executing
+			if router.Target != nil {
+				ctx.appID = ptr.Of(router.GetTarget())
+			} else {
+				ctx.appID = ptr.Of(router.GetSource())
+			}
 		}
 		err = ctx.onExecutionStarted(es)
 	} else if ts := e.GetTaskScheduled(); ts != nil {
@@ -337,6 +352,15 @@ func (ctx *OrchestrationContext) internalCallSubOrchestrator(orchestratorName st
 				InstanceId: options.instanceID,
 			},
 		},
+	}
+	if ctx.appID != nil {
+		createSubOrchestrationAction.Router = &protos.TaskRouter{
+			Source: *ctx.appID,
+		}
+
+		if options.targetAppID != nil {
+			createSubOrchestrationAction.Router.Target = options.targetAppID
+		}
 	}
 	ctx.pendingActions[createSubOrchestrationAction.Id] = createSubOrchestrationAction
 
@@ -758,6 +782,13 @@ func (ctx *OrchestrationContext) setCompleteInternal(
 			},
 		},
 	}
+
+	if ctx.appID != nil {
+		completedAction.Router = &protos.TaskRouter{
+			Source: *ctx.appID,
+		}
+	}
+
 	ctx.pendingActions[sequenceNumber] = completedAction
 	return nil
 }
