@@ -12,6 +12,7 @@ import (
 	"github.com/dapr/durabletask-go/api"
 	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
+	"github.com/dapr/kit/ptr"
 )
 
 var ErrDuplicateEvent = errors.New("duplicate event")
@@ -143,20 +144,20 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 					// Create a router for the completion event that routes back to the parent
 					var completionRouter *protos.TaskRouter
 					if action.Router != nil {
-						var parentAppID string
+						var parentAppID *string
 
 						allEvents := append(s.OldEvents, s.NewEvents...)
 						for _, event := range allEvents {
 							if es := event.GetExecutionStarted(); es != nil && event.GetRouter() != nil {
-								parentAppID = event.GetRouter().GetSource()
+								parentAppID = ptr.Of(event.GetRouter().GetSource())
 								break
 							}
 						}
 
-						if parentAppID != "" {
+						if parentAppID != nil {
 							completionRouter = &protos.TaskRouter{
 								Source: action.Router.Source,
-								Target: &parentAppID,
+								Target: parentAppID,
 							}
 						} else {
 							completionRouter = action.Router

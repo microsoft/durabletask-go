@@ -216,7 +216,7 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 			router := e.GetRouter()
 			// For cross-app suborchestrations, if we have a target, use that as our appID
 			// since that's where we're actually executing
-			if router.GetTarget() != "" {
+			if router.Target != nil {
 				ctx.appID = ptr.Of(router.GetTarget())
 			} else {
 				ctx.appID = ptr.Of(router.GetSource())
