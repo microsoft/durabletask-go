@@ -482,7 +482,7 @@ func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInst
 		return nil, fmt.Errorf("failed to create orchestration instance: %w", err)
 	}
 
-	if !g.skipWaitForInstanceStart {
+	if req.ScheduledStartTimestamp == nil && !g.skipWaitForInstanceStart {
 		_, err := g.WaitForInstanceStart(ctx, &protos.GetInstanceRequest{InstanceId: instanceID})
 		if err != nil {
 			return nil, err
