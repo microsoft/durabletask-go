@@ -140,28 +140,16 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 					},
 					Router: action.Router,
 				})
-				if s.StartEvent.GetParentInstance() != nil {
-					// Create a router for the completion event that routes back to the parent
+				if parentInstance := s.StartEvent.GetParentInstance(); parentInstance != nil {
 					var completionRouter *protos.TaskRouter
-					if action.Router != nil {
-						var parentAppID *string
 
-						allEvents := append(s.OldEvents, s.NewEvents...)
-						for _, event := range allEvents {
-							if es := event.GetExecutionStarted(); es != nil && event.GetRouter() != nil {
-								parentAppID = ptr.Of(event.GetRouter().GetSourceAppID())
-								break
-							}
+					if parentInstance.AppID != nil {
+						completionRouter = &protos.TaskRouter{
+							SourceAppID: action.Router.GetSourceAppID(),
+							TargetAppID: ptr.Of(parentInstance.GetAppID()),
 						}
-
-						if parentAppID != nil {
-							completionRouter = &protos.TaskRouter{
-								SourceAppID: action.Router.SourceAppID,
-								TargetAppID: parentAppID,
-							}
-						} else {
-							completionRouter = action.Router
-						}
+					} else {
+						completionRouter = action.Router
 					}
 
 					msg := &protos.OrchestrationRuntimeStateMessage{
@@ -261,6 +249,7 @@ func ApplyActions(s *protos.OrchestrationRuntimeState, customStatus *wrapperspb.
 							TaskScheduledId:       action.Id,
 							Name:                  wrapperspb.String(s.StartEvent.Name),
 							OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: string(s.InstanceId)},
+							AppID:                 ptr.Of(action.Router.GetSourceAppID()),
 						},
 						Input: createSO.Input,
 						OrchestrationInstance: &protos.OrchestrationInstance{
