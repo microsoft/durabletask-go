@@ -361,7 +361,10 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		for _, msg := range wi.State.PendingMessages() {
 			if es := msg.HistoryEvent.GetExecutionStarted(); es != nil {
 				// Need to insert a new row into the DB
-				if _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx); err != nil {
+				if _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, backend.WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
+					OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED},
+					Action:          api.REUSE_ID_ACTION_TERMINATE,
+				})); err != nil {
 					if errors.Is(err, backend.ErrDuplicateEvent) {
 						be.logger.Warnf(
 							"%v: dropping sub-orchestration creation event because an instance with the target ID (%v) already exists.",
