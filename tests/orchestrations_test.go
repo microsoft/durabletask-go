@@ -20,7 +20,10 @@ import (
 	"github.com/dapr/durabletask-go/backend/sqlite"
 	"github.com/dapr/durabletask-go/task"
 	"github.com/dapr/durabletask-go/tests/utils"
+	"go.opentelemetry.io/otel"
 )
+
+var tracer = otel.Tracer("orchestration-test")
 
 func Test_EmptyOrchestration(t *testing.T) {
 	// Registration
@@ -208,6 +211,57 @@ func Test_SingleActivity(t *testing.T) {
 		utils.AssertActivity("SayHello", id, 0),
 		utils.AssertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
 	)
+}
+
+func Test_SingleActivity_TaskSpan(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		var output string
+		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
+		return output, err
+	})
+	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+		var name string
+		if err := ctx.GetInput(&name); err != nil {
+			return nil, err
+		}
+		_, childSpan := tracer.Start(ctx.Context(), "activityChild")
+		childSpan.End()
+		return fmt.Sprintf("Hello, %s!", name), nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	exporter := utils.InitTracing()
+
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"))
+	if assert.NoError(t, err) {
+		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+		if assert.NoError(t, err) {
+			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+			assert.Equal(t, `"Hello, 世界!"`, metadata.Output.Value)
+		}
+	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	utils.AssertSpanSequence(t, spans,
+		utils.AssertOrchestratorCreated("SingleActivity", id),
+		utils.AssertSpan("activityChild"),
+		utils.AssertActivity("SayHello", id, 0),
+		utils.AssertOrchestratorExecuted("SingleActivity", id, "COMPLETED"),
+	)
+	// assert child-parent relationship
+	assert.Equal(t, spans[1].Parent().SpanID(), spans[2].SpanContext().SpanID())
 }
 
 func Test_ActivityChain(t *testing.T) {

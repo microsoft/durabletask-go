@@ -49,7 +49,6 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, awi *ActivityWo
 	if ts == nil {
 		return fmt.Errorf("%v: invalid TaskScheduled event", awi.InstanceID)
 	}
-
 	// Create span as child of spanContext found in TaskScheduledEvent
 	ctx, err := helpers.ContextFromTraceContext(ctx, ts.ParentTraceContext)
 	if err != nil {
@@ -66,6 +65,9 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, awi *ActivityWo
 		}()
 	}
 
+	// set the parent trace context to be the newly created activity span
+	ts.ParentTraceContext = helpers.TraceContextFromSpan(span)
+
 	// Execute the activity and get its result
 	result, err := p.executor.ExecuteActivity(ctx, awi.InstanceID, awi.NewEvent)
 	if err != nil {
@@ -75,7 +77,6 @@ func (p *activityProcessor) ProcessWorkItem(ctx context.Context, awi *ActivityWo
 		}
 		return err
 	}
-
 	awi.Result = result
 	return nil
 }
