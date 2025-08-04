@@ -21,6 +21,7 @@ import (
 	"github.com/dapr/durabletask-go/backend/sqlite"
 	"github.com/dapr/durabletask-go/client"
 	"github.com/dapr/durabletask-go/task"
+	"github.com/dapr/durabletask-go/tests/utils"
 	"go.opentelemetry.io/otel"
 )
 
@@ -420,9 +421,9 @@ func Test_Grpc_ReuseInstanceIDError(t *testing.T) {
 	defer cancelListener()
 	instanceID := api.InstanceID("THROW_IF_RUNNING_OR_COMPLETED")
 
-	_, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
-	_, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
+	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}
@@ -524,7 +525,7 @@ func Test_SingleActivity_TaskSpan(t *testing.T) {
 		metadata, err := grpcClient.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
 			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
-			assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
+			assert.Equal(t, `"Hello, 世界!"`, metadata.Output.Value)
 		}
 	}
 
