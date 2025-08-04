@@ -62,14 +62,19 @@ func AssertActivity(name string, id api.InstanceID, taskID int64, optionalAssert
 		assertTaskType("activity"),
 		assertTaskName(name),
 		assertInstanceID(id),
-		assertTaskID(taskID),
+		AssertTaskID(taskID),
 	}
 	opts = append(opts, optionalAsserts...)
 	return AssertSpan(spanName, opts...)
 }
 
-func AssertTimer(id api.InstanceID) spanValidator {
-	return AssertSpan("timer", assertInstanceID(id), assertTimerFired())
+func AssertTimer(id api.InstanceID, optionalAsserts ...spanAttributeValidator) spanValidator {
+	opts := []spanAttributeValidator{
+		assertInstanceID(id),
+		assertTimerFired(),
+	}
+	opts = append(opts, optionalAsserts...)
+	return AssertSpan("timer", opts...)
 }
 
 func AssertSpanEvents(eventAsserts ...spanEventValidator) spanAttributeValidator {
@@ -162,7 +167,7 @@ func assertTaskName(expectedTaskName string) spanAttributeValidator {
 	}
 }
 
-func assertTaskID(expectedTaskID int64) spanAttributeValidator {
+func AssertTaskID(expectedTaskID int64) spanAttributeValidator {
 	return func(t assert.TestingT, span trace.ReadOnlySpan) bool {
 		return assert.Contains(t, span.Attributes(), attribute.KeyValue{
 			Key:   "durabletask.task.task_id",
