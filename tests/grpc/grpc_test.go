@@ -21,7 +21,6 @@ import (
 	"github.com/dapr/durabletask-go/backend/sqlite"
 	"github.com/dapr/durabletask-go/client"
 	"github.com/dapr/durabletask-go/task"
-	"github.com/dapr/durabletask-go/tests/utils"
 	"go.opentelemetry.io/otel"
 )
 
