@@ -178,7 +178,7 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 	var ptc *protos.TraceContext = req.ParentTraceContext
 	ctx, err := helpers.ContextFromTraceContext(ctx, ptc)
 	if err != nil {
-		fmt.Printf("%v: failed to parse trace context: %v", req.Name, err)
+		c.logger.Warn("%v: failed to parse trace context: %v", req.Name, err)
 	}
 
 	event := &protos.HistoryEvent{
