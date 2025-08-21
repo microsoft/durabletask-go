@@ -168,6 +168,41 @@ func Test_IsReplaying(t *testing.T) {
 	)
 }
 
+func Test_TimerLoop(t *testing.T) {
+	timestamps := []time.Time{}
+
+	r := task.NewTaskRegistry()
+	r.AddOrchestratorN("TimerLoop", func(ctx *task.OrchestrationContext) (any, error) {
+		for range 10 {
+			timestamps = append(timestamps, time.Now())
+			ctx.CreateTimer(2 * time.Second).Await(nil)
+		}
+		return nil, nil
+	})
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer worker.Shutdown(ctx)
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "TimerLoop")
+	require.NoError(t, err)
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+
+	require.Len(t, timestamps, 65)
+
+	secondsElapsed := []time.Duration{}
+	for i := 1; i < len(timestamps); i++ {
+		secondsElapsed = append(secondsElapsed, timestamps[i].Sub(timestamps[i-1]))
+	}
+	for _, d := range secondsElapsed {
+		assert.GreaterOrEqual(t, d, 2*time.Second)
+	}
+}
+
 func Test_SingleActivity(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
