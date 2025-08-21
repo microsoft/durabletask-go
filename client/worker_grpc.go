@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/dapr/durabletask-go/api"
+	"github.com/dapr/durabletask-go/api/helpers"
 	"github.com/dapr/durabletask-go/api/protos"
 	"github.com/dapr/durabletask-go/backend"
 	"github.com/dapr/durabletask-go/task"
@@ -174,7 +175,12 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 	executor backend.Executor,
 	req *protos.ActivityRequest,
 ) {
-	var tc *protos.TraceContext = nil // TODO: How to populate trace context?
+	var ptc *protos.TraceContext = req.ParentTraceContext
+	ctx, err := helpers.ContextFromTraceContext(ctx, ptc)
+	if err != nil {
+		c.logger.Warn("%v: failed to parse trace context: %v", req.Name, err)
+	}
+
 	event := &protos.HistoryEvent{
 		EventId:   req.TaskId,
 		Timestamp: timestamppb.New(time.Now()),
@@ -184,7 +190,7 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 				Version:            req.Version,
 				Input:              req.Input,
 				TaskExecutionId:    req.TaskExecutionId,
-				ParentTraceContext: tc,
+				ParentTraceContext: ptc,
 			},
 		},
 	}

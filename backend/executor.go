@@ -177,6 +177,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 		OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: string(iid)},
 		TaskId:                e.EventId,
 		TaskExecutionId:       task.TaskExecutionId,
+		ParentTraceContext:    task.ParentTraceContext,
 	}
 	workItem := &protos.WorkItem{
 		Request: &protos.WorkItem_ActivityRequest{
