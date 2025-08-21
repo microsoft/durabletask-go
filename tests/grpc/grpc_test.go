@@ -520,7 +520,7 @@ func Test_SingleActivity_TaskSpan(t *testing.T) {
 	defer cancelListener()
 
 	// Run the orchestration
-	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity_TestSpan", api.WithInput("世界"))
+	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity_TestSpan", api.WithInput("世界"), api.WithStartTime(time.Now()))
 	if assert.NoError(t, err) {
 		metadata, err := grpcClient.WaitForOrchestrationCompletion(ctx, id)
 		if assert.NoError(t, err) {
