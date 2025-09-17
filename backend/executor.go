@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -477,10 +477,7 @@ func (g *grpcExecutor) waitForInstance(ctx context.Context, req *protos.GetInsta
 		MaxInterval:         3 * time.Second,
 		Multiplier:          1.5,
 		RandomizationFactor: 0.5,
-		Stop:                backoff.Stop,
-		Clock:               backoff.SystemClock,
 	}
-	b = backoff.WithContext(b, ctx)
 	b.Reset()
 
 loop:

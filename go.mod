@@ -3,7 +3,7 @@ module github.com/microsoft/durabletask-go
 go 1.23.0
 
 require (
-	github.com/cenkalti/backoff/v4 v4.1.3
+	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/golang/protobuf v1.5.3
 	github.com/google/uuid v1.3.0
 	github.com/jackc/pgx/v5 v5.7.1

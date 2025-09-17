@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/marusama/semaphore/v2"
 )
 
@@ -99,10 +99,7 @@ func (w *worker) Start(ctx context.Context) {
 			MaxInterval:         5 * time.Second,
 			Multiplier:          1.05,
 			RandomizationFactor: 0.05,
-			Stop:                backoff.Stop,
-			Clock:               backoff.SystemClock,
 		}
-		b = backoff.WithContext(b, ctx)
 		b.Reset()
 
 	loop:
