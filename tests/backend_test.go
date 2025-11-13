@@ -3,7 +3,6 @@ package tests
 import (
 	"context"
 	"fmt"
-	"github.com/microsoft/durabletask-go/backend/postgres"
 	"os"
 	"reflect"
 	"runtime"
@@ -12,10 +11,14 @@ import (
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/backend/postgres"
 	"github.com/microsoft/durabletask-go/backend/sqlite"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/stretchr/testify/assert"
+	"github.com/testcontainers/testcontainers-go"
+	testcontainerspostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -25,6 +28,7 @@ var (
 	logger                = backend.DefaultLogger()
 	sqliteInMemoryOptions = sqlite.NewSqliteOptions("")
 	sqliteFileOptions     = sqlite.NewSqliteOptions("test.sqlite3")
+	postgresContainer     testcontainers.Container
 )
 
 func getRunnableBackends() []backend.Backend {
@@ -34,13 +38,74 @@ func getRunnableBackends() []backend.Backend {
 	runnableBackends = append(runnableBackends, sqlite.NewSqliteBackend(sqliteInMemoryOptions, logger))
 
 	if os.Getenv("POSTGRES_ENABLED") == "true" {
-		runnableBackends = append(runnableBackends, postgres.NewPostgresBackend(nil, logger))
+		pgBackend, container, err := setupPostgresBackend()
+		if err != nil {
+			logger.Warnf("Failed to setup PostgreSQL test container: %v. Skipping PostgreSQL tests.", err)
+		} else {
+			postgresContainer = container
+			runnableBackends = append(runnableBackends, pgBackend)
+		}
 	}
 
 	return runnableBackends
 }
 
+// setupPostgresBackend creates a PostgreSQL test container and returns a backend instance
+func setupPostgresBackend() (backend.Backend, testcontainers.Container, error) {
+	// Create PostgreSQL container
+	container, err := testcontainerspostgres.Run(ctx,
+		"postgres:15-alpine",
+		testcontainerspostgres.WithDatabase("testdb"),
+		testcontainerspostgres.WithUsername("testuser"),
+		testcontainerspostgres.WithPassword("testpass"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second)),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to start PostgreSQL container: %w", err)
+	}
+
+	// Get connection details
+	host, err := container.Host(ctx)
+	if err != nil {
+		if err := container.Terminate(ctx); err != nil {
+			logger.Warnf("Failed to terminate PostgreSQL container: %v", err)
+		}
+		return nil, nil, fmt.Errorf("failed to get container host: %w", err)
+	}
+
+	port, err := container.MappedPort(ctx, "5432")
+	if err != nil {
+		if err := container.Terminate(ctx); err != nil {
+			logger.Warnf("Failed to terminate PostgreSQL container: %v", err)
+		}
+		return nil, nil, fmt.Errorf("failed to get container port: %w", err)
+	}
+
+	// Create PostgreSQL backend with container connection details
+	pgOptions := postgres.NewPostgresOptions(host, uint16(port.Int()), "testdb", "testuser", "testpass")
+	pgBackend := postgres.NewPostgresBackend(pgOptions, logger)
+
+	return pgBackend, container, nil
+}
+
 var backends = getRunnableBackends()
+
+// TestMain sets up and tears down the test containers
+func TestMain(m *testing.M) {
+	code := m.Run()
+
+	// Cleanup: terminate the PostgreSQL container
+	if postgresContainer != nil {
+		if err := postgresContainer.Terminate(ctx); err != nil {
+			logger.Warnf("Failed to terminate PostgreSQL container: %v", err)
+		}
+	}
+
+	os.Exit(code)
+}
 
 var completionStatusValues = []protos.OrchestrationStatus{
 	protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,

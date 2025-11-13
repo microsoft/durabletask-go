@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,7 +45,7 @@ func NewPostgresOptions(host string, port uint16, database string, user string, 
 	if err != nil {
 		panic(fmt.Errorf("failed to parse the postgres connection string: %w", err))
 	}
-	conf.ConnConfig.Config.ConnectTimeout = 2 * time.Minute
+	conf.ConnConfig.ConnectTimeout = 2 * time.Minute
 	conf.MaxConnLifetime = 2 * time.Minute
 	conf.MaxConnIdleTime = 2 * time.Minute
 	conf.MaxConns = 1
@@ -136,7 +137,11 @@ func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			be.logger.Error("AbandonOrchestrationWorkItem", "failed to rollback transaction", err)
+		}
+	}()
 
 	var visibleTime *time.Time = nil
 	if delay := wi.GetAbandonDelay(); delay > 0 {
@@ -155,10 +160,7 @@ func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi 
 		return fmt.Errorf("failed to update NewEvents table: %w", err)
 	}
 
-	rowsAffected := dbResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed get rows affected by UPDATE NewEvents statement: %w", err)
-	} else if rowsAffected == 0 {
+	if dbResult.RowsAffected() == 0 {
 		return backend.ErrWorkItemLockLost
 	}
 
@@ -168,15 +170,11 @@ func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi 
 		string(wi.InstanceID),
 		wi.LockedBy,
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to update Instances table: %w", err)
 	}
 
-	rowsAffected = dbResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed get rows affected by UPDATE Instances statement: %w", err)
-	} else if rowsAffected == 0 {
+	if dbResult.RowsAffected() == 0 {
 		return backend.ErrWorkItemLockLost
 	}
 
@@ -197,7 +195,11 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			be.logger.Error("CompleteOrchestrationWorkItem", "failed to rollback transaction", err)
+		}
+	}()
 
 	now := time.Now().UTC()
 
@@ -260,10 +262,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		return fmt.Errorf("failed to update Instances table: %w", err)
 	}
 
-	count := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get the number of rows affected by the Instance table update: %w", err)
-	} else if count == 0 {
+	if result.RowsAffected() == 0 {
 		return fmt.Errorf("instance '%s' no longer exists or was locked by a different worker", string(wi.InstanceID))
 	}
 
@@ -287,7 +286,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		}
 		query := builder.String()
 
-		args := make([]interface{}, 0, newHistoryCount*3)
+		args := make([]any, 0, newHistoryCount*3)
 		nextSequenceNumber := len(wi.State.OldEvents())
 		for _, e := range wi.State.NewEvents() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
@@ -318,7 +317,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		}
 		insertSql := builder.String()
 
-		sqlInsertArgs := make([]interface{}, 0, newActivityCount*2)
+		sqlInsertArgs := make([]any, 0, newActivityCount*2)
 		for _, e := range wi.State.PendingTasks() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
@@ -401,15 +400,8 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		return fmt.Errorf("failed to delete from NewEvents table: %w", err)
 	}
 
-	rowsAffected := dbResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed get rows affected by delete statement: %w", err)
-	} else if rowsAffected == 0 {
+	if dbResult.RowsAffected() == 0 {
 		return backend.ErrWorkItemLockLost
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to delete from the NewEvents table: %w", err)
 	}
 
 	if err = tx.Commit(ctx); err != nil {
@@ -429,7 +421,11 @@ func (be *postgresBackend) CreateOrchestrationInstance(ctx context.Context, e *b
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			be.logger.Error("CreateOrchestrationInstance", "failed to rollback transaction", err)
+		}
+	}()
 
 	var instanceID string
 	if instanceID, err = be.createOrchestrationInstanceInternal(ctx, e, tx, opts...); errors.Is(err, api.ErrIgnoreInstance) {
@@ -517,11 +513,7 @@ func insertOrIgnoreInstanceTableInternal(ctx context.Context, tx pgx.Tx, e *back
 		return -1, fmt.Errorf("failed to insert into Instances table: %w", err)
 	}
 
-	rows := res.RowsAffected()
-	if err != nil {
-		return -1, fmt.Errorf("failed to count the rows affected: %w", err)
-	}
-	return rows, nil
+	return res.RowsAffected(), nil
 }
 
 func (be *postgresBackend) handleInstanceExists(ctx context.Context, tx pgx.Tx, startEvent *protos.ExecutionStartedEvent, policy *protos.OrchestrationIdReusePolicy, e *backend.HistoryEvent) error {
@@ -572,12 +564,7 @@ func (be *postgresBackend) handleInstanceExists(ctx context.Context, tx pgx.Tx, 
 }
 
 func isStatusMatch(statuses []protos.OrchestrationStatus, runtimeStatus protos.OrchestrationStatus) bool {
-	for _, status := range statuses {
-		if status == runtimeStatus {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(statuses, runtimeStatus)
 }
 
 func (be *postgresBackend) cleanupOrchestrationStateInternal(ctx context.Context, tx pgx.Tx, id api.InstanceID, requireCompleted bool) error {
@@ -596,11 +583,7 @@ func (be *postgresBackend) cleanupOrchestrationStateInternal(ctx context.Context
 			return fmt.Errorf("failed to delete from the Instances table: %w", err)
 		}
 
-		rowsAffected := dbResult.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("failed to get rows affected in Instances delete operation: %w", err)
-		}
-		if rowsAffected == 0 {
+		if dbResult.RowsAffected() == 0 {
 			return api.ErrNotCompleted
 		}
 	} else {
@@ -763,37 +746,57 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			be.logger.Error("GetOrchestrationWorkItem", "failed to rollback transaction", err)
+		}
+	}()
 
 	now := time.Now().UTC()
 	newLockExpiration := now.Add(be.options.OrchestrationLockTimeout)
 
-	// Place a lock on an orchestration instance that has new events that are ready to be executed.
-	row := tx.QueryRow(
+	// First, select and lock an instance with FOR UPDATE SKIP LOCKED to prevent race conditions
+	// This ensures only one worker can acquire the lock on a given instance
+	selectRow := tx.QueryRow(
 		ctx,
-		`UPDATE Instances SET LockedBy = $1, LockExpiration = $2
-		WHERE SequenceNumber = (
-			SELECT SequenceNumber FROM Instances I
-			WHERE (I.LockExpiration IS NULL OR I.LockExpiration < $3) AND EXISTS (
-				SELECT 1 FROM NewEvents E
-				WHERE E.InstanceID = I.InstanceID AND (E.VisibleTime IS NULL OR E.VisibleTime < $4)
-			)
-			LIMIT 1
-		) RETURNING InstanceID`,
-		be.workerName,     // LockedBy for Instances table
-		newLockExpiration, // Updated LockExpiration for Instances table
-		now,               // LockExpiration for Instances table
-		now,               // VisibleTime for NewEvents table
+		`SELECT I.SequenceNumber, I.InstanceID FROM Instances I
+		WHERE (I.LockExpiration IS NULL OR I.LockExpiration < $1) AND EXISTS (
+			SELECT 1 FROM NewEvents E
+			WHERE E.InstanceID = I.InstanceID AND (E.VisibleTime IS NULL OR E.VisibleTime < $2)
+		)
+		ORDER BY I.SequenceNumber
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED`,
+		now, // LockExpiration check
+		now, // VisibleTime check
 	)
 
+	var sequenceNumber int
 	var instanceID string
-	if err := row.Scan(&instanceID); err != nil {
+	if err := selectRow.Scan(&sequenceNumber, &instanceID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// No new events to process
 			return nil, backend.ErrNoWorkItems
 		}
+		return nil, fmt.Errorf("failed to select orchestration work-item: %w", err)
+	}
 
-		return nil, fmt.Errorf("failed to scan the orchestration work-item: %w", err)
+	// Now update the locked instance with our worker information
+	updateResult, err := tx.Exec(
+		ctx,
+		`UPDATE Instances SET LockedBy = $1, LockExpiration = $2
+		WHERE SequenceNumber = $3`,
+		be.workerName,
+		newLockExpiration,
+		sequenceNumber,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lock orchestration work-item: %w", err)
+	}
+
+	if updateResult.RowsAffected() == 0 {
+		// This should not happen since we have the row locked, but check anyway
+		return nil, backend.ErrNoWorkItems
 	}
 
 	// TODO: Get all the unprocessed events associated with the locked instance
@@ -855,19 +858,29 @@ func (be *postgresBackend) GetActivityWorkItem(ctx context.Context) (*backend.Ac
 		return nil, err
 	}
 
-	now := time.Now().UTC()
-	newLockExpiration := now.Add(be.options.OrchestrationLockTimeout)
+	// Begin transaction to hold the FOR UPDATE lock
+	tx, err := be.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			be.logger.Error("GetActivityWorkItem", "failed to rollback transaction", err)
+		}
+	}()
 
-	row := be.db.QueryRow(
+	now := time.Now().UTC()
+	newLockExpiration := now.Add(be.options.ActivityLockTimeout)
+
+	// First, select and lock a task with FOR UPDATE SKIP LOCKED to prevent race conditions
+	// The row lock is held by the transaction until commit
+	selectRow := tx.QueryRow(
 		ctx,
-		`UPDATE NewTasks SET LockedBy = $1, LockExpiration = $2, DequeueCount = DequeueCount + 1
-		WHERE SequenceNumber = (
-			SELECT SequenceNumber FROM NewTasks T
-			WHERE T.LockExpiration IS NULL OR T.LockExpiration < $3
-			LIMIT 1
-		) RETURNING SequenceNumber, InstanceID, EventPayload`,
-		be.workerName,
-		newLockExpiration,
+		`SELECT SequenceNumber, InstanceID, EventPayload FROM NewTasks T
+		WHERE T.LockExpiration IS NULL OR T.LockExpiration < $1
+		ORDER BY SequenceNumber
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED`,
 		now,
 	)
 
@@ -875,13 +888,31 @@ func (be *postgresBackend) GetActivityWorkItem(ctx context.Context) (*backend.Ac
 	var instanceID string
 	var eventPayload []byte
 
-	if err := row.Scan(&sequenceNumber, &instanceID, &eventPayload); err != nil {
+	if err := selectRow.Scan(&sequenceNumber, &instanceID, &eventPayload); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// No new activity tasks to process
 			return nil, backend.ErrNoWorkItems
 		}
+		return nil, fmt.Errorf("failed to select the activity work-item: %w", err)
+	}
 
-		return nil, fmt.Errorf("failed to scan the activity work-item: %w", err)
+	// Now update the locked task with our worker information
+	// The row is still locked by our transaction
+	_, err = tx.Exec(
+		ctx,
+		`UPDATE NewTasks SET LockedBy = $1, LockExpiration = $2, DequeueCount = DequeueCount + 1
+		WHERE SequenceNumber = $3`,
+		be.workerName,
+		newLockExpiration,
+		sequenceNumber,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lock the activity work-item: %w", err)
+	}
+
+	// Commit the transaction, releasing the lock
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit activity work-item transaction: %w", err)
 	}
 
 	e, err := backend.UnmarshalHistoryEvent(eventPayload)
@@ -907,7 +938,11 @@ func (be *postgresBackend) CompleteActivityWorkItem(ctx context.Context, wi *bac
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			be.logger.Error("CompleteActivityWorkItem", "failed to rollback transaction", err)
+		}
+	}()
 
 	bytes, err := backend.MarshalHistoryEvent(wi.Result)
 	if err != nil {
@@ -924,10 +959,7 @@ func (be *postgresBackend) CompleteActivityWorkItem(ctx context.Context, wi *bac
 		return fmt.Errorf("failed to delete from NewTasks table: %w", err)
 	}
 
-	rowsAffected := dbResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed get rows affected by delete statement: %w", err)
-	} else if rowsAffected == 0 {
+	if dbResult.RowsAffected() == 0 {
 		return backend.ErrWorkItemLockLost
 	}
 
@@ -953,10 +985,7 @@ func (be *postgresBackend) AbandonActivityWorkItem(ctx context.Context, wi *back
 		return fmt.Errorf("failed to update the NewTasks table for abandon: %w", err)
 	}
 
-	rowsAffected := dbResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed get rows affected by update statement for abandon: %w", err)
-	} else if rowsAffected == 0 {
+	if dbResult.RowsAffected() == 0 {
 		return backend.ErrWorkItemLockLost
 	}
 
@@ -972,7 +1001,11 @@ func (be *postgresBackend) PurgeOrchestrationState(ctx context.Context, id api.I
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			be.logger.Error("PurgeOrchestrationState", "failed to rollback transaction", err)
+		}
+	}()
 
 	if err := be.cleanupOrchestrationStateInternal(ctx, tx, id, true); err != nil {
 		return err

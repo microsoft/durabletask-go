@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [v0.6.0] - 2025-02-05
 
+### Fixed
+
+* Fixed race conditions in lock acquisition in PG backend ([#108](https://github.com/microsoft/durabletask-go/pull/108)) - contributed by [@JonathanFejtek](https://github.com/JonathanFejtek)
+
+
 ### Added
 
 - Add API to set custom status ([#81](https://github.com/microsoft/durabletask-go/pull/81)) - by [@famarting](https://github.com/famarting)
