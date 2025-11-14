@@ -763,7 +763,6 @@ func (be *sqliteBackend) GetOrchestrationWorkItem(ctx context.Context) (*backend
 				SELECT 1 FROM NewEvents E
 				WHERE E.[InstanceID] = I.[InstanceID] AND (E.[VisibleTime] IS NULL OR E.[VisibleTime] < ?)
 			)
-			ORDER BY I.[SequenceNumber] ASC
 			LIMIT 1
 		) RETURNING [InstanceID]`,
 		be.workerName,     // LockedBy for Instances table
