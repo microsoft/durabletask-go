@@ -778,8 +778,9 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 				SELECT 1 FROM NewEvents E
 				WHERE E.InstanceID = I.InstanceID AND (E.VisibleTime IS NULL OR E.VisibleTime < $4)
 			)
-			ORDER BY SequenceNumber ASC
+			ORDER BY I.SequenceNumber ASC
 			LIMIT 1
+			FOR UPDATE SKIP LOCKED
 		) RETURNING InstanceID`,
 		be.workerName,     // LockedBy for Instances table
 		newLockExpiration, // Updated LockExpiration for Instances table
@@ -865,8 +866,9 @@ func (be *postgresBackend) GetActivityWorkItem(ctx context.Context) (*backend.Ac
 		WHERE SequenceNumber = (
 			SELECT SequenceNumber FROM NewTasks T
 			WHERE T.LockExpiration IS NULL OR T.LockExpiration < $3
-			ORDER BY SequenceNumber ASC
+			ORDER BY T.SequenceNumber ASC
 			LIMIT 1
+			FOR UPDATE SKIP LOCKED
 		) RETURNING SequenceNumber, InstanceID, EventPayload`,
 		be.workerName,
 		newLockExpiration,
