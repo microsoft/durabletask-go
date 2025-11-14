@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS Instances (
     ParentInstanceID TEXT NULL
 );
 
+-- This index is used to improve queries with ORDER BY Instances.SequenceNumber
+CREATE INDEX IF NOT EXISTS IX_Instances_SequenceNumber ON Instances(SequenceNumber);
+
 -- This index is used by LockNext and Purge logic
 CREATE INDEX IF NOT EXISTS IX_Instances_RuntimeStatus ON Instances(RuntimeStatus);
 
