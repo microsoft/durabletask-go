@@ -852,6 +852,7 @@ func (be *sqliteBackend) GetActivityWorkItem(ctx context.Context) (*backend.Acti
 		WHERE [SequenceNumber] = (
 			SELECT [SequenceNumber] FROM NewTasks T
 			WHERE T.[LockExpiration] IS NULL OR T.[LockExpiration] < ?
+			ORDER BY T.[SequenceNumber] ASC
 			LIMIT 1
 		) RETURNING [SequenceNumber], [InstanceID], [EventPayload]`,
 		be.workerName,
