@@ -86,30 +86,21 @@ func NewSqliteBackend(opts *SqliteOptions, logger backend.Logger) backend.Backen
 }
 
 // CreateTaskHub creates the sqlite database and applies the schema
-func (be *sqliteBackend) CreateTaskHub(context.Context) error {
-	db, err := sql.Open("sqlite", be.dsn)
-	if err != nil {
-		panic(fmt.Errorf("failed to open the database: %w", err))
+func (be *sqliteBackend) CreateTaskHub(ctx context.Context) error {
+	if err := be.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start the backend: %w", err)
 	}
 
 	// Initialize database
-	if _, err := db.Exec(schema); err != nil {
-		panic(fmt.Errorf("failed to initialize the database: %w", err))
+	if _, err := be.db.Exec(schema); err != nil {
+		return fmt.Errorf("failed to initialize the database: %w", err)
 	}
-
-	// TODO: This is to avoid SQLITE_BUSY errors when there are concurrent
-	//       operations on the database. However, it can hurt performance.
-	//	     We should consider removing this and looking for alternate
-	//       solutions if sqlite performance becomes a problem for users.
-	db.SetMaxOpenConns(1)
-
-	be.db = db
 
 	return nil
 }
 
 func (be *sqliteBackend) DeleteTaskHub(ctx context.Context) error {
-	be.db = nil
+	be.Stop(ctx)
 
 	if be.options.FilePath == "" {
 		// In-memory DB
@@ -978,12 +969,31 @@ func (be *sqliteBackend) PurgeOrchestrationState(ctx context.Context, id api.Ins
 }
 
 // Start implements backend.Backend
-func (*sqliteBackend) Start(context.Context) error {
+func (be *sqliteBackend) Start(context.Context) error {
+	if be.db == nil {
+		db, err := sql.Open("sqlite", be.dsn)
+		if err != nil {
+			return fmt.Errorf("failed to open the database: %w", err)
+		}
+
+		// TODO: This is to avoid SQLITE_BUSY errors when there are concurrent
+		//       operations on the database. However, it can hurt performance.
+		//	     We should consider removing this and looking for alternate
+		//       solutions if sqlite performance becomes a problem for users.
+		db.SetMaxOpenConns(1)
+
+		be.db = db
+	}
+
 	return nil
 }
 
 // Stop implements backend.Backend
-func (*sqliteBackend) Stop(context.Context) error {
+func (be *sqliteBackend) Stop(context.Context) error {
+	if be.db != nil {
+		be.db = nil
+	}
+
 	return nil
 }
 

@@ -79,16 +79,16 @@ func NewPostgresBackend(opts *PostgresOptions, logger backend.Logger) backend.Ba
 }
 
 // CreateTaskHub creates the postgres database and applies the schema
-func (be *postgresBackend) CreateTaskHub(context.Context) error {
-	pool, err := pgxpool.NewWithConfig(context.Background(), be.options.PgOptions)
-	if err != nil {
-		be.logger.Error("CreateTaskHub", "failed to create a new postgres pool", err)
-		return err
+func (be *postgresBackend) CreateTaskHub(ctx context.Context) error {
+	if err := be.Start(ctx); err != nil {
+		be.logger.Error("CreateTaskHub", "failed to start the backend", err)
+		return fmt.Errorf("failed to start the backend: %w", err)
 	}
-	be.db = pool
+
 	// Initialize database
-	if _, err := be.db.Exec(context.Background(), schema); err != nil {
-		panic(fmt.Errorf("failed to initialize the database: %w", err))
+	if _, err := be.db.Exec(ctx, schema); err != nil {
+		be.logger.Error("CreateTaskHub", "failed to initialize the database", err)
+		return fmt.Errorf("failed to initialize the database: %w", err)
 	}
 
 	return nil
@@ -120,8 +120,10 @@ func (be *postgresBackend) DeleteTaskHub(ctx context.Context) error {
 		return fmt.Errorf("failed to drop NewTasks table: %w", err)
 	}
 
-	be.db.Close()
-	be.db = nil
+	if err := be.Stop(ctx); err != nil {
+		be.logger.Error("DeleteTaskHub", "failed to stop the backend", err)
+		return fmt.Errorf("failed to stop the backend: %w", err)
+	}
 
 	return nil
 }
@@ -989,12 +991,26 @@ func (be *postgresBackend) PurgeOrchestrationState(ctx context.Context, id api.I
 }
 
 // Start implements backend.Backend
-func (*postgresBackend) Start(context.Context) error {
+func (be *postgresBackend) Start(ctx context.Context) error {
+	if be.db == nil {
+		pool, err := pgxpool.NewWithConfig(ctx, be.options.PgOptions)
+		if err != nil {
+			be.logger.Error("Start", "failed to create a new postgres pool", err)
+			return fmt.Errorf("failed to create a new postgres pool %w", err)
+		}
+		be.db = pool
+	}
+
 	return nil
 }
 
 // Stop implements backend.Backend
-func (*postgresBackend) Stop(context.Context) error {
+func (be *postgresBackend) Stop(context.Context) error {
+	if be.db != nil {
+		be.db.Close()
+		be.db = nil
+	}
+
 	return nil
 }
 
