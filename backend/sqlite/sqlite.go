@@ -100,7 +100,13 @@ func (be *sqliteBackend) CreateTaskHub(ctx context.Context) error {
 }
 
 func (be *sqliteBackend) DeleteTaskHub(ctx context.Context) error {
-	be.Stop(ctx)
+	if be.db == nil {
+		return nil
+	}
+
+	if err := be.Stop(ctx); err != nil {
+		return fmt.Errorf("failed to stop the backend: %w", err)
+	}
 
 	if be.options.FilePath == "" {
 		// In-memory DB
@@ -113,7 +119,7 @@ func (be *sqliteBackend) DeleteTaskHub(ctx context.Context) error {
 		} else if os.IsNotExist(err) {
 			return backend.ErrTaskHubNotFound
 		} else {
-			return err
+			return fmt.Errorf("failed to delete the database: %w", err)
 		}
 	}
 }
