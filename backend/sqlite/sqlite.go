@@ -119,7 +119,7 @@ func (be *sqliteBackend) DeleteTaskHub(ctx context.Context) error {
 		} else if os.IsNotExist(err) {
 			return backend.ErrTaskHubNotFound
 		} else {
-			return err
+			return fmt.Errorf("failed to delete the database: %w", err)
 		}
 	}
 }
