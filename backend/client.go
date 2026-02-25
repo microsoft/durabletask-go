@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -104,8 +104,6 @@ func (c *backendClient) waitForOrchestrationCondition(ctx context.Context, id ap
 		MaxInterval:         10 * time.Second,
 		Multiplier:          1.5,
 		RandomizationFactor: 0.05,
-		Stop:                backoff.Stop,
-		Clock:               backoff.SystemClock,
 	}
 	b.Reset()
 

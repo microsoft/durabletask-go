@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
 	"github.com/microsoft/durabletask-go/internal/helpers"
@@ -90,23 +90,23 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 					return
 				}
 
-				err = backoff.Retry(
-					func() error {
+				_, err = backoff.Retry[any](ctx,
+					func() (any, error) {
 						// user wants to stop the listener
 						if ctx.Err() != nil {
-							return backoff.Permanent(ctx.Err())
+							return nil, backoff.Permanent(ctx.Err())
 						}
 
 						c.logger.Infof("reconnecting work item listener stream")
 						streamErr := initStream()
 						if streamErr != nil {
 							c.logger.Errorf("error initializing work item listener stream %v", streamErr)
-							return streamErr
+							return nil, streamErr
 						}
-						return nil
+						return nil, nil
 					},
 					// retry forever since we don't have a way of asynchronously return errors to the user
-					newInfiniteRetries(),
+					backoff.WithBackOff(newInfiniteRetries()),
 				)
 				if err != nil {
 					c.logger.Infof("stopping background processor, unable to reconnect stream: %v", err)
@@ -205,8 +205,6 @@ func newInfiniteRetries() *backoff.ExponentialBackOff {
 	b := backoff.NewExponentialBackOff()
 	// max wait of 15 seconds between retries
 	b.MaxInterval = 15 * time.Second
-	// retry forever
-	b.MaxElapsedTime = 0
 	b.Reset()
 	return b
 }

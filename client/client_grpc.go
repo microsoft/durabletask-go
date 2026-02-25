@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -70,20 +70,18 @@ func (c *TaskHubGrpcClient) FetchOrchestrationMetadata(ctx context.Context, id a
 //
 // api.ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
 func (c *TaskHubGrpcClient) WaitForOrchestrationStart(ctx context.Context, id api.InstanceID, opts ...api.FetchOrchestrationMetadataOptions) (*api.OrchestrationMetadata, error) {
-	var resp *protos.GetInstanceResponse
-	var err error
-	err = backoff.Retry(func() error {
+	resp, err := backoff.Retry(ctx, func() (*protos.GetInstanceResponse, error) {
 		req := makeGetInstanceRequest(id, opts)
-		resp, err = c.client.WaitForInstanceStart(ctx, req)
+		resp, err := c.client.WaitForInstanceStart(ctx, req)
 		if err != nil {
 			// if its context cancelled stop retrying
 			if ctx.Err() != nil {
-				return backoff.Permanent(ctx.Err())
+				return nil, backoff.Permanent(ctx.Err())
 			}
-			return fmt.Errorf("failed to wait for orchestration start: %w", err)
+			return nil, fmt.Errorf("failed to wait for orchestration start: %w", err)
 		}
-		return nil
-	}, backoff.WithContext(newInfiniteRetries(), ctx))
+		return resp, nil
+	}, backoff.WithBackOff(newInfiniteRetries()))
 	if err != nil {
 		return nil, err
 	}
@@ -95,20 +93,18 @@ func (c *TaskHubGrpcClient) WaitForOrchestrationStart(ctx context.Context, id ap
 //
 // api.ErrInstanceNotFound is returned when the specified orchestration doesn't exist.
 func (c *TaskHubGrpcClient) WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID, opts ...api.FetchOrchestrationMetadataOptions) (*api.OrchestrationMetadata, error) {
-	var resp *protos.GetInstanceResponse
-	var err error
-	err = backoff.Retry(func() error {
+	resp, err := backoff.Retry(ctx, func() (*protos.GetInstanceResponse, error) {
 		req := makeGetInstanceRequest(id, opts)
-		resp, err = c.client.WaitForInstanceCompletion(ctx, req)
+		resp, err := c.client.WaitForInstanceCompletion(ctx, req)
 		if err != nil {
 			// if its context cancelled stop retrying
 			if ctx.Err() != nil {
-				return backoff.Permanent(ctx.Err())
+				return nil, backoff.Permanent(ctx.Err())
 			}
-			return fmt.Errorf("failed to wait for orchestration completion: %w", err)
+			return nil, fmt.Errorf("failed to wait for orchestration completion: %w", err)
 		}
-		return nil
-	}, backoff.WithContext(newInfiniteRetries(), ctx))
+		return resp, nil
+	}, backoff.WithBackOff(newInfiniteRetries()))
 	if err != nil {
 		return nil, err
 	}
