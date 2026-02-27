@@ -17,6 +17,10 @@ var (
 	ErrNotInitialized        = errors.New("backend not initialized")
 	ErrWorkItemLockLost      = errors.New("lock on work-item was lost")
 	ErrBackendAlreadyStarted = errors.New("backend is already started")
+	ErrOperationAborted      = errors.New("operation aborted")
+	ErrNilHistoryEvent       = errors.New("HistoryEvent must be non-nil")
+	ErrNilEventTimestamp     = errors.New("HistoryEvent must have a non-nil timestamp")
+	ErrNotExecutionStarted   = errors.New("HistoryEvent must be an ExecutionStartedEvent")
 )
 
 type (
