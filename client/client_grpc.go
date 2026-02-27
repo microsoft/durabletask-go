@@ -19,6 +19,9 @@ import (
 type TaskHubGrpcClient struct {
 	client protos.TaskHubSidecarServiceClient
 	logger backend.Logger
+	cancel context.CancelFunc
+	stop   chan struct{}
+	done   chan struct{}
 }
 
 // NewTaskHubGrpcClient creates a client that can be used to manage orchestrations over a gRPC connection.
@@ -27,6 +30,8 @@ func NewTaskHubGrpcClient(cc grpc.ClientConnInterface, logger backend.Logger) *T
 	return &TaskHubGrpcClient{
 		client: protos.NewTaskHubSidecarServiceClient(cc),
 		logger: logger,
+		stop:   make(chan struct{}),
+		done:   make(chan struct{}),
 	}
 }
 

@@ -230,7 +230,7 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 		if err := callback(stream.Context()); err != nil {
 			message := "unable to establish work item stream at this time: " + err.Error()
 			g.logger.Warn(message)
-			return status.Errorf(codes.Unavailable, message)
+			return status.Errorf(codes.Unavailable, "%s", message)
 		}
 	}
 
