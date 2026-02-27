@@ -243,7 +243,7 @@ func (octx *OrchestrationContext) GetInput(v any) error {
 // CallActivity schedules an asynchronous invocation of an activity function. The [activity]
 // parameter can be either the name of an activity as a string or can be a pointer to the function
 // that implements the activity, in which case the name is obtained via reflection.
-func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...callActivityOption) Task {
+func (ctx *OrchestrationContext) CallActivity(activity any, opts ...callActivityOption) Task {
 	options := new(callActivityOptions)
 	for _, configure := range opts {
 		if err := configure(options); err != nil {
@@ -262,7 +262,7 @@ func (ctx *OrchestrationContext) CallActivity(activity interface{}, opts ...call
 	return ctx.internalScheduleActivity(activity, options)
 }
 
-func (ctx *OrchestrationContext) internalScheduleActivity(activity interface{}, options *callActivityOptions) Task {
+func (ctx *OrchestrationContext) internalScheduleActivity(activity any, options *callActivityOptions) Task {
 	scheduleTaskAction := helpers.NewScheduleTaskAction(
 		ctx.getNextSequenceNumber(),
 		helpers.GetTaskFunctionName(activity),
@@ -275,7 +275,7 @@ func (ctx *OrchestrationContext) internalScheduleActivity(activity interface{}, 
 	return task
 }
 
-func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, opts ...subOrchestratorOption) Task {
+func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator any, opts ...subOrchestratorOption) Task {
 	options := new(callSubOrchestratorOptions)
 	for _, configure := range opts {
 		if err := configure(options); err != nil {
@@ -294,7 +294,7 @@ func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator interface{}, o
 	return ctx.internalCallSubOrchestrator(orchestrator, options)
 }
 
-func (ctx *OrchestrationContext) internalCallSubOrchestrator(orchestrator interface{}, options *callSubOrchestratorOptions) Task {
+func (ctx *OrchestrationContext) internalCallSubOrchestrator(orchestrator any, options *callSubOrchestratorOptions) Task {
 	createSubOrchestrationAction := helpers.NewCreateSubOrchestrationAction(
 		ctx.getNextSequenceNumber(),
 		helpers.GetTaskFunctionName(orchestrator),
