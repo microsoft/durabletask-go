@@ -1,6 +1,10 @@
 package backend
 
-import "log"
+import (
+	"fmt"
+	"log"
+	"log/slog"
+)
 
 type Logger interface {
 	// Debug logs a message at level Debug.
@@ -77,4 +81,48 @@ func (log *logger) Warnf(format string, v ...any) {
 
 func DefaultLogger() Logger {
 	return defaultLogger
+}
+
+// slogLogger adapts a *slog.Logger to the Logger interface.
+type slogLogger struct {
+	logger *slog.Logger
+}
+
+// NewSlogLogger creates a Logger that delegates to the provided *slog.Logger.
+// This allows consumers to integrate durabletask logging with their existing
+// slog-based logging infrastructure.
+func NewSlogLogger(l *slog.Logger) Logger {
+	return &slogLogger{logger: l}
+}
+
+func (s *slogLogger) Debug(v ...any) {
+	s.logger.Debug(fmt.Sprint(v...))
+}
+
+func (s *slogLogger) Debugf(format string, v ...any) {
+	s.logger.Debug(fmt.Sprintf(format, v...))
+}
+
+func (s *slogLogger) Info(v ...any) {
+	s.logger.Info(fmt.Sprint(v...))
+}
+
+func (s *slogLogger) Infof(format string, v ...any) {
+	s.logger.Info(fmt.Sprintf(format, v...))
+}
+
+func (s *slogLogger) Warn(v ...any) {
+	s.logger.Warn(fmt.Sprint(v...))
+}
+
+func (s *slogLogger) Warnf(format string, v ...any) {
+	s.logger.Warn(fmt.Sprintf(format, v...))
+}
+
+func (s *slogLogger) Error(v ...any) {
+	s.logger.Error(fmt.Sprint(v...))
+}
+
+func (s *slogLogger) Errorf(format string, v ...any) {
+	s.logger.Error(fmt.Sprintf(format, v...))
 }
