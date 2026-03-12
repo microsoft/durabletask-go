@@ -61,7 +61,11 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			log.Printf("failed to close connection: %v", err)
+		}
+	}()
 	grpcClient = client.NewTaskHubGrpcClient(conn, logger)
 
 	// Run the test exitCode
@@ -71,16 +75,16 @@ func TestMain(m *testing.M) {
 	defer cancel()
 	err = grpcExecutor.Shutdown(timeoutCtx)
 	if err != nil {
-		log.Fatalf("failed to shutdown grpc Executor: %v", err)
+		log.Printf("failed to shutdown grpc Executor: %v", err)
 	}
 
 	timeoutCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := taskHubWorker.Shutdown(timeoutCtx); err != nil {
-		log.Fatalf("failed to shutdown worker: %v", err)
+		log.Printf("failed to shutdown worker: %v", err)
 	}
 	grpcServer.Stop()
-	os.Exit(exitCode)
+	os.Exit(exitCode) //nolint:gocritic // os.Exit in TestMain is required by Go testing
 }
 
 func startGrpcListener(t *testing.T, r *task.TaskRegistry) context.CancelFunc {
@@ -91,11 +95,11 @@ func startGrpcListener(t *testing.T, r *task.TaskRegistry) context.CancelFunc {
 
 func Test_Grpc_WaitForInstanceStart_Timeout(t *testing.T) {
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("WaitForInstanceStartThrowsException", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("WaitForInstanceStartThrowsException", func(ctx *task.OrchestrationContext) (any, error) {
 		// sleep 5 seconds
 		time.Sleep(5 * time.Second)
 		return 42, nil
-	})
+	}))
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
@@ -113,11 +117,11 @@ func Test_Grpc_WaitForInstanceStart_Timeout(t *testing.T) {
 
 func Test_Grpc_WaitForInstanceStart_ConnectionResume(t *testing.T) {
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("WaitForInstanceStartThrowsException", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("WaitForInstanceStartThrowsException", func(ctx *task.OrchestrationContext) (any, error) {
 		// sleep 5 seconds
 		time.Sleep(5 * time.Second)
 		return 42, nil
-	})
+	}))
 
 	cancelListener := startGrpcListener(t, r)
 
@@ -148,7 +152,7 @@ func Test_Grpc_WaitForInstanceStart_ConnectionResume(t *testing.T) {
 
 func Test_Grpc_HelloOrchestration(t *testing.T) {
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
@@ -157,14 +161,14 @@ func Test_Grpc_HelloOrchestration(t *testing.T) {
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		ctx.SetCustomStatus("hello-test")
 		return output, err
-	})
-	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
 		var name string
 		if err := ctx.GetInput(&name); err != nil {
 			return nil, err
 		}
 		return fmt.Sprintf("Hello, %s!", name), nil
-	})
+	}))
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
@@ -185,16 +189,18 @@ func Test_Grpc_SuspendResume(t *testing.T) {
 	const eventCount = 10
 
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SuspendResumeOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SuspendResumeOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
 		for i := 0; i < eventCount; i++ {
 			var value int
-			ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(&value)
+			if err := ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(&value); err != nil {
+				return false, err
+			}
 			if value != i {
 				return false, errors.New("Unexpected value")
 			}
 		}
 		return true, nil
-	})
+	}))
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
@@ -237,30 +243,38 @@ func Test_Grpc_Terminate_Recursive(t *testing.T) {
 	delayTime := 4 * time.Second
 	executedActivity := false
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
 		tasks := []task.Task{}
 		for i := 0; i < 5; i++ {
 			task := ctx.CallSubOrchestrator("L1")
 			tasks = append(tasks, task)
 		}
 		for _, task := range tasks {
-			task.Await(nil)
+			if err := task.Await(nil); err != nil {
+				return nil, err
+			}
 		}
 		return nil, nil
-	})
-	r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
-		ctx.CallSubOrchestrator("L2").Await(nil)
+	}))
+	require.NoError(t, r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CallSubOrchestrator("L2").Await(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
-	})
-	r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
-		ctx.CreateTimer(delayTime).Await(nil)
-		ctx.CallActivity("Fail").Await(nil)
+	}))
+	require.NoError(t, r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CreateTimer(delayTime).Await(nil); err != nil {
+			return nil, err
+		}
+		if err := ctx.CallActivity("Fail").Await(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
-	})
-	r.AddActivityN("Fail", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("Fail", func(ctx task.ActivityContext) (any, error) {
 		executedActivity = true
 		return nil, errors.New("Failed: Should not have executed the activity")
-	})
+	}))
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
@@ -297,23 +311,25 @@ func Test_Grpc_Terminate_Recursive(t *testing.T) {
 func Test_Grpc_ReuseInstanceIDIgnore(t *testing.T) {
 	delayTime := 2 * time.Second
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
 		}
 		var output string
-		ctx.CreateTimer(delayTime).Await(nil)
+		if err := ctx.CreateTimer(delayTime).Await(nil); err != nil {
+			return nil, err
+		}
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		return output, err
-	})
-	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
 		var name string
 		if err := ctx.GetInput(&name); err != nil {
 			return nil, err
 		}
 		return fmt.Sprintf("Hello, %s!", name), nil
-	})
+	}))
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
@@ -326,7 +342,8 @@ func Test_Grpc_ReuseInstanceIDIgnore(t *testing.T) {
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
 	// wait orchestration to start
-	grpcClient.WaitForOrchestrationStart(ctx, id)
+	_, err = grpcClient.WaitForOrchestrationStart(ctx, id)
+	require.NoError(t, err)
 	pivotTime := time.Now()
 	// schedule again, it should ignore creating the new orchestration
 	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
@@ -345,23 +362,25 @@ func Test_Grpc_ReuseInstanceIDIgnore(t *testing.T) {
 func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 	delayTime := 2 * time.Second
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
 		}
 		var output string
-		ctx.CreateTimer(delayTime).Await(nil)
+		if err := ctx.CreateTimer(delayTime).Await(nil); err != nil {
+			return nil, err
+		}
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		return output, err
-	})
-	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
 		var name string
 		if err := ctx.GetInput(&name); err != nil {
 			return nil, err
 		}
 		return fmt.Sprintf("Hello, %s!", name), nil
-	})
+	}))
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
@@ -374,7 +393,8 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
 	// wait orchestration to start
-	grpcClient.WaitForOrchestrationStart(ctx, id)
+	_, err = grpcClient.WaitForOrchestrationStart(ctx, id)
+	require.NoError(t, err)
 	pivotTime := time.Now()
 	// schedule again, it should terminate the first orchestration and start a new one
 	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
@@ -393,31 +413,33 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 func Test_Grpc_ReuseInstanceIDError(t *testing.T) {
 	delayTime := 4 * time.Second
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
 		}
 		var output string
-		ctx.CreateTimer(delayTime).Await(nil)
+		if err := ctx.CreateTimer(delayTime).Await(nil); err != nil {
+			return nil, err
+		}
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		return output, err
-	})
-	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
 		var name string
 		if err := ctx.GetInput(&name); err != nil {
 			return nil, err
 		}
 		return fmt.Sprintf("Hello, %s!", name), nil
-	})
+	}))
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
 	instanceID := api.InstanceID("THROW_IF_RUNNING_OR_COMPLETED")
 
-	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
+	_, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
-	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
+	_, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(instanceID))
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}
@@ -425,7 +447,7 @@ func Test_Grpc_ReuseInstanceIDError(t *testing.T) {
 
 func Test_Grpc_ActivityRetries(t *testing.T) {
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("ActivityRetries", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("ActivityRetries", func(ctx *task.OrchestrationContext) (any, error) {
 		if err := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
 			MaxAttempts:          3,
 			InitialRetryInterval: 10 * time.Millisecond,
@@ -433,10 +455,10 @@ func Test_Grpc_ActivityRetries(t *testing.T) {
 			return nil, err
 		}
 		return nil, nil
-	})
-	r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
 		return nil, errors.New("activity failure")
-	})
+	}))
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
@@ -456,7 +478,7 @@ func Test_Grpc_ActivityRetries(t *testing.T) {
 
 func Test_Grpc_SubOrchestratorRetries(t *testing.T) {
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
 		err := ctx.CallSubOrchestrator(
 			"Child",
 			task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_child"),
@@ -466,10 +488,10 @@ func Test_Grpc_SubOrchestratorRetries(t *testing.T) {
 				BackoffCoefficient:   2,
 			})).Await(nil)
 		return nil, err
-	})
-	r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
+	}))
+	require.NoError(t, r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
 		return nil, errors.New("Child failed")
-	})
+	}))
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()

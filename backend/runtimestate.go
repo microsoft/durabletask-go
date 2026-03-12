@@ -47,7 +47,7 @@ func NewOrchestrationRuntimeState(instanceID api.InstanceID, existingHistory []*
 	}
 
 	for _, e := range existingHistory {
-		s.addEvent(e, false)
+		_ = s.addEvent(e, false)
 	}
 
 	return s
@@ -75,8 +75,6 @@ func (s *OrchestrationRuntimeState) addEvent(e *HistoryEvent, isNew bool) error 
 		s.isSuspended = true
 	} else if e.GetExecutionResumed() != nil {
 		s.isSuspended = false
-	} else {
-		// TODO: Check for other possible duplicates using task IDs
 	}
 
 	if isNew {
@@ -107,10 +105,12 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 			if completedAction.OrchestrationStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW {
 				newState := NewOrchestrationRuntimeState(s.instanceID, []*protos.HistoryEvent{})
 				newState.continuedAsNew = true
-				newState.AddEvent(helpers.NewOrchestratorStartedEvent())
+				if err := newState.AddEvent(helpers.NewOrchestratorStartedEvent()); err != nil {
+					return false, fmt.Errorf("failed to add orchestrator started event: %w", err)
+				}
 
 				// Duplicate the start event info, updating just the input
-				newState.AddEvent(
+				if err := newState.AddEvent(
 					helpers.NewExecutionStartedEvent(
 						s.startEvent.Name,
 						string(s.instanceID),
@@ -119,11 +119,15 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 						s.startEvent.ParentTraceContext,
 						nil,
 					),
-				)
+				); err != nil {
+					return false, fmt.Errorf("failed to add execution started event: %w", err)
+				}
 
 				// Unprocessed "carryover" events
 				for _, e := range completedAction.CarryoverEvents {
-					newState.AddEvent(e)
+					if err := newState.AddEvent(e); err != nil {
+						return false, fmt.Errorf("failed to add carryover event: %w", err)
+					}
 				}
 
 				// Overwrite the current state object with a new one
@@ -132,7 +136,9 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 				// ignore all remaining actions
 				return true, nil
 			} else {
-				s.AddEvent(helpers.NewExecutionCompletedEvent(action.Id, completedAction.OrchestrationStatus, completedAction.Result, completedAction.FailureDetails))
+				if err := s.AddEvent(helpers.NewExecutionCompletedEvent(action.Id, completedAction.OrchestrationStatus, completedAction.Result, completedAction.FailureDetails)); err != nil {
+					return false, fmt.Errorf("failed to add execution completed event: %w", err)
+				}
 				if s.startEvent.GetParentInstance() != nil {
 					msg := OrchestratorMessage{
 						HistoryEvent:     &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.Now()},
@@ -158,7 +164,9 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 				}
 			}
 		} else if createtimer := action.GetCreateTimer(); createtimer != nil {
-			s.AddEvent(helpers.NewTimerCreatedEvent(action.Id, createtimer.FireAt))
+			if err := s.AddEvent(helpers.NewTimerCreatedEvent(action.Id, createtimer.FireAt)); err != nil {
+				return false, fmt.Errorf("failed to add timer created event: %w", err)
+			}
 			s.pendingTimers = append(s.pendingTimers, helpers.NewTimerFiredEvent(action.Id, createtimer.FireAt, currentTraceContext))
 		} else if scheduleTask := action.GetScheduleTask(); scheduleTask != nil {
 			scheduledEvent := helpers.NewTaskScheduledEvent(
@@ -168,21 +176,25 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 				scheduleTask.Input,
 				currentTraceContext,
 			)
-			s.AddEvent(scheduledEvent)
-			s.pendingTasks = append(s.pendingTasks, scheduledEvent)
+			if err := s.AddEvent(scheduledEvent); err != nil {
+				return false, fmt.Errorf("failed to add task scheduled event: %w", err)
+			}
+			s.pendingTasks= append(s.pendingTasks, scheduledEvent)
 		} else if createSO := action.GetCreateSubOrchestration(); createSO != nil {
 			// Autogenerate an instance ID for the sub-orchestration if none is provided, using a
 			// deterministic algorithm based on the parent instance ID to help enable de-duplication.
 			if createSO.InstanceId == "" {
 				createSO.InstanceId = fmt.Sprintf("%s:%04x", s.instanceID, action.Id)
 			}
-			s.AddEvent(helpers.NewSubOrchestrationCreatedEvent(
+			if err := s.AddEvent(helpers.NewSubOrchestrationCreatedEvent(
 				action.Id,
 				createSO.Name,
 				createSO.Version,
 				createSO.Input,
 				createSO.InstanceId,
-				currentTraceContext))
+				currentTraceContext)); err != nil {
+				return false, fmt.Errorf("failed to add sub-orchestration created event: %w", err)
+			}
 			startEvent := helpers.NewExecutionStartedEvent(
 				createSO.Name,
 				createSO.InstanceId,
@@ -194,7 +206,9 @@ func (s *OrchestrationRuntimeState) ApplyActions(actions []*protos.OrchestratorA
 			s.pendingMessages = append(s.pendingMessages, OrchestratorMessage{HistoryEvent: startEvent, TargetInstanceID: createSO.InstanceId})
 		} else if sendEvent := action.GetSendEvent(); sendEvent != nil {
 			e := helpers.NewSendEventEvent(action.Id, sendEvent.Instance.InstanceId, sendEvent.Name, sendEvent.Data)
-			s.AddEvent(e)
+			if err := s.AddEvent(e); err != nil {
+				return false, fmt.Errorf("failed to add send event: %w", err)
+			}
 			s.pendingMessages = append(s.pendingMessages, OrchestratorMessage{HistoryEvent: e, TargetInstanceID: sendEvent.Instance.InstanceId})
 		} else if terminate := action.GetTerminateOrchestration(); terminate != nil {
 			// Send a message to terminate the target orchestration
@@ -242,11 +256,12 @@ func (s *OrchestrationRuntimeState) Output() (string, error) {
 }
 
 func (s *OrchestrationRuntimeState) RuntimeStatus() protos.OrchestrationStatus {
-	if s.startEvent == nil {
+	switch {
+	case s.startEvent == nil:
 		return protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
-	} else if s.isSuspended {
+	case s.isSuspended:
 		return protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED
-	} else if s.completedEvent != nil {
+	case s.completedEvent != nil:
 		return s.completedEvent.GetOrchestrationStatus()
 	}
 

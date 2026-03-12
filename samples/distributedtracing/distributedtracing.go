@@ -32,9 +32,15 @@ func main() {
 
 	// Create a new task registry and add the orchestrator and activities
 	r := task.NewTaskRegistry()
-	r.AddOrchestrator(DistributedTraceSampleOrchestrator)
-	r.AddActivity(DoWorkActivity)
-	r.AddActivity(CallHttpEndpointActivity)
+	if err := r.AddOrchestrator(DistributedTraceSampleOrchestrator); err != nil {
+		log.Fatalf("Failed to register orchestrator: %v", err) //nolint:gocritic // Fatalf in sample main() is acceptable
+	}
+	if err := r.AddActivity(DoWorkActivity); err != nil {
+		log.Fatalf("Failed to register activity: %v", err)
+	}
+	if err := r.AddActivity(CallHttpEndpointActivity); err != nil {
+		log.Fatalf("Failed to register activity: %v", err)
+	}
 
 	// Init the client
 	ctx := context.Background()
@@ -42,7 +48,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize the client: %v", err)
 	}
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			log.Printf("Failed to shutdown worker: %v", err)
+		}
+	}()
 
 	// Start a new orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, DistributedTraceSampleOrchestrator)

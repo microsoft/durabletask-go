@@ -3,6 +3,7 @@ package task
 import (
 	"container/list"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -132,7 +133,7 @@ func (ctx *OrchestrationContext) start() (actions []*protos.OrchestratorAction) 
 
 	defer func() {
 		result := recover()
-		if result == ErrTaskBlocked {
+		if resultErr, ok := result.(error); ok && errors.Is(resultErr, ErrTaskBlocked) {
 			// Expected, normal part of execution
 			actions = ctx.actions()
 		} else if result != nil {
@@ -143,7 +144,9 @@ func (ctx *OrchestrationContext) start() (actions []*protos.OrchestratorAction) 
 
 	for {
 		if ok, err := ctx.processNextEvent(); err != nil {
-			ctx.setFailed(err)
+			if setErr := ctx.setFailed(err); setErr != nil {
+				break
+			}
 			break
 		} else if !ok {
 			// Orchestrator finished, break out of the loop and return any pending actions
@@ -170,12 +173,13 @@ func (ctx *OrchestrationContext) processNextEvent() (bool, error) {
 func (ctx *OrchestrationContext) getNextHistoryEvent() (*protos.HistoryEvent, bool) {
 	var historyList []*protos.HistoryEvent
 	index := ctx.historyIndex
-	if ctx.historyIndex >= len(ctx.oldEvents)+len(ctx.newEvents) {
+	switch {
+	case ctx.historyIndex >= len(ctx.oldEvents)+len(ctx.newEvents):
 		return nil, false
-	} else if ctx.historyIndex < len(ctx.oldEvents) {
+	case ctx.historyIndex < len(ctx.oldEvents):
 		ctx.IsReplaying = true
 		historyList = ctx.oldEvents
-	} else {
+	default:
 		ctx.IsReplaying = false
 		historyList = ctx.newEvents
 		index -= len(ctx.oldEvents)
@@ -328,8 +332,7 @@ func (ctx *OrchestrationContext) internalScheduleTaskWithRetries(initialAttempt 
 
 			timerErr := ctx.createTimerInternal(nextDelay).Await(nil)
 			if timerErr != nil {
-				// TODO use errors.Join when updating golang
-				return fmt.Errorf("%v %w", timerErr, err)
+				return errors.Join(timerErr, err)
 			}
 
 			err = ctx.internalScheduleTaskWithRetries(initialAttempt, schedule, policy, retryCount+1).Await(v)
@@ -451,11 +454,12 @@ func (ctx *OrchestrationContext) onExecutionStarted(es *protos.ExecutionStartedE
 	output, appError := orchestrator(ctx)
 
 	var err error
-	if appError != nil {
+	switch {
+	case appError != nil:
 		err = ctx.setFailed(appError)
-	} else if ctx.continuedAsNew {
+	case ctx.continuedAsNew:
 		err = ctx.setContinuedAsNew()
-	} else {
+	default:
 		err = ctx.setComplete(output)
 	}
 

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -143,21 +144,24 @@ func (p *orchestratorProcessor) AbandonWorkItem(ctx context.Context, wi WorkItem
 
 func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *OrchestrationWorkItem) (context.Context, trace.Span, bool) {
 	// Ignore work items for orchestrations that are completed or are in a corrupted state.
-	if !wi.State.IsValid() {
+	switch {
+	case !wi.State.IsValid():
 		w.logger.Warnf("%v: orchestration state is invalid; dropping work item", wi.InstanceID)
 		return nil, nil, false
-	} else if wi.State.IsCompleted() {
+	case wi.State.IsCompleted():
 		w.logger.Warnf("%v: orchestration already completed; dropping work item", wi.InstanceID)
 		return nil, nil, false
-	} else if len(wi.NewEvents) == 0 {
+	case len(wi.NewEvents) == 0:
 		w.logger.Warnf("%v: the work item had no events!", wi.InstanceID)
 	}
 
 	// The orchestrator started event is used primarily for updating the current time as reported
 	// by the orchestration context APIs.
-	wi.State.AddEvent(helpers.NewOrchestratorStartedEvent())
+	if err := wi.State.AddEvent(helpers.NewOrchestratorStartedEvent()); err != nil {
+		w.logger.Warnf("%v: failed to add orchestrator started event: %v", wi.InstanceID, err)
+	}
 
-	// Each orchestration instance gets its own distributed tracing span. However, the implementation of
+	// Each orchestration instancegets its own distributed tracing span. However, the implementation of
 	// endOrchestratorSpan will "cancel" the span mark the span as "unsampled" if the orchestration isn't
 	// complete. This is part of the strategy for producing one span for the entire orchestration execution,
 	// which isn't something that's natively supported by OTel today.
@@ -169,7 +173,7 @@ func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *Orchestra
 	added := 0
 	for _, e := range wi.NewEvents {
 		if err := wi.State.AddEvent(e); err != nil {
-			if err == ErrDuplicateEvent {
+			if errors.Is(err, ErrDuplicateEvent) {
 				w.logger.Warnf("%v: dropping duplicate event: %v", wi.InstanceID, e)
 			} else {
 				w.logger.Warnf("%v: dropping event: %v, %v", wi.InstanceID, e, err)
@@ -270,7 +274,8 @@ func (w *orchestratorProcessor) startOrResumeOrchestratorSpan(ctx context.Contex
 }
 
 func (w *orchestratorProcessor) endOrchestratorSpan(ctx context.Context, wi *OrchestrationWorkItem, span trace.Span, continuedAsNew bool) {
-	if wi.State.IsCompleted() {
+	switch {
+	case wi.State.IsCompleted():
 		if fd, err := wi.State.FailureDetails(); err == nil {
 			span.SetStatus(codes.Error, fd.ErrorMessage)
 		}
@@ -280,12 +285,12 @@ func (w *orchestratorProcessor) endOrchestratorSpan(ctx context.Context, wi *Orc
 		})
 		addNotableEventsToSpan(wi.State.OldEvents(), span)
 		addNotableEventsToSpan(wi.State.NewEvents(), span)
-	} else if continuedAsNew {
+	case continuedAsNew:
 		span.SetAttributes(attribute.KeyValue{
 			Key:   "durabletask.runtime_status",
 			Value: attribute.StringValue(helpers.ToRuntimeStatusString(protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW)),
 		})
-	} else {
+	default:
 		// Cancel the span - we want to publish it only when an orchestration
 		// completes or when it continue-as-new's.
 		helpers.CancelSpan(span)

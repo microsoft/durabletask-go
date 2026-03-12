@@ -22,15 +22,19 @@ import (
 func Test_EmptyOrchestration(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("EmptyOrchestrator", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("EmptyOrchestrator", func(ctx *task.OrchestrationContext) (any, error) {
 		return nil, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "EmptyOrchestrator")
@@ -50,16 +54,20 @@ func Test_EmptyOrchestration(t *testing.T) {
 func Test_SingleTimer(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SingleTimer", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SingleTimer", func(ctx *task.OrchestrationContext) (any, error) {
 		err := ctx.CreateTimer(time.Duration(0)).Await(nil)
 		return nil, err
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "SingleTimer")
@@ -83,7 +91,7 @@ func Test_SingleTimer(t *testing.T) {
 func Test_ConcurrentTimers(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("TimerFanOut", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("TimerFanOut", func(ctx *task.OrchestrationContext) (any, error) {
 		tasks := []task.Task{}
 		for i := 0; i < 3; i++ {
 			tasks = append(tasks, ctx.CreateTimer(1*time.Second))
@@ -94,14 +102,18 @@ func Test_ConcurrentTimers(t *testing.T) {
 			}
 		}
 		return nil, nil
-	})
+	}))
 
 	// Initialization
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "TimerFanOut")
@@ -127,20 +139,28 @@ func Test_ConcurrentTimers(t *testing.T) {
 func Test_IsReplaying(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("IsReplayingOrch", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("IsReplayingOrch", func(ctx *task.OrchestrationContext) (any, error) {
 		values := []bool{ctx.IsReplaying}
-		ctx.CreateTimer(time.Duration(0)).Await(nil)
+		if err := ctx.CreateTimer(time.Duration(0)).Await(nil); err != nil {
+			return nil, err
+		}
 		values = append(values, ctx.IsReplaying)
-		ctx.CreateTimer(time.Duration(0)).Await(nil)
+		if err := ctx.CreateTimer(time.Duration(0)).Await(nil); err != nil {
+			return nil, err
+		}
 		values = append(values, ctx.IsReplaying)
 		return values, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "IsReplayingOrch")
@@ -165,7 +185,7 @@ func Test_IsReplaying(t *testing.T) {
 func Test_SingleActivity(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
@@ -173,20 +193,24 @@ func Test_SingleActivity(t *testing.T) {
 		var output string
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		return output, err
-	})
-	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
 		var name string
 		if err := ctx.GetInput(&name); err != nil {
 			return nil, err
 		}
 		return fmt.Sprintf("Hello, %s!", name), nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"))
@@ -210,7 +234,7 @@ func Test_SingleActivity(t *testing.T) {
 func Test_ActivityChain(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("ActivityChain", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("ActivityChain", func(ctx *task.OrchestrationContext) (any, error) {
 		val := 0
 		for i := 0; i < 10; i++ {
 			if err := ctx.CallActivity("PlusOne", task.WithActivityInput(val)).Await(&val); err != nil {
@@ -218,20 +242,24 @@ func Test_ActivityChain(t *testing.T) {
 			}
 		}
 		return val, nil
-	})
-	r.AddActivityN("PlusOne", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("PlusOne", func(ctx task.ActivityContext) (any, error) {
 		var input int
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
 		}
 		return input + 1, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ActivityChain")
@@ -257,7 +285,7 @@ func Test_ActivityChain(t *testing.T) {
 func Test_ActivityRetries(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("ActivityRetries", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("ActivityRetries", func(ctx *task.OrchestrationContext) (any, error) {
 		if err := ctx.CallActivity("FailActivity", task.WithActivityRetryPolicy(&task.RetryPolicy{
 			MaxAttempts:          3,
 			InitialRetryInterval: 10 * time.Millisecond,
@@ -265,16 +293,20 @@ func Test_ActivityRetries(t *testing.T) {
 			return nil, err
 		}
 		return nil, nil
-	})
-	r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("FailActivity", func(ctx task.ActivityContext) (any, error) {
 		return nil, errors.New("activity failure")
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ActivityRetries")
@@ -303,7 +335,7 @@ func Test_ActivityRetries(t *testing.T) {
 func Test_ActivityFanOut(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("ActivityFanOut", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("ActivityFanOut", func(ctx *task.OrchestrationContext) (any, error) {
 		tasks := []task.Task{}
 		for i := 0; i < 10; i++ {
 			tasks = append(tasks, ctx.CallActivity("ToString", task.WithActivityInput(i)))
@@ -318,21 +350,25 @@ func Test_ActivityFanOut(t *testing.T) {
 		}
 		sort.Sort(sort.Reverse(sort.StringSlice(results)))
 		return results, nil
-	})
-	r.AddActivityN("ToString", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("ToString", func(ctx task.ActivityContext) (any, error) {
 		var input int
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
 		}
 		time.Sleep(1 * time.Second)
 		return fmt.Sprintf("%d", input), nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r, backend.WithMaxParallelism(10))
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ActivityFanOut")
@@ -357,7 +393,7 @@ func Test_ActivityFanOut(t *testing.T) {
 
 func Test_SingleSubOrchestrator_Completed(t *testing.T) {
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
 		var input any
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
@@ -368,19 +404,23 @@ func Test_SingleSubOrchestrator_Completed(t *testing.T) {
 			task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_child"),
 			task.WithSubOrchestratorInput(input)).Await(&output)
 		return output, err
-	})
-	r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
+	}))
+	require.NoError(t, r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return "", err
 		}
 		return input, nil
-	})
+	}))
 
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	id, err := client.ScheduleNewOrchestration(ctx, "Parent", api.WithInput("Hello, world!"))
 	require.NoError(t, err)
@@ -399,20 +439,24 @@ func Test_SingleSubOrchestrator_Completed(t *testing.T) {
 
 func Test_SingleSubOrchestrator_Failed(t *testing.T) {
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
 		err := ctx.CallSubOrchestrator(
 			"Child",
 			task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_child")).Await(nil)
 		return nil, err
-	})
-	r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
+	}))
+	require.NoError(t, r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
 		return nil, errors.New("Child failed")
-	})
+	}))
 
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	id, err := client.ScheduleNewOrchestration(ctx, "Parent")
 	require.NoError(t, err)
@@ -433,7 +477,7 @@ func Test_SingleSubOrchestrator_Failed(t *testing.T) {
 
 func Test_SingleSubOrchestrator_Failed_Retries(t *testing.T) {
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
 		err := ctx.CallSubOrchestrator(
 			"Child",
 			task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_child"),
@@ -443,15 +487,19 @@ func Test_SingleSubOrchestrator_Failed_Retries(t *testing.T) {
 				BackoffCoefficient:   2,
 			})).Await(nil)
 		return nil, err
-	})
-	r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
+	}))
+	require.NoError(t, r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
 		return nil, errors.New("Child failed")
-	})
+	}))
 
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	id, err := client.ScheduleNewOrchestration(ctx, "Parent")
 	require.NoError(t, err)
@@ -477,7 +525,7 @@ func Test_SingleSubOrchestrator_Failed_Retries(t *testing.T) {
 func Test_ContinueAsNew(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
 		var input int32
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
@@ -490,13 +538,17 @@ func Test_ContinueAsNew(t *testing.T) {
 			ctx.ContinueAsNew(input + 1)
 		}
 		return input, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest", api.WithInput(0))
@@ -529,7 +581,7 @@ func Test_ContinueAsNew(t *testing.T) {
 func Test_ContinueAsNew_Events(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
 		var input int32
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
@@ -543,12 +595,16 @@ func Test_ContinueAsNew_Events(t *testing.T) {
 		}
 		ctx.ContinueAsNew(input+1, task.WithKeepUnprocessedEvents())
 		return nil, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest", api.WithInput(0))
@@ -566,7 +622,7 @@ func Test_ContinueAsNew_Events(t *testing.T) {
 func Test_ExternalEventContention(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("ContinueAsNewTest", func(ctx *task.OrchestrationContext) (any, error) {
 		var data int32
 		if err := ctx.WaitForSingleEvent("MyEventData", 1*time.Second).Await(&data); err != nil && !errors.Is(err, task.ErrTaskCanceled) {
 			return nil, err
@@ -583,12 +639,16 @@ func Test_ExternalEventContention(t *testing.T) {
 
 		ctx.ContinueAsNew(nil, task.WithKeepUnprocessedEvents())
 		return nil, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ContinueAsNewTest")
@@ -617,22 +677,28 @@ func Test_ExternalEventOrchestration(t *testing.T) {
 
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("ExternalEventOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("ExternalEventOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
 		for i := 0; i < eventCount; i++ {
 			var value int
-			ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(&value)
+			if err := ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(&value); err != nil {
+				return false, err
+			}
 			if value != i {
 				return false, errors.New("Unexpected value")
 			}
 		}
 		return true, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestration", api.WithInput(0))
@@ -674,18 +740,22 @@ func Test_ExternalEventOrchestration(t *testing.T) {
 func Test_ExternalEventTimeout(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("ExternalEventOrchestrationWithTimeout", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("ExternalEventOrchestrationWithTimeout", func(ctx *task.OrchestrationContext) (any, error) {
 		if err := ctx.WaitForSingleEvent("MyEvent", 2*time.Second).Await(nil); err != nil {
 			return nil, err
 		}
 		return nil, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run two variations, one where we raise the external event and one where we don't (timeout)
 	for _, raiseEvent := range []bool{true, false} {
@@ -742,22 +812,28 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SuspendResumeOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SuspendResumeOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
 		for i := 0; i < eventCount; i++ {
 			var value int
-			ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(&value)
+			if err := ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(&value); err != nil {
+				return false, err
+			}
 			if value != i {
 				return false, errors.New("Unexpected value")
 			}
 		}
 		return true, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration, which will block waiting for external events
 	id, err := client.ScheduleNewOrchestration(ctx, "SuspendResumeOrchestration", api.WithInput(0))
@@ -821,16 +897,22 @@ func Test_SuspendResumeOrchestration(t *testing.T) {
 func Test_TerminateOrchestration(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("MyOrchestrator", func(ctx *task.OrchestrationContext) (any, error) {
-		ctx.CreateTimer(3 * time.Second).Await(nil)
+	require.NoError(t, r.AddOrchestratorN("MyOrchestrator", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CreateTimer(3 * time.Second).Await(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration, which will block waiting for external events
 	id, err := client.ScheduleNewOrchestration(ctx, "MyOrchestrator")
@@ -858,35 +940,47 @@ func Test_TerminateOrchestration_Recursive(t *testing.T) {
 	delayTime := 4 * time.Second
 	executedActivity := false
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
 		tasks := []task.Task{}
 		for i := 0; i < 5; i++ {
 			task := ctx.CallSubOrchestrator("L1", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L1_"+strconv.Itoa(i)))
 			tasks = append(tasks, task)
 		}
 		for _, task := range tasks {
-			task.Await(nil)
+			if err := task.Await(nil); err != nil {
+				return nil, err
+			}
 		}
 		return nil, nil
-	})
-	r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
-		ctx.CallSubOrchestrator("L2", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L2")).Await(nil)
+	}))
+	require.NoError(t, r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CallSubOrchestrator("L2", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L2")).Await(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
-	})
-	r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
-		ctx.CreateTimer(delayTime).Await(nil)
-		ctx.CallActivity("Fail").Await(nil)
+	}))
+	require.NoError(t, r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CreateTimer(delayTime).Await(nil); err != nil {
+			return nil, err
+		}
+		if err := ctx.CallActivity("Fail").Await(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
-	})
-	r.AddActivityN("Fail", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("Fail", func(ctx task.ActivityContext) (any, error) {
 		executedActivity = true
 		return nil, errors.New("Failed: Should not have executed the activity")
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Test terminating with and without recursion
 	for _, recurse := range []bool{true, false} {
@@ -942,27 +1036,37 @@ func Test_TerminateOrchestration_Recursive(t *testing.T) {
 func Test_TerminateOrchestration_Recursive_TerminateCompletedSubOrchestration(t *testing.T) {
 	delayTime := 4 * time.Second
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
 		// Create L1 sub-orchestration and wait for it to complete
-		ctx.CallSubOrchestrator("L1", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L1")).Await(nil)
-		ctx.CreateTimer(delayTime).Await(nil)
+		if err := ctx.CallSubOrchestrator("L1", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L1")).Await(nil); err != nil {
+			return nil, err
+		}
+		if err := ctx.CreateTimer(delayTime).Await(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
-	})
-	r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
+	}))
+	require.NoError(t, r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
 		// Create L2 sub-orchestration but don't wait for it to complete
 		ctx.CallSubOrchestrator("L2", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L2"))
 		return nil, nil
-	})
-	r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
+	}))
+	require.NoError(t, r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
 		// Wait for `delayTime`
-		ctx.CreateTimer(delayTime).Await(nil)
+		if err := ctx.CreateTimer(delayTime).Await(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Test terminating with and without recursion
 	for _, recurse := range []bool{true, false} {
@@ -1032,17 +1136,21 @@ func Test_TerminateOrchestration_Recursive_TerminateCompletedSubOrchestration(t 
 func Test_PurgeCompletedOrchestration(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("ExternalEventOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("ExternalEventOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
 		if err := ctx.WaitForSingleEvent("MyEvent", 30*time.Second).Await(nil); err != nil {
 			return nil, err
 		}
 		return nil, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestration")
@@ -1085,23 +1193,33 @@ func Test_PurgeCompletedOrchestration(t *testing.T) {
 func Test_PurgeOrchestration_Recursive(t *testing.T) {
 	delayTime := 4 * time.Second
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
-		ctx.CallSubOrchestrator("L1", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L1")).Await(nil)
+	require.NoError(t, r.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CallSubOrchestrator("L1", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L1")).Await(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
-	})
-	r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
-		ctx.CallSubOrchestrator("L2", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L2")).Await(nil)
+	}))
+	require.NoError(t, r.AddOrchestratorN("L1", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CallSubOrchestrator("L2", task.WithSubOrchestrationInstanceID(string(ctx.ID)+"_L2")).Await(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
-	})
-	r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
-		ctx.CreateTimer(delayTime).Await(nil)
+	}))
+	require.NoError(t, r.AddOrchestratorN("L2", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CreateTimer(delayTime).Await(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Test terminating with and without recursion
 	for _, recurse := range []bool{true, false} {
@@ -1149,7 +1267,7 @@ func Test_RecreateCompletedOrchestration(t *testing.T) {
 
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("HelloOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("HelloOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
@@ -1157,20 +1275,24 @@ func Test_RecreateCompletedOrchestration(t *testing.T) {
 		var output string
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		return output, err
-	})
-	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
 		var name string
 		if err := ctx.GetInput(&name); err != nil {
 			return nil, err
 		}
 		return fmt.Sprintf("Hello, %s!", name), nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	exporter := initTracing()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	// Run the first orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "HelloOrchestration", api.WithInput("世界"))
@@ -1205,7 +1327,7 @@ func Test_RecreateCompletedOrchestration(t *testing.T) {
 func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
@@ -1213,19 +1335,23 @@ func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
 		var output string
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		return output, err
-	})
-	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
 		var name string
 		if err := ctx.GetInput(&name); err != nil {
 			return nil, err
 		}
 		return fmt.Sprintf("Hello, %s!", name), nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	instanceID := api.InstanceID("IGNORE_IF_RUNNING_OR_COMPLETED")
 	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
@@ -1237,7 +1363,8 @@ func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
 	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
 	// wait orchestration to start
-	client.WaitForOrchestrationStart(ctx, id)
+	_, err = client.WaitForOrchestrationStart(ctx, id)
+	require.NoError(t, err)
 	pivotTime := time.Now()
 	// schedule again, it should ignore creating the new orchestration
 	id, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
@@ -1256,7 +1383,7 @@ func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
 func Test_SingleActivity_ReuseInstanceIDTerminate(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
@@ -1264,19 +1391,23 @@ func Test_SingleActivity_ReuseInstanceIDTerminate(t *testing.T) {
 		var output string
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		return output, err
-	})
-	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
 		var name string
 		if err := ctx.GetInput(&name); err != nil {
 			return nil, err
 		}
 		return fmt.Sprintf("Hello, %s!", name), nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	instanceID := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
 	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
@@ -1288,7 +1419,8 @@ func Test_SingleActivity_ReuseInstanceIDTerminate(t *testing.T) {
 	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
 	// wait orchestration to start
-	client.WaitForOrchestrationStart(ctx, id)
+	_, err = client.WaitForOrchestrationStart(ctx, id)
+	require.NoError(t, err)
 	pivotTime := time.Now()
 	// schedule again, it should terminate the first orchestration and start a new one
 	id, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
@@ -1307,7 +1439,7 @@ func Test_SingleActivity_ReuseInstanceIDTerminate(t *testing.T) {
 func Test_SingleActivity_ReuseInstanceIDError(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
 		var input string
 		if err := ctx.GetInput(&input); err != nil {
 			return nil, err
@@ -1315,26 +1447,30 @@ func Test_SingleActivity_ReuseInstanceIDError(t *testing.T) {
 		var output string
 		err := ctx.CallActivity("SayHello", task.WithActivityInput(input)).Await(&output)
 		return output, err
-	})
-	r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+	}))
+	require.NoError(t, r.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
 		var name string
 		if err := ctx.GetInput(&name); err != nil {
 			return nil, err
 		}
 		return fmt.Sprintf("Hello, %s!", name), nil
-	})
+	}))
 
 	// Initialization
 	ctx := context.Background()
 	client, worker := initTaskHubWorker(ctx, r)
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
 
 	instanceID := api.InstanceID("ERROR_IF_RUNNING_OR_COMPLETED")
 
 	// Run the orchestration
-	id, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
+	_, err := client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
 	require.NoError(t, err)
-	id, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id))
+	_, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(instanceID))
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}
