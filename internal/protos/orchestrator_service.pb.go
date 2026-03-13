@@ -10,10 +10,10 @@
 package protos
 
 import (
-	duration "github.com/golang/protobuf/ptypes/duration"
-	empty "github.com/golang/protobuf/ptypes/empty"
-	timestamp "github.com/golang/protobuf/ptypes/timestamp"
-	wrappers "github.com/golang/protobuf/ptypes/wrappers"
+	duration "google.golang.org/protobuf/types/known/durationpb"
+	empty "google.golang.org/protobuf/types/known/emptypb"
+	timestamp "google.golang.org/protobuf/types/known/timestamppb"
+	wrappers "google.golang.org/protobuf/types/known/wrapperspb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"

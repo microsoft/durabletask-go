@@ -4,7 +4,6 @@ go 1.23.0
 
 require (
 	github.com/cenkalti/backoff/v4 v4.1.3
-	github.com/golang/protobuf v1.5.3
 	github.com/google/uuid v1.3.0
 	github.com/jackc/pgx/v5 v5.7.1
 	github.com/marusama/semaphore/v2 v2.5.0
@@ -25,6 +24,7 @@ require (
 	github.com/felixge/httpsnoop v1.0.3 // indirect
 	github.com/go-logr/logr v1.2.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
