@@ -47,6 +47,12 @@ type worker struct {
 	processor TaskProcessor
 	waiting   bool
 	stop      atomic.Bool
+
+	// loopDone is closed when the background polling goroutine exits.
+	// StopAndDrain waits on this before calling pending.Wait() to prevent
+	// a race between ProcessNext calling pending.Add(1) and StopAndDrain
+	// calling pending.Wait().
+	loopDone chan struct{}
 }
 
 type NewTaskWorkerOptions func(*WorkerOptions)
@@ -92,8 +98,10 @@ func (w *worker) Start(ctx context.Context) {
 	w.cancel = cancel
 
 	w.stop.Store(false)
+	w.loopDone = make(chan struct{})
 
 	go func() {
+		defer close(w.loopDone)
 		var b backoff.BackOff = &backoff.ExponentialBackOff{
 			InitialInterval:     50 * time.Millisecond,
 			MaxInterval:         5 * time.Second,
@@ -202,6 +210,13 @@ func (w *worker) StopAndDrain() {
 	// Cancel the background poller and dispatcher(s)
 	if w.cancel != nil {
 		w.cancel()
+	}
+
+	// Wait for the polling loop to fully exit before calling pending.Wait().
+	// This ensures no more ProcessNext() calls (and thus no more pending.Add(1))
+	// can race with pending.Wait().
+	if w.loopDone != nil {
+		<-w.loopDone
 	}
 
 	// Wait for outstanding work-items to finish processing.

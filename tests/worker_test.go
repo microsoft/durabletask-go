@@ -178,6 +178,43 @@ func Test_TaskWorker(t *testing.T) {
 
 }
 
+func Test_RapidStartStopNoPanic(t *testing.T) {
+	// Regression test for https://github.com/microsoft/durabletask-go/issues/XXX
+	// Before the fix, calling StopAndDrain while the polling loop was still
+	// running could cause "sync: WaitGroup is reused before previous Wait has
+	// returned" because pending.Add(1) in ProcessNext raced with
+	// pending.Wait() in StopAndDrain.
+	for i := 0; i < 50; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+
+		tp := mocks.NewTestTaskPocessor("rapid-start-stop")
+		tp.UnblockProcessing()
+
+		// Add a work item so the worker actually processes something
+		tp.AddWorkItems(backend.ActivityWorkItem{SequenceNumber: int64(i)})
+
+		worker := backend.NewTaskWorker(tp, logger)
+		worker.Start(ctx)
+
+		// Immediately stop — this is the scenario that triggered the panic
+		drainFinished := make(chan bool, 1)
+		go func() {
+			worker.StopAndDrain()
+			drainFinished <- true
+		}()
+
+		select {
+		case <-drainFinished:
+			// success
+		case <-time.After(3 * time.Second):
+			cancel()
+			t.Fatalf("iteration %d: worker stop and drain not finished within timeout", i)
+		}
+
+		cancel()
+	}
+}
+
 func Test_StartAndStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
