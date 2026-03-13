@@ -2,7 +2,6 @@ package durabletaskscheduler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -32,11 +31,6 @@ type Backend struct {
 	mu         sync.Mutex
 	started    bool
 }
-
-var (
-	errNilHistoryEvent     = errors.New("HistoryEvent must be non-nil")
-	errNotExecutionStarted = errors.New("HistoryEvent must be an ExecutionStartedEvent")
-)
 
 // NewBackend creates a new Backend backed by a Durable Task Scheduler (DTS) service.
 func NewBackend(opts *Options, logger backend.Logger) *Backend {
@@ -112,7 +106,7 @@ func (be *Backend) CreateOrchestrationInstance(ctx context.Context, e *backend.H
 
 	startEvent := e.GetExecutionStarted()
 	if startEvent == nil {
-		return errNotExecutionStarted
+		return backend.ErrNotExecutionStarted
 	}
 
 	req := &protos.CreateInstanceRequest{
@@ -148,7 +142,7 @@ func (be *Backend) AddNewOrchestrationEvent(ctx context.Context, iid api.Instanc
 		return err
 	}
 	if e == nil {
-		return errNilHistoryEvent
+		return backend.ErrNilHistoryEvent
 	}
 
 	// Route to the appropriate gRPC call based on event type
@@ -310,6 +304,8 @@ func (be *Backend) String() string {
 }
 
 func (be *Backend) ensureStarted() error {
+	be.mu.Lock()
+	defer be.mu.Unlock()
 	if !be.started {
 		return backend.ErrNotInitialized
 	}
@@ -360,7 +356,7 @@ func (be *Backend) createConnection() (*grpc.ClientConn, error) {
 		grpc.WithStreamInterceptor(be.streamMetadataInterceptor()),
 	}
 
-	conn, err := grpc.Dial(target, dialOpts...)
+	conn, err := grpc.NewClient(target, dialOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
@@ -377,7 +373,10 @@ func (be *Backend) unaryMetadataInterceptor() grpc.UnaryClientInterceptor {
 		invoker grpc.UnaryInvoker,
 		opts ...grpc.CallOption,
 	) error {
-		ctx = be.injectMetadata(ctx)
+		ctx, err := be.injectMetadata(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to inject metadata: %w", err)
+		}
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
 }
@@ -391,12 +390,15 @@ func (be *Backend) streamMetadataInterceptor() grpc.StreamClientInterceptor {
 		streamer grpc.Streamer,
 		opts ...grpc.CallOption,
 	) (grpc.ClientStream, error) {
-		ctx = be.injectMetadata(ctx)
+		ctx, err := be.injectMetadata(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inject metadata: %w", err)
+		}
 		return streamer(ctx, desc, cc, method, opts...)
 	}
 }
 
-func (be *Backend) injectMetadata(ctx context.Context) context.Context {
+func (be *Backend) injectMetadata(ctx context.Context) (context.Context, error) {
 	pairs := []string{
 		"taskhub", be.options.TaskHubName,
 		"workerid", be.workerName,
@@ -407,12 +409,11 @@ func (be *Backend) injectMetadata(ctx context.Context) context.Context {
 			Scopes: []string{be.options.ResourceID + "/.default"},
 		})
 		if err != nil {
-			be.logger.Warnf("failed to get access token: %v", err)
-		} else {
-			pairs = append(pairs, "authorization", "Bearer "+token.Token)
+			return ctx, fmt.Errorf("failed to get access token: %w", err)
 		}
+		pairs = append(pairs, "authorization", "Bearer "+token.Token)
 	}
 
 	md := metadata.Pairs(pairs...)
-	return metadata.NewOutgoingContext(ctx, md)
+	return metadata.NewOutgoingContext(ctx, md), nil
 }

@@ -161,7 +161,7 @@ func (c *TaskHubGrpcClient) processOrchestrationWorkItem(
 		failureAction := helpers.NewCompleteOrchestrationAction(
 			-1,
 			protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,
-			wrapperspb.String("An internal error occured while executing the orchestration."),
+			wrapperspb.String("An internal error occurred while executing the orchestration."),
 			nil,
 			&protos.TaskFailureDetails{
 				ErrorType:    fmt.Sprintf("%T", err),
@@ -225,9 +225,14 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 // The provided context controls how long to wait for the listener to shut down.
 // This must be called before closing the underlying gRPC connection to ensure a clean shutdown.
 func (c *TaskHubGrpcClient) StopWorkItemListener(ctx context.Context) error {
-	close(c.stop)
+	c.stopOnce.Do(func() {
+		close(c.stop)
+	})
 	if c.cancel != nil {
 		c.cancel()
+	} else {
+		// StartWorkItemListener was never called; nothing to wait for.
+		return nil
 	}
 	select {
 	case <-c.done:

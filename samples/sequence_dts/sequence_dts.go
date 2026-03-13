@@ -71,7 +71,7 @@ func Init(ctx context.Context, r *task.TaskRegistry) (*client.TaskHubGrpcClient,
 	logger := backend.DefaultLogger()
 
 	// Create a new DTS scheduler backend and establish the gRPC connection
-	opts, err := durabletaskscheduler.NewOptionsFromConnectionString("Endpoint=https://halspang-priv-d-f7e3cjgz.centraluseuap.durabletask.io;TaskHub=default;Authentication=DefaultAzure")
+	opts, err := durabletaskscheduler.NewOptionsFromConnectionString("Endpoint=https://my-scheduler.westus2.durabletask.io;TaskHub=default;Authentication=DefaultAzure")
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse connection string: %w", err)
 	}
