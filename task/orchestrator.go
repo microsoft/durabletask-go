@@ -366,8 +366,17 @@ func (ctx *OrchestrationContext) CreateTimer(delay time.Duration) Task {
 	return ctx.createTimerInternal(delay)
 }
 
+// CreateTimerAt schedules a durable timer that fires at the specified absolute UTC time.
+func (ctx *OrchestrationContext) CreateTimerAt(fireAt time.Time) Task {
+	return ctx.createTimerAtInternal(fireAt)
+}
+
 func (ctx *OrchestrationContext) createTimerInternal(delay time.Duration) *completableTask {
 	fireAt := ctx.CurrentTimeUtc.Add(delay)
+	return ctx.createTimerAtInternal(fireAt)
+}
+
+func (ctx *OrchestrationContext) createTimerAtInternal(fireAt time.Time) *completableTask {
 	timerAction := helpers.NewCreateTimerAction(ctx.getNextSequenceNumber(), fireAt)
 	ctx.pendingActions[timerAction.Id] = timerAction
 
