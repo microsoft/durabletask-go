@@ -88,6 +88,45 @@ func Test_SingleTimer(t *testing.T) {
 	)
 }
 
+func Test_SingleTimerAt(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddOrchestratorN("SingleTimerAt", func(ctx *task.OrchestrationContext) (any, error) {
+		// Schedule a timer that fires 1 second in the future using an absolute time
+		fireAt := ctx.CurrentTimeUtc.Add(1 * time.Second)
+		err := ctx.CreateTimerAt(fireAt).Await(nil)
+		return nil, err
+	}))
+
+	// Initialization
+	ctx := context.Background()
+	exporter := initTracing()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "SingleTimerAt")
+	if assert.NoError(t, err) {
+		metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+		if assert.NoError(t, err) {
+			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+			assert.GreaterOrEqual(t, metadata.LastUpdatedAt, metadata.CreatedAt)
+		}
+	}
+
+	// Validate the exported OTel traces
+	spans := exporter.GetSpans().Snapshots()
+	assertSpanSequence(t, spans,
+		assertOrchestratorCreated("SingleTimerAt", id),
+		assertTimer(id),
+		assertOrchestratorExecuted("SingleTimerAt", id, "COMPLETED"),
+	)
+}
+
 func Test_ConcurrentTimers(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
