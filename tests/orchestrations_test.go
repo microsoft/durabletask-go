@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -1474,6 +1475,76 @@ func Test_SingleActivity_ReuseInstanceIDError(t *testing.T) {
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "orchestration instance already exists")
 	}
+}
+
+func Test_NewGuid(t *testing.T) {
+	// Registration
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddOrchestratorN("NewGuidOrch", func(ctx *task.OrchestrationContext) (any, error) {
+		// Generate two GUIDs before any await - they should be unique
+		guid1 := ctx.NewGuid()
+		guid2 := ctx.NewGuid()
+		if guid1 == guid2 {
+			return nil, fmt.Errorf("consecutive GUIDs should be unique: %s == %s", guid1, guid2)
+		}
+
+		// Pass guid2 through an activity (which forces a replay) and verify it stays the same
+		var echoed string
+		if err := ctx.CallActivity("EchoGuid", task.WithActivityInput(guid2.String())).Await(&echoed); err != nil {
+			return nil, err
+		}
+		if guid2.String() != echoed {
+			return nil, fmt.Errorf("GUID changed after replay: %s != %s", guid2, echoed)
+		}
+
+		// Generate another GUID after the await - should be unique from prior ones
+		guid3 := ctx.NewGuid()
+		if guid3 == guid1 || guid3 == guid2 {
+			return nil, fmt.Errorf("post-await GUID collided with prior GUIDs")
+		}
+
+		// Verify determinism after another replay
+		var echoed2 string
+		if err := ctx.CallActivity("EchoGuid", task.WithActivityInput(guid3.String())).Await(&echoed2); err != nil {
+			return nil, err
+		}
+		if guid3.String() != echoed2 {
+			return nil, fmt.Errorf("post-await GUID changed after replay: %s != %s", guid3, echoed2)
+		}
+
+		return []string{guid1.String(), guid2.String(), guid3.String()}, nil
+	}))
+	require.NoError(t, r.AddActivityN("EchoGuid", func(ctx task.ActivityContext) (any, error) {
+		var input string
+		if err := ctx.GetInput(&input); err != nil {
+			return nil, err
+		}
+		return input, nil
+	}))
+
+	// Initialization
+	ctx := context.Background()
+	client, worker := initTaskHubWorker(ctx, r)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
+
+	// Run the orchestration
+	id, err := client.ScheduleNewOrchestration(ctx, "NewGuidOrch")
+	require.NoError(t, err)
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, metadata.RuntimeStatus)
+
+	// Verify we got 3 distinct GUIDs back
+	var guids []string
+	require.NoError(t, json.Unmarshal([]byte(metadata.SerializedOutput), &guids))
+	assert.Len(t, guids, 3)
+	assert.NotEqual(t, guids[0], guids[1])
+	assert.NotEqual(t, guids[1], guids[2])
+	assert.NotEqual(t, guids[0], guids[2])
 }
 
 func initTaskHubWorker(ctx context.Context, r *task.TaskRegistry, opts ...backend.NewTaskWorkerOptions) (backend.TaskHubClient, backend.TaskHubWorker) {

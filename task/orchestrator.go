@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -16,6 +17,14 @@ import (
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
+
+// deterministicGuidNamespace is the namespace UUID used for deterministic GUID generation (UUID v5).
+// This matches the namespace used by the .NET Durable Task SDK.
+var deterministicGuidNamespace = uuid.MustParse("9e952958-5e33-4daf-827f-2fa12937b875")
+
+// dotnetDateTimeFormat matches .NET's DateTime.ToString("o") for UTC values.
+// Always produces exactly 7 fractional digits (100-nanosecond/tick precision) with trailing Z.
+const dotnetDateTimeFormat = "2006-01-02T15:04:05.0000000Z"
 
 // Orchestrator is the functional interface for orchestrator functions.
 type Orchestrator func(ctx *OrchestrationContext) (any, error)
@@ -44,6 +53,8 @@ type OrchestrationContext struct {
 	bufferedExternalEvents     map[string]*list.List
 	pendingExternalEventTasks  map[string]*list.List
 	saveBufferedExternalEvents bool
+
+	newGuidCounter int
 }
 
 // callSubOrchestratorOptions is a struct that holds the options for the CallSubOrchestrator orchestrator method.
@@ -435,6 +446,19 @@ func (ctx *OrchestrationContext) ContinueAsNew(newInput any, options ...Continue
 	for _, option := range options {
 		option(ctx)
 	}
+}
+
+// NewGuid generates a deterministic UUID that is safe to use in orchestrator functions.
+// The generated UUID is based on the orchestration instance ID, the current replay-safe timestamp,
+// and an internal counter, ensuring the same sequence of UUIDs is produced on each replay.
+// This uses UUID v5 (SHA-1) per RFC 4122, matching the algorithm used by the .NET Durable Task SDK.
+func (ctx *OrchestrationContext) NewGuid() uuid.UUID {
+	// Truncate to 100-nanosecond (tick) precision to match .NET DateTime behavior,
+	// then format with exactly 7 fractional digits to match .NET's ToString("o").
+	truncatedTime := ctx.CurrentTimeUtc.Truncate(100 * time.Nanosecond)
+	name := fmt.Sprintf("%s_%s_%d", ctx.ID, truncatedTime.Format(dotnetDateTimeFormat), ctx.newGuidCounter)
+	ctx.newGuidCounter++
+	return uuid.NewSHA1(deterministicGuidNamespace, []byte(name))
 }
 
 func (ctx *OrchestrationContext) onExecutionStarted(es *protos.ExecutionStartedEvent) error {
