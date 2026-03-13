@@ -131,7 +131,7 @@ func (executor *grpcExecutor) ExecuteOrchestrator(ctx context.Context, iid api.I
 	case <-result.complete:
 		executor.logger.Debugf("%s: orchestrator got result", iid)
 		if result.Response == nil {
-			return nil, errors.New("operation aborted")
+			return nil, ErrOperationAborted
 		}
 	}
 
@@ -174,7 +174,7 @@ func (executor *grpcExecutor) ExecuteActivity(ctx context.Context, iid api.Insta
 	case <-result.complete:
 		executor.logger.Debugf("%s: activity got result", key)
 		if result.response == nil {
-			return nil, errors.New("operation aborted")
+			return nil, ErrOperationAborted
 		}
 	}
 
@@ -359,12 +359,12 @@ func getActivityExecutionKey(iid string, taskID int32) string {
 
 // CreateTaskHub implements protos.TaskHubSidecarServiceServer
 func (grpcExecutor) CreateTaskHub(context.Context, *protos.CreateTaskHubRequest) (*protos.CreateTaskHubResponse, error) {
-	return nil, errors.New("unimplemented")
+	return nil, status.Error(codes.Unimplemented, "CreateTaskHub is not implemented")
 }
 
 // DeleteTaskHub implements protos.TaskHubSidecarServiceServer
 func (grpcExecutor) DeleteTaskHub(context.Context, *protos.DeleteTaskHubRequest) (*protos.DeleteTaskHubResponse, error) {
-	return nil, errors.New("unimplemented")
+	return nil, status.Error(codes.Unimplemented, "DeleteTaskHub is not implemented")
 }
 
 // GetInstance implements protos.TaskHubSidecarServiceServer
@@ -387,7 +387,7 @@ func (g *grpcExecutor) GetInstance(ctx context.Context, req *protos.GetInstanceR
 // PurgeInstances implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInstancesRequest) (*protos.PurgeInstancesResponse, error) {
 	if req.GetPurgeInstanceFilter() != nil {
-		return nil, errors.New("multi-instance purge is not unimplemented")
+		return nil, status.Error(codes.Unimplemented, "multi-instance purge is not yet implemented")
 	}
 	count, err := purgeOrchestrationState(ctx, g.backend, api.InstanceID(req.GetInstanceId()), req.Recursive)
 	resp := &protos.PurgeInstancesResponse{DeletedInstanceCount: int32(count)}
@@ -399,7 +399,7 @@ func (g *grpcExecutor) PurgeInstances(ctx context.Context, req *protos.PurgeInst
 
 // QueryInstances implements protos.TaskHubSidecarServiceServer
 func (grpcExecutor) QueryInstances(context.Context, *protos.QueryInstancesRequest) (*protos.QueryInstancesResponse, error) {
-	return nil, errors.New("unimplemented")
+	return nil, status.Error(codes.Unimplemented, "QueryInstances is not implemented")
 }
 
 // RaiseEvent implements protos.TaskHubSidecarServiceServer

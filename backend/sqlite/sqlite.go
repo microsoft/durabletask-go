@@ -436,14 +436,14 @@ func (be *sqliteBackend) CreateOrchestrationInstance(ctx context.Context, e *bac
 
 func (be *sqliteBackend) createOrchestrationInstanceInternal(ctx context.Context, e *backend.HistoryEvent, tx *sql.Tx, opts ...backend.OrchestrationIdReusePolicyOptions) (string, error) {
 	if e == nil {
-		return "", errors.New("HistoryEvent must be non-nil")
+		return "", backend.ErrNilHistoryEvent
 	} else if e.Timestamp == nil {
-		return "", errors.New("HistoryEvent must have a non-nil timestamp")
+		return "", backend.ErrNilEventTimestamp
 	}
 
 	startEvent := e.GetExecutionStarted()
 	if startEvent == nil {
-		return "", errors.New("HistoryEvent must be an ExecutionStartedEvent")
+		return "", backend.ErrNotExecutionStarted
 	}
 	instanceID := startEvent.OrchestrationInstance.InstanceId
 
@@ -606,9 +606,9 @@ func (be *sqliteBackend) cleanupOrchestrationStateInternal(ctx context.Context, 
 
 func (be *sqliteBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.InstanceID, e *backend.HistoryEvent) error {
 	if e == nil {
-		return errors.New("HistoryEvent must be non-nil")
+		return backend.ErrNilHistoryEvent
 	} else if e.Timestamp == nil {
-		return errors.New("HistoryEvent must have a non-nil timestamp")
+		return backend.ErrNilEventTimestamp
 	}
 
 	eventPayload, err := backend.MarshalHistoryEvent(e)
