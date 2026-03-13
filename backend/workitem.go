@@ -21,7 +21,7 @@ type OrchestrationWorkItem struct {
 	LockedBy   string
 	RetryCount int32
 	State      *OrchestrationRuntimeState
-	Properties map[string]interface{}
+	Properties map[string]any
 }
 
 // String implements core.WorkItem and fmt.Stringer
@@ -51,7 +51,7 @@ type ActivityWorkItem struct {
 	NewEvent       *HistoryEvent
 	Result         *HistoryEvent
 	LockedBy       string
-	Properties     map[string]interface{}
+	Properties     map[string]any
 }
 
 // String implements core.WorkItem and fmt.Stringer

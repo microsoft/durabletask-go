@@ -203,7 +203,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 	var sqlSB strings.Builder
 	sqlSB.WriteString("UPDATE Instances SET ")
 
-	sqlUpdateArgs := make([]interface{}, 0, 10)
+	sqlUpdateArgs := make([]any, 0, 10)
 	isCreated := false
 	isCompleted := false
 
@@ -273,7 +273,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 		query := "INSERT INTO History ([InstanceID], [SequenceNumber], [EventPayload]) VALUES (?, ?, ?)" +
 			strings.Repeat(", (?, ?, ?)", newHistoryCount-1)
 
-		args := make([]interface{}, 0, newHistoryCount*3)
+		args := make([]any, 0, newHistoryCount*3)
 		nextSequenceNumber := len(wi.State.OldEvents())
 		for _, e := range wi.State.NewEvents() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
@@ -297,7 +297,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 		insertSql := "INSERT INTO NewTasks ([InstanceID], [EventPayload]) VALUES (?, ?)" +
 			strings.Repeat(", (?, ?)", newActivityCount-1)
 
-		sqlInsertArgs := make([]interface{}, 0, newActivityCount*2)
+		sqlInsertArgs := make([]any, 0, newActivityCount*2)
 		for _, e := range wi.State.PendingTasks() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
@@ -319,7 +319,7 @@ func (be *sqliteBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *
 		insertSql := "INSERT INTO NewEvents ([InstanceID], [EventPayload], [VisibleTime]) VALUES (?, ?, ?)" +
 			strings.Repeat(", (?, ?, ?)", newEventCount-1)
 
-		sqlInsertArgs := make([]interface{}, 0, newEventCount*3)
+		sqlInsertArgs := make([]any, 0, newEventCount*3)
 		for _, e := range wi.State.PendingTimers() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {

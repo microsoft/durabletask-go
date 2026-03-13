@@ -16,7 +16,7 @@ import (
 )
 
 type TaskHubClient interface {
-	ScheduleNewOrchestration(ctx context.Context, orchestrator interface{}, opts ...api.NewOrchestrationOptions) (api.InstanceID, error)
+	ScheduleNewOrchestration(ctx context.Context, orchestrator any, opts ...api.NewOrchestrationOptions) (api.InstanceID, error)
 	FetchOrchestrationMetadata(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
 	WaitForOrchestrationStart(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
 	WaitForOrchestrationCompletion(ctx context.Context, id api.InstanceID) (*api.OrchestrationMetadata, error)
@@ -37,7 +37,7 @@ func NewTaskHubClient(be Backend) TaskHubClient {
 	}
 }
 
-func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrator interface{}, opts ...api.NewOrchestrationOptions) (api.InstanceID, error) {
+func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrator any, opts ...api.NewOrchestrationOptions) (api.InstanceID, error) {
 	name := helpers.GetTaskFunctionName(orchestrator)
 	req := &protos.CreateInstanceRequest{Name: name}
 	for _, configure := range opts {

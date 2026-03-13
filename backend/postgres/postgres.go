@@ -207,7 +207,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	var sqlSB strings.Builder
 	sqlSB.WriteString("UPDATE Instances SET ")
 
-	sqlUpdateArgs := make([]interface{}, 0, 10)
+	sqlUpdateArgs := make([]any, 0, 10)
 	isCreated := false
 	isCompleted := false
 
@@ -289,7 +289,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		}
 		query := builder.String()
 
-		args := make([]interface{}, 0, newHistoryCount*3)
+		args := make([]any, 0, newHistoryCount*3)
 		nextSequenceNumber := len(wi.State.OldEvents())
 		for _, e := range wi.State.NewEvents() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
@@ -320,7 +320,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		}
 		insertSql := builder.String()
 
-		sqlInsertArgs := make([]interface{}, 0, newActivityCount*2)
+		sqlInsertArgs := make([]any, 0, newActivityCount*2)
 		for _, e := range wi.State.PendingTasks() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
@@ -349,7 +349,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		}
 		insertSql := builder.String()
 
-		sqlInsertArgs := make([]interface{}, 0, newEventCount*3)
+		sqlInsertArgs := make([]any, 0, newEventCount*3)
 		for _, e := range wi.State.PendingTimers() {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
