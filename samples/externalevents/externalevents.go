@@ -15,7 +15,9 @@ import (
 func main() {
 	// Create a new task registry and add the orchestrator and activities
 	r := task.NewTaskRegistry()
-	r.AddOrchestrator(ExternalEventOrchestrator)
+	if err := r.AddOrchestrator(ExternalEventOrchestrator); err != nil {
+		log.Fatalf("Failed to register orchestrator: %v", err)
+	}
 
 	// Init the client
 	ctx := context.Background()
@@ -23,14 +25,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize the client: %v", err)
 	}
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			log.Printf("Failed to shutdown worker: %v", err)
+		}
+	}()
 
 	// Start a new orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestrator")
 	if err != nil {
-		log.Fatalf("Failed to schedule new orchestration: %v", err)
+		log.Fatalf("Failed to schedule new orchestration: %v", err) //nolint:gocritic // Fatalf in sample main() is acceptable
 	}
-	metadata, err := client.WaitForOrchestrationStart(ctx, id)
+	_, err = client.WaitForOrchestrationStart(ctx, id)
 	if err != nil {
 		log.Fatalf("Failed to wait for orchestration to start: %v", err)
 	}
@@ -39,14 +45,16 @@ func main() {
 	go func() {
 		fmt.Println("Enter your first name: ")
 		var nameInput string
-		fmt.Scanln(&nameInput)
+		if _, err := fmt.Scanln(&nameInput); err != nil {
+			log.Fatalf("Failed to read input: %v", err)
+		}
 		if err = client.RaiseEvent(ctx, id, "Name", api.WithEventPayload(nameInput)); err != nil {
 			log.Fatalf("Failed to raise event: %v", err)
 		}
 	}()
 
 	// After the orchestration receives the event, it should complete on its own
-	metadata, err = client.WaitForOrchestrationCompletion(ctx, id)
+	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	if err != nil {
 		log.Fatalf("Failed to wait for orchestration to complete: %v", err)
 	}

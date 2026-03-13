@@ -33,7 +33,7 @@ jobs:
       # Label used to access the service container
       postgres:
         # Docker Hub image
-        image: postgres:13.18
+        image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -50,13 +50,13 @@ jobs:
         
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 1
           submodules: true
           
       - name: Setup Go environment
-        uses: actions/setup-go@v3.3.0
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
           
@@ -64,7 +64,7 @@ jobs:
         run: go get .
       
       - name: Install Protoc
-        uses: arduino/setup-protoc@v2
+        uses: arduino/setup-protoc@v3
         with:
           version: ${{ env.PROTOC_VERSION }}
 
@@ -75,6 +75,12 @@ jobs:
 
       - name: Generate grpc code
         run: protoc --go_out=. --go-grpc_out=. -I ./submodules/durabletask-protobuf/protos orchestrator_service.proto
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7
 
       - name: Run integration tests
         env:

@@ -78,15 +78,16 @@ func startNewSpan(
 	timestamp time.Time,
 ) (context.Context, trace.Span) {
 	var spanName string
-	if taskVersion != "" {
+	switch {
+	case taskVersion != "":
 		spanName = taskType + "||" + taskName + "||" + taskVersion
 		attributes = append(attributes, attribute.KeyValue{
 			Key:   "durabletask.task.version",
 			Value: attribute.StringValue(taskVersion),
 		})
-	} else if taskName != "" {
+	case taskName != "":
 		spanName = taskType + "||" + taskName
-	} else {
+	default:
 		spanName = taskType
 	}
 
@@ -149,7 +150,7 @@ func SpanContextFromTraceContext(tc *protos.TraceContext) (trace.SpanContext, er
 	} else {
 		// backwards compatibility with older versions of the protobuf
 		traceID = tc.GetTraceParent()
-		spanID = tc.GetSpanID()
+		spanID = tc.GetSpanID() //nolint:staticcheck // backwards compatibility with older versions of the protobuf
 		traceFlags = "01" // sampled
 	}
 

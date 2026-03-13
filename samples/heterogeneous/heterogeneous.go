@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"time"
 
@@ -143,7 +144,11 @@ func main() {
 	if err := taskHubWorker.Start(ctx); err != nil {
 		panic(err)
 	}
-	defer taskHubWorker.Shutdown(ctx)
+	defer func() {
+		if err := taskHubWorker.Shutdown(ctx); err != nil {
+			log.Printf("Failed to shutdown worker: %v", err)
+		}
+	}()
 
 	taskHubClient := backend.NewTaskHubClient(be)
 	id, err := taskHubClient.ScheduleNewOrchestration(ctx, orchestratorName, api.WithInput(1))

@@ -140,7 +140,7 @@ func Test_CompleteOrchestration(t *testing.T) {
 
 			expectedResult := "done!"
 			stackTraceBuffer := make([]byte, 256)
-			var expectedStackTrace string = ""
+			var expectedStackTrace string
 
 			// Produce an ExecutionCompleted event with a particular output
 			getOrchestratorActions := func() []*protos.OrchestratorAction {
@@ -196,7 +196,7 @@ func Test_ScheduleActivityTasks(t *testing.T) {
 	for i, be := range backends {
 		initTest(t, be, i, true)
 
-		wi, err := be.GetActivityWorkItem(ctx)
+		_, err := be.GetActivityWorkItem(ctx)
 		if !assert.ErrorIs(t, err, backend.ErrNoWorkItems) {
 			continue
 		}
@@ -221,7 +221,7 @@ func Test_ScheduleActivityTasks(t *testing.T) {
 		assert.ErrorIs(t, err, backend.ErrNoWorkItems)
 
 		// However, there should be an activity work item
-		wi, err = be.GetActivityWorkItem(ctx)
+		wi, err := be.GetActivityWorkItem(ctx)
 		if assert.NoError(t, err) && assert.NotNil(t, wi) {
 			assert.Equal(t, expectedName, wi.NewEvent.GetTaskScheduled().GetName())
 			assert.Equal(t, expectedInput, wi.NewEvent.GetTaskScheduled().GetInput().GetValue())
@@ -332,10 +332,12 @@ func Test_AbandonActivityWorkItem(t *testing.T) {
 
 			if err := be.AbandonActivityWorkItem(ctx, wi); assert.NoError(t, err) {
 				// Re-fetch the abandoned activity work item
-				wi, err = be.GetActivityWorkItem(ctx)
-				assert.Equal(t, "MyActivity", wi.NewEvent.GetTaskScheduled().GetName())
-				assert.Equal(t, int32(123), wi.NewEvent.EventId)
-				assert.Nil(t, wi.NewEvent.GetTaskScheduled().GetInput())
+				wi, err := be.GetActivityWorkItem(ctx)
+				if assert.NoError(t, err) {
+					assert.Equal(t, "MyActivity", wi.NewEvent.GetTaskScheduled().GetName())
+					assert.Equal(t, int32(123), wi.NewEvent.EventId)
+					assert.Nil(t, wi.NewEvent.GetTaskScheduled().GetInput())
+				}
 			}
 		}
 	}
@@ -451,7 +453,9 @@ func workItemProcessingTestLogic(
 			if state, ok := getOrchestrationRuntimeState(t, be, wi); ok {
 				// Update the state with new events. Normally the worker logic would do this.
 				for _, e := range wi.NewEvents {
-					state.AddEvent(e)
+					if err := state.AddEvent(e); err != nil {
+						t.Fatalf("failed to add event: %v", err)
+					}
 				}
 
 				actions := getOrchestratorActions()

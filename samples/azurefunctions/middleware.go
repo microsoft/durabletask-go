@@ -38,7 +38,10 @@ func MapOrchestrator(o task.Orchestrator) func(http.ResponseWriter, *http.Reques
 	return func(w http.ResponseWriter, httpReq *http.Request) {
 		var invokeRequest InvokeRequest
 		d := json.NewDecoder(httpReq.Body)
-		d.Decode(&invokeRequest)
+		if err := d.Decode(&invokeRequest); err != nil {
+			fmt.Printf("ERROR: Failed to decode invoke request: %v\n", err)
+			return
+		}
 
 		// TODO: Give the schema, construct the context object and invoke the orchestrator
 		contextParam := invokeRequest.Data["context"]
@@ -87,7 +90,9 @@ func MapOrchestrator(o task.Orchestrator) func(http.ResponseWriter, *http.Reques
 		}
 		fmt.Println("Sending response JSON:", string(responseJson))
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(responseJson)
+		if _, err := w.Write(responseJson); err != nil {
+			fmt.Printf("ERROR: Failed to write response: %v\n", err)
+		}
 	}
 }
 
@@ -101,7 +106,10 @@ func MapActivity(a task.Activity) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var invokeRequest InvokeRequest
 		d := json.NewDecoder(r.Body)
-		d.Decode(&invokeRequest)
+		if err := d.Decode(&invokeRequest); err != nil {
+			fmt.Printf("ERROR: Failed to decode invoke request: %v\n", err)
+			return
+		}
 
 		fmt.Println("Activity request:", invokeRequest)
 
@@ -132,7 +140,7 @@ func MapActivity(a task.Activity) func(http.ResponseWriter, *http.Request) {
 			fmt.Printf("Task failed: %v\n", tf.FailureDetails)
 			statusCode = 500
 		} else {
-			panic(fmt.Errorf("Unexpected event type: %v", e))
+			panic(fmt.Errorf("unexpected event type: %v", e))
 		}
 
 		invokeResponse := &InvokeResponse{ReturnValue: []byte(returnValue)}
@@ -144,6 +152,8 @@ func MapActivity(a task.Activity) func(http.ResponseWriter, *http.Request) {
 		fmt.Printf("Sending %d response: %s\n", statusCode, string(responseJson))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(statusCode)
-		w.Write(responseJson)
+		if _, err := w.Write(responseJson); err != nil {
+			fmt.Printf("ERROR: Failed to write response: %v\n", err)
+		}
 	}
 }

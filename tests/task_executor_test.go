@@ -16,11 +16,13 @@ import (
 func Test_Executor_WaitForEventSchedulesTimer(t *testing.T) {
 	timerDuration := 5 * time.Second
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("Orchestration", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("Orchestration", func(ctx *task.OrchestrationContext) (any, error) {
 		var value int
-		ctx.WaitForSingleEvent("MyEvent", timerDuration).Await(&value)
+		if err := ctx.WaitForSingleEvent("MyEvent", timerDuration).Await(&value); err != nil {
+			return nil, err
+		}
 		return value, nil
-	})
+	}))
 
 	iid := api.InstanceID("abc123")
 	startEvent := helpers.NewOrchestratorStartedEvent() // determines the current orchestrator time
@@ -46,11 +48,13 @@ func Test_Executor_WaitForEventSchedulesTimer(t *testing.T) {
 // The correct behavior is that a suspended orchestration should not return any actions.
 func Test_Executor_SuspendStopsAllActions(t *testing.T) {
 	r := task.NewTaskRegistry()
-	r.AddOrchestratorN("SuspendResumeOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
+	require.NoError(t, r.AddOrchestratorN("SuspendResumeOrchestration", func(ctx *task.OrchestrationContext) (any, error) {
 		var value int
-		ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(&value)
+		if err := ctx.WaitForSingleEvent("MyEvent", 5*time.Second).Await(&value); err != nil {
+			return nil, err
+		}
 		return value, nil
-	})
+	}))
 
 	executor := task.NewTaskExecutor(r)
 	iid := api.InstanceID("abc123")

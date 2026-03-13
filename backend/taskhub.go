@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
 
@@ -31,7 +32,7 @@ func NewTaskHubWorker(be Backend, orchestrationWorker TaskWorker, activityWorker
 
 func (w *taskHubWorker) Start(ctx context.Context) error {
 	// TODO: Check for already started worker
-	if err := w.backend.CreateTaskHub(ctx); err != nil && err != ErrTaskHubExists {
+	if err := w.backend.CreateTaskHub(ctx); err != nil && !errors.Is(err, ErrTaskHubExists) {
 		return err
 	}
 	if err := w.backend.Start(ctx); err != nil {

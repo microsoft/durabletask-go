@@ -14,8 +14,12 @@ import (
 func main() {
 	// Create a new task registry and add the orchestrator and activities
 	r := task.NewTaskRegistry()
-	r.AddOrchestrator(ActivitySequenceOrchestrator)
-	r.AddActivity(SayHelloActivity)
+	if err := r.AddOrchestrator(ActivitySequenceOrchestrator); err != nil {
+		log.Fatalf("Failed to register orchestrator: %v", err)
+	}
+	if err := r.AddActivity(SayHelloActivity); err != nil {
+		log.Fatalf("Failed to register activity: %v", err)
+	}
 
 	// Init the client
 	ctx := context.Background()
@@ -23,12 +27,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize the client: %v", err)
 	}
-	defer worker.Shutdown(ctx)
+	defer func() {
+		if err := worker.Shutdown(ctx); err != nil {
+			log.Printf("Failed to shutdown worker: %v", err)
+		}
+	}()
 
 	// Start a new orchestration
 	id, err := client.ScheduleNewOrchestration(ctx, ActivitySequenceOrchestrator)
 	if err != nil {
-		log.Fatalf("Failed to schedule new orchestration: %v", err)
+		log.Fatalf("Failed to schedule new orchestration: %v", err) //nolint:gocritic // Fatalf in sample main() is acceptable
 	}
 
 	// Wait for the orchestration to complete

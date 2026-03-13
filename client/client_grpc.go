@@ -34,7 +34,9 @@ func NewTaskHubGrpcClient(cc grpc.ClientConnInterface, logger backend.Logger) *T
 func (c *TaskHubGrpcClient) ScheduleNewOrchestration(ctx context.Context, orchestrator string, opts ...api.NewOrchestrationOptions) (api.InstanceID, error) {
 	req := &protos.CreateInstanceRequest{Name: orchestrator}
 	for _, configure := range opts {
-		configure(req)
+		if err := configure(req); err != nil {
+			return api.EmptyInstanceID, fmt.Errorf("failed to configure orchestration request: %w", err)
+		}
 	}
 	if req.InstanceId == "" {
 		req.InstanceId = uuid.NewString()

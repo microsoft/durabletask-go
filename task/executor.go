@@ -28,7 +28,7 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 	ts := e.GetTaskScheduled()
 	if ts == nil {
 		// No clean way to deal with this other than to abandon it
-		return nil, fmt.Errorf("Unexpected event type for ExecuteActivity: %v", e.EventType)
+		return nil, fmt.Errorf("unexpected event type for ExecuteActivity: %v", e.EventType)
 	}
 	invoker, ok := te.Registry.activities[ts.Name]
 	if !ok {
@@ -97,12 +97,12 @@ func (te taskExecutor) Shutdown(ctx context.Context) error {
 }
 
 func unmarshalData(data []byte, v any) error {
-	if v == nil {
+	switch {
+	case v == nil:
 		return nil
-	} else if len(data) == 0 {
-		v = nil
+	case len(data) == 0:
 		return nil
-	} else {
+	default:
 		return json.Unmarshal(data, v)
 	}
 }
