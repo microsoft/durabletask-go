@@ -57,7 +57,7 @@ func TestMain(m *testing.M) {
 
 	time.Sleep(1 * time.Second)
 
-	conn, err := grpc.Dial(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient("dns:///"+lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("failed to connect to gRPC server: %v", err)
 	}
@@ -87,10 +87,17 @@ func TestMain(m *testing.M) {
 	os.Exit(exitCode) //nolint:gocritic // os.Exit in TestMain is required by Go testing
 }
 
-func startGrpcListener(t *testing.T, r *task.TaskRegistry) context.CancelFunc {
+func startGrpcListener(t *testing.T, r *task.TaskRegistry) func() {
 	cancelCtx, cancel := context.WithCancel(ctx)
 	require.NoError(t, grpcClient.StartWorkItemListener(cancelCtx, r))
-	return cancel
+	return func() {
+		stopCtx, stopCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer stopCancel()
+		if err := grpcClient.StopWorkItemListener(stopCtx); err != nil {
+			t.Logf("failed to stop work item listener: %v", err)
+			cancel()
+		}
+	}
 }
 
 func Test_Grpc_WaitForInstanceStart_Timeout(t *testing.T) {
@@ -134,7 +141,6 @@ func Test_Grpc_WaitForInstanceStart_ConnectionResume(t *testing.T) {
 		assert.Contains(t, err.Error(), "context deadline exceeded")
 	}
 	cancelListener()
-	time.Sleep(2 * time.Second)
 
 	// reconnect
 	cancelListener = startGrpcListener(t, r)

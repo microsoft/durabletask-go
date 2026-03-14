@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
@@ -17,8 +18,14 @@ import (
 // REVIEW: Can this be merged with backend/client.go somehow?
 
 type TaskHubGrpcClient struct {
-	client protos.TaskHubSidecarServiceClient
-	logger backend.Logger
+	client          protos.TaskHubSidecarServiceClient
+	logger          backend.Logger
+	cancel          context.CancelFunc
+	stop            chan struct{}
+	stopOnce        sync.Once
+	done            chan struct{}
+	listenerStarted bool
+	mu              sync.Mutex
 }
 
 // NewTaskHubGrpcClient creates a client that can be used to manage orchestrations over a gRPC connection.
@@ -27,6 +34,8 @@ func NewTaskHubGrpcClient(cc grpc.ClientConnInterface, logger backend.Logger) *T
 	return &TaskHubGrpcClient{
 		client: protos.NewTaskHubSidecarServiceClient(cc),
 		logger: logger,
+		stop:   make(chan struct{}),
+		done:   make(chan struct{}),
 	}
 }
 

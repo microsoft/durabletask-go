@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -24,7 +25,18 @@ type workItemsStream interface {
 }
 
 func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.TaskRegistry) error {
+	c.mu.Lock()
+	if c.listenerStarted {
+		c.mu.Unlock()
+		return errors.New("work item listener already started")
+	}
+	c.listenerStarted = true
+	c.mu.Unlock()
+
 	executor := task.NewTaskExecutor(r)
+
+	ctx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
 
 	var stream workItemsStream
 
@@ -45,11 +57,14 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 	c.logger.Infof("connecting work item listener stream")
 	err := initStream()
 	if err != nil {
+		cancel()
+		c.resetListenerState()
 		return err
 	}
 
 	go func() {
 		c.logger.Info("starting background processor")
+		defer close(c.done)
 		defer func() {
 			c.logger.Info("stopping background processor")
 			// We must use a background context here as the stream's context is likely canceled
@@ -63,10 +78,13 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 			workItem, err := stream.Recv()
 
 			if err != nil {
-				// user wants to stop the listener
-				if ctx.Err() != nil {
-					c.logger.Infof("stopping background processor: %v", err)
+				// Check if this is a graceful shutdown before logging any errors.
+				// StopWorkItemListener closes the stop channel before cancelling
+				// the context, so a closed stop channel means this error is expected.
+				select {
+				case <-c.stop:
 					return
+				default:
 				}
 
 				retriable := false
@@ -92,9 +110,10 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 
 				err = backoff.Retry(
 					func() error {
-						// user wants to stop the listener
-						if ctx.Err() != nil {
-							return backoff.Permanent(ctx.Err())
+						select {
+						case <-c.stop:
+							return backoff.Permanent(fmt.Errorf("work item listener stopped"))
+						default:
 						}
 
 						c.logger.Infof("reconnecting work item listener stream")
@@ -109,6 +128,11 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 					newInfiniteRetries(),
 				)
 				if err != nil {
+					select {
+					case <-c.stop:
+						return
+					default:
+					}
 					c.logger.Infof("stopping background processor, unable to reconnect stream: %v", err)
 					return
 				}
@@ -118,9 +142,11 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 			}
 
 			if orchReq := workItem.GetOrchestratorRequest(); orchReq != nil {
-				go c.processOrchestrationWorkItem(ctx, executor, orchReq)
+				completionToken := protos.GetWorkItemCompletionToken(workItem)
+				go c.processOrchestrationWorkItem(ctx, executor, orchReq, completionToken)
 			} else if actReq := workItem.GetActivityRequest(); actReq != nil {
-				go c.processActivityWorkItem(ctx, executor, actReq)
+				completionToken := protos.GetWorkItemCompletionToken(workItem)
+				go c.processActivityWorkItem(ctx, executor, actReq, completionToken)
 			} else {
 				c.logger.Warnf("received unknown work item type: %v", workItem)
 			}
@@ -133,17 +159,19 @@ func (c *TaskHubGrpcClient) processOrchestrationWorkItem(
 	ctx context.Context,
 	executor backend.Executor,
 	workItem *protos.OrchestratorRequest,
+	completionToken string,
 ) {
 	results, err := executor.ExecuteOrchestrator(ctx, api.InstanceID(workItem.InstanceId), workItem.PastEvents, workItem.NewEvents)
 
 	resp := protos.OrchestratorResponse{InstanceId: workItem.InstanceId}
+	protos.SetOrchestratorResponseCompletionToken(&resp, completionToken)
 	if err != nil {
 		// NOTE: At the time of writing, there's no known case where this error is returned.
 		//       We add error handling here anyways, just in case.
 		failureAction := helpers.NewCompleteOrchestrationAction(
 			-1,
 			protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,
-			wrapperspb.String("An internal error occured while executing the orchestration."),
+			wrapperspb.String("An internal error occurred while executing the orchestration."),
 			nil,
 			&protos.TaskFailureDetails{
 				ErrorType:    fmt.Sprintf("%T", err),
@@ -168,12 +196,14 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 	ctx context.Context,
 	executor backend.Executor,
 	req *protos.ActivityRequest,
+	completionToken string,
 ) {
 	var tc *protos.TraceContext = nil // TODO: How to populate trace context?
 	event := helpers.NewTaskScheduledEvent(req.TaskId, req.Name, req.Version, req.Input, tc)
 	result, err := executor.ExecuteActivity(ctx, api.InstanceID(req.OrchestrationInstance.InstanceId), event)
 
 	resp := protos.ActivityResponse{InstanceId: req.OrchestrationInstance.InstanceId, TaskId: req.TaskId}
+	protos.SetActivityResponseCompletionToken(&resp, completionToken)
 	if err != nil {
 		// NOTE: At the time of writing, there's no known case where this error is returned.
 		//       We add error handling here anyways, just in case.
@@ -199,6 +229,44 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 			c.logger.Errorf("failed to complete activity task: %v", err)
 		}
 	}
+}
+
+// StopWorkItemListener gracefully stops the work item listener that was started by StartWorkItemListener.
+// The provided context controls how long to wait for the listener to shut down.
+// This must be called before closing the underlying gRPC connection to ensure a clean shutdown.
+// After stopping, the listener can be started again with StartWorkItemListener.
+func (c *TaskHubGrpcClient) StopWorkItemListener(ctx context.Context) error {
+	c.stopOnce.Do(func() {
+		close(c.stop)
+	})
+	var cancel context.CancelFunc
+	c.mu.Lock()
+	cancel = c.cancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	} else {
+		// StartWorkItemListener was never called; nothing to wait for.
+		return nil
+	}
+	select {
+	case <-c.done:
+		c.resetListenerState()
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// resetListenerState resets the listener state so that StartWorkItemListener can be called again.
+func (c *TaskHubGrpcClient) resetListenerState() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.listenerStarted = false
+	c.cancel = nil
+	c.stop = make(chan struct{})
+	c.stopOnce = sync.Once{}
+	c.done = make(chan struct{})
 }
 
 func newInfiniteRetries() *backoff.ExponentialBackOff {
