@@ -24,6 +24,14 @@ type workItemsStream interface {
 }
 
 func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.TaskRegistry) error {
+	c.mu.Lock()
+	if c.listenerStarted {
+		c.mu.Unlock()
+		return errors.New("work item listener already started")
+	}
+	c.listenerStarted = true
+	c.mu.Unlock()
+
 	executor := task.NewTaskExecutor(r)
 
 	ctx, cancel := context.WithCancel(ctx)

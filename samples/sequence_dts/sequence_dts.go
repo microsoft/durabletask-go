@@ -82,7 +82,11 @@ func Init(ctx context.Context, r *task.TaskRegistry) (*client.TaskHubGrpcClient,
 
 	// Create the gRPC client and start the streaming work item listener.
 	// DTS dispatches work items via a gRPC stream rather than backend polling.
-	grpcClient := client.NewTaskHubGrpcClient(be.Connection(), logger)
+	conn, err := be.Connection()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get backend connection: %w", err)
+	}
+	grpcClient := client.NewTaskHubGrpcClient(conn, logger)
 	if err := grpcClient.StartWorkItemListener(ctx, r); err != nil {
 		return nil, nil, fmt.Errorf("failed to start work item listener: %w", err)
 	}

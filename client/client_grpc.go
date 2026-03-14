@@ -18,12 +18,14 @@ import (
 // REVIEW: Can this be merged with backend/client.go somehow?
 
 type TaskHubGrpcClient struct {
-	client   protos.TaskHubSidecarServiceClient
-	logger   backend.Logger
-	cancel   context.CancelFunc
-	stop     chan struct{}
-	stopOnce sync.Once
-	done     chan struct{}
+	client          protos.TaskHubSidecarServiceClient
+	logger          backend.Logger
+	cancel          context.CancelFunc
+	stop            chan struct{}
+	stopOnce        sync.Once
+	done            chan struct{}
+	listenerStarted bool
+	mu              sync.Mutex
 }
 
 // NewTaskHubGrpcClient creates a client that can be used to manage orchestrations over a gRPC connection.

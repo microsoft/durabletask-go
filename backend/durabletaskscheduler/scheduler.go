@@ -315,8 +315,11 @@ func (be *Backend) ensureStarted() error {
 // Connection returns the underlying gRPC client connection. This can be used to create
 // a [client.TaskHubGrpcClient] for streaming work item processing.
 // Must be called after Start().
-func (be *Backend) Connection() grpc.ClientConnInterface {
-	return be.conn
+func (be *Backend) Connection() (grpc.ClientConnInterface, error) {
+	if err := be.ensureStarted(); err != nil {
+		return nil, err
+	}
+	return be.conn, nil
 }
 
 func (be *Backend) createConnection() (*grpc.ClientConn, error) {
@@ -342,12 +345,17 @@ func (be *Backend) createConnection() (*grpc.ClientConn, error) {
 	}
 
 	// Set up Azure credential if using DefaultAzure auth
-	if be.options.AuthType == AuthTypeDefaultAzure {
+	switch be.options.AuthType {
+	case AuthTypeDefaultAzure:
 		cred, err := azidentity.NewDefaultAzureCredential(nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Azure credential: %w", err)
 		}
 		be.credential = cred
+	case AuthTypeNone:
+		// No authentication needed
+	default:
+		return nil, fmt.Errorf("unsupported authentication type: %q", be.options.AuthType)
 	}
 
 	dialOpts := []grpc.DialOption{
@@ -356,7 +364,7 @@ func (be *Backend) createConnection() (*grpc.ClientConn, error) {
 		grpc.WithStreamInterceptor(be.streamMetadataInterceptor()),
 	}
 
-	conn, err := grpc.NewClient(target, dialOpts...)
+	conn, err := grpc.NewClient("dns:///"+target, dialOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
