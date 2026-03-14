@@ -58,6 +58,7 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 	err := initStream()
 	if err != nil {
 		cancel()
+		c.resetListenerState()
 		return err
 	}
 
@@ -238,8 +239,12 @@ func (c *TaskHubGrpcClient) StopWorkItemListener(ctx context.Context) error {
 	c.stopOnce.Do(func() {
 		close(c.stop)
 	})
-	if c.cancel != nil {
-		c.cancel()
+	var cancel context.CancelFunc
+	c.mu.Lock()
+	cancel = c.cancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	} else {
 		// StartWorkItemListener was never called; nothing to wait for.
 		return nil
