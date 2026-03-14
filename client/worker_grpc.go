@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -232,6 +233,7 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 // StopWorkItemListener gracefully stops the work item listener that was started by StartWorkItemListener.
 // The provided context controls how long to wait for the listener to shut down.
 // This must be called before closing the underlying gRPC connection to ensure a clean shutdown.
+// After stopping, the listener can be started again with StartWorkItemListener.
 func (c *TaskHubGrpcClient) StopWorkItemListener(ctx context.Context) error {
 	c.stopOnce.Do(func() {
 		close(c.stop)
@@ -244,10 +246,22 @@ func (c *TaskHubGrpcClient) StopWorkItemListener(ctx context.Context) error {
 	}
 	select {
 	case <-c.done:
+		c.resetListenerState()
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// resetListenerState resets the listener state so that StartWorkItemListener can be called again.
+func (c *TaskHubGrpcClient) resetListenerState() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.listenerStarted = false
+	c.cancel = nil
+	c.stop = make(chan struct{})
+	c.stopOnce = sync.Once{}
+	c.done = make(chan struct{})
 }
 
 func newInfiniteRetries() *backoff.ExponentialBackOff {
