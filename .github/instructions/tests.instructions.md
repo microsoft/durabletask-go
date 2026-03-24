@@ -10,10 +10,10 @@ These instructions apply to all Go files under `tests/`.
 
 ## Test Package Conventions
 
-- Test package name: `tests` (not `tests_test`) — tests are in a separate package from the code under test.
-- All integration tests live in `tests/`. Unit tests may coexist in `task/orchestrator_test.go` (package `task_test`).
+- Tests under `tests/` use package name `tests` (not `tests_test`) — they are in a separate package from the code under test.
+- All integration/orchestration tests live in `tests/`. Unit tests may coexist in `task/orchestrator_test.go` (this file is `package task`).
 - The test helper `initTaskHubWorker()` creates an in-memory SQLite backend — use it as the baseline for new orchestration tests.
-- Do not import internal packages directly — tests interact through the public `backend`, `task`, and `api` packages.
+- Orchestration and high-level integration tests under `tests/` should not import `internal/...` packages — prefer the public `backend`, `task`, and `api` packages. Lower-level backend/runtime tests in `tests/` may import `internal/helpers` and `internal/protos` when needed (as in `tests/backend_test.go`).
 
 ---
 

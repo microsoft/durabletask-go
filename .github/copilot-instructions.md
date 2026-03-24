@@ -22,7 +22,7 @@ Key facts before making any change:
 | SQLite driver | modernc.org/sqlite - pure Go, CGO_ENABLED=0 |
 | Test package | tests/ (integration tests + mocks in tests/mocks/) |
 | Lint config | .golangci.yml - 7 linters; excludes internal/protos/ and tests/mocks/ |
-| Status | Pre-production (v0.x); public APIs are explicitly unstable |
+| Status | Pre-production (current tags are v0.x); API stability is not guaranteed |
 
 ## Package Map
 

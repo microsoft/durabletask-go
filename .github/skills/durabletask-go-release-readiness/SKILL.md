@@ -135,9 +135,9 @@ git diff go.mod go.sum
 docker build . -t durabletask-go:release-check
 ```
 
-**Required**: Image builds without errors.
+**Required**: Image builds without errors. If the build fails due to a Go version mismatch, update the Dockerfile base image to `golang:1.23` (or newer) and re-run the build before proceeding.
 
-**Known issue to watch for**: The Dockerfile uses `FROM golang:1.21` but `go.mod` requires `1.23`. If this discrepancy is still present, flag it as a known limitation but do not block the release unless it causes actual build failures.
+**Required check**: Ensure the Dockerfile base image (`FROM golang:...`) uses Go `1.23` or newer to match the `go.mod` `go` directive. If it is older, update the Dockerfile accordingly as part of the release-readiness work and do not proceed until the mismatch is fixed and the image builds successfully.
 
 ---
 

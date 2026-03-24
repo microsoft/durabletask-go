@@ -56,8 +56,8 @@ Do not store JSON in `EventPayload` columns — they are typed `BLOB`/`BYTEA` fo
 
 ## Abandon Delay
 
-`OrchestrationWorkItem.GetAbandonDelay()` computes exponential backoff from `RetryCount`:
+`OrchestrationWorkItem.GetAbandonDelay()` computes a linear backoff in seconds from `RetryCount`:
 - `RetryCount 0` → 0 delay
-- Each increment doubles up to 5 minutes max.
+- For `RetryCount > 0`, the delay is `RetryCount` seconds, capped at 5 minutes (300 seconds) once `RetryCount` exceeds 100.
 
 Backends must increment `RetryCount` on abandon (not just clear the lock). Failure to do so breaks backoff.

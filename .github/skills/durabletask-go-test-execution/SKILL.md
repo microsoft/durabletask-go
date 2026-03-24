@@ -39,7 +39,7 @@ golangci-lint --version
 
 # For PostgreSQL tests (optional):
 # postgres:16 must be running on localhost:5432
-# Credentials: see CI workflow (default postgres user, no password)
+# Credentials: default postgres user with password "postgres" (matches CI POSTGRES_PASSWORD)
 ```
 
 ---

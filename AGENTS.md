@@ -19,7 +19,7 @@ Key constraints every agent must internalize:
 | Test command | `go test ./tests/... -coverpkg ./api,./task,./client,./backend/...,./internal/helpers` |
 | Lint | `golangci-lint run` (7 linters; excludes `internal/protos/`, `tests/mocks/`) |
 | Go version | ≥ 1.23 |
-| Status | Pre-production (`v0.x`); APIs are explicitly unstable |
+| Status | Pre-production (`v0.x`); when editing, assume APIs may change incompatibly |
 
 ---
 
