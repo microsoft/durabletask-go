@@ -14,7 +14,7 @@ These instructions apply to all `.go` files **except** generated code (`internal
 - In core packages (e.g., `api/`, `backend/`, `task/`, `internal/`), use `any` instead of `interface{}` (enforced since PR #118). Existing uses of `interface{}` in samples or other non-core code may remain unless you are actively modifying that code.
 - Receiver names must be consistent within a type — if existing methods on `sqliteBackend` use `be`, new methods must also use `be`.
 - Unexported struct fields do not need doc comments. Exported fields and types do.
-- Group imports: stdlib → external → internal (standard Go convention; enforced by `gocritic`).
+- Group imports: stdlib → external → internal (standard Go convention).
 
 ---
 
@@ -50,7 +50,7 @@ Do not invent new sentinel errors for conditions that already have one.
 When implementing `Backend`:
 - `GetOrchestrationWorkItem` and `GetActivityWorkItem` must return `backend.ErrNoWorkItems` (not `nil, nil`) when the queue is empty.
 - `CompleteOrchestrationWorkItem` must atomically write history + clear the work item lock.
-- `AbandonOrchestrationWorkItem` must update `RetryCount` — the `GetAbandonDelay()` method uses it to compute the abandon delay: 0s when `RetryCount == 0`, then `RetryCount * time.Second` with a maximum delay of 5 minutes once `RetryCount > 100`.
+- `AbandonOrchestrationWorkItem` clears the lock and sets `VisibleTime` based on `GetAbandonDelay()`. `RetryCount` is derived from the `NewEvents.DequeueCount` column at dequeue time (in `GetOrchestrationWorkItem`), not updated by abandon.
 
 When implementing `Executor`:
 - `ExecuteOrchestrator` receives `oldEvents` (completed history) and `newEvents` (inbox). The executor replays from the beginning on each call — it must not hold state between calls.
@@ -62,7 +62,7 @@ When implementing `Executor`:
 
 - Do not use `sync.Mutex` where the existing `marusama/semaphore/v2` throttle already serializes access.
 - The gRPC executor uses `sync.Map` keyed by `"{instanceID}/{taskID}"` for in-flight activities — follow this pattern if extending activity dispatch.
-- Worker polling uses exponential backoff (`cenkalti/backoff/v4`): `InitialInterval: 50ms`, `MaxInterval: 5s`. Do not hardcode sleep durations.
+- Worker polling uses exponential backoff (`cenkalti/backoff/v4`): `InitialInterval: 50ms`, `MaxInterval: 5s`. Avoid introducing new hardcoded sleep durations outside the established worker patterns (including the existing extra 5s delay on unexpected errors in `backend/worker.go`).
 - `StopAndDrain()` must block until all in-flight work items complete — use `sync.WaitGroup` or `semaphore.TryAcquire` patterns consistent with `worker.go`.
 
 ---

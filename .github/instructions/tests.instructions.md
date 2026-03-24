@@ -106,7 +106,7 @@ For orchestration tests:
 
 For backend tests:
 - Test `GetOrchestrationWorkItem` returns `ErrNoWorkItems` when queue is empty (not `nil, nil`).
-- Test that `AbandonOrchestrationWorkItem` increments `RetryCount`.
+- Test that `OrchestrationWorkItem.RetryCount` reflects the underlying queue's dequeue count when the work item is fetched (abandoning a work item does not directly change `RetryCount`).
 - Test that `CompleteOrchestrationWorkItem` is atomic — verify the work item is no longer visible after completion.
 
 ---

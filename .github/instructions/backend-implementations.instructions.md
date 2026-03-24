@@ -29,7 +29,7 @@ Both backends implement optimistic locking for work items:
 - `LockedBy` stores the worker's identifier.
 - `LockExpiration` (or equivalent) marks when the lock expires.
 - `GetOrchestrationWorkItem` must atomically claim an item by setting `LockedBy` in the same DB transaction.
-- `AbandonOrchestrationWorkItem` must increment `RetryCount` so `GetAbandonDelay()` computes the correct backoff.
+- `AbandonOrchestrationWorkItem` clears the lock and sets `VisibleTime` using `GetAbandonDelay()`. `RetryCount` is derived from `NewEvents.DequeueCount` at dequeue time — abandon does not increment a persisted retry counter directly.
 - `ErrWorkItemLockLost` must be returned if a work item's lock has been stolen or expired before completion.
 
 ---
@@ -60,4 +60,4 @@ Do not store JSON in `EventPayload` columns — they are typed `BLOB`/`BYTEA` fo
 - `RetryCount 0` → 0 delay
 - For `RetryCount > 0`, the delay is `RetryCount` seconds, capped at 5 minutes (300 seconds) once `RetryCount` exceeds 100.
 
-Backends must increment `RetryCount` on abandon (not just clear the lock). Failure to do so breaks backoff.
+`RetryCount` is derived from `NewEvents.DequeueCount` at dequeue time — it increments automatically each time a work item is fetched. Backends do not need to update `RetryCount` during abandon.
