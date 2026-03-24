@@ -3,11 +3,6 @@ name: Test Specialist
 description: >
   Writes high-signal, determinism-aware tests for durabletask-go orchestration and
   backend behavior. Use when adding tests for new features, bug fixes, or coverage gaps.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Test Specialist — durabletask-go

@@ -4,11 +4,6 @@ description: >
   Reviews the Copilot OS instruction files themselves and improves them based on
   accumulated evidence from engineering work in the repository. Use periodically or
   after a sprint of changes to improve the quality of the operating system.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Self-Reflection Improver — durabletask-go

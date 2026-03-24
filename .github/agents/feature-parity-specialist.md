@@ -3,11 +3,6 @@ name: Feature Parity Specialist
 description: >
   Analyzes and implements feature parity between durabletask-go and sibling Durable Task
   SDKs (.NET, Python, Java). Use when closing a parity gap or validating cross-SDK behavior.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Feature Parity Specialist — durabletask-go

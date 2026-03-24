@@ -3,11 +3,6 @@ name: Implementation Planner
 description: >
   Translates an approved feature design into a concrete, risk-ordered implementation
   plan for durabletask-go. Use after the Feature Designer has produced an approved design.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Implementation Planner — durabletask-go

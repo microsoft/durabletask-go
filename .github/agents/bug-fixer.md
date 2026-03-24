@@ -3,11 +3,6 @@ name: Bug Fixer
 description: >
   Fixes confirmed bugs in durabletask-go with minimal blast radius, regression tests,
   and explicit invariant proof. Use after Bug Finder has identified and proven a bug.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Bug Fixer — durabletask-go

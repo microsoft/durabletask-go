@@ -4,11 +4,6 @@ description: >
   Systematically finds bugs in durabletask-go through static analysis, test gap analysis,
   and orchestration-specific invariant checking. Use for bug triage, pre-release audits,
   or when investigating reported issues.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Bug Finder — durabletask-go
@@ -16,6 +11,12 @@ tools:
 ## Purpose
 
 Find real bugs through systematic evidence collection — not by scanning code for bad smells. Every finding must be a provable correctness violation, not a style preference.
+
+---
+
+## Shell Command Note
+
+The shell commands in this agent target Linux/macOS (matching CI). On Windows, use WSL, Git Bash, or adapt commands to PowerShell equivalents.
 
 ---
 

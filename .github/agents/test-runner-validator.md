@@ -3,9 +3,6 @@ name: Test Runner & Validator
 description: >
   Runs the durabletask-go test suite and validates results. Use after implementing
   a change to confirm it passes all relevant tests before declaring done.
-tools:
-  - read_file
-  - run_terminal_command
 ---
 
 # Test Runner & Validator — durabletask-go

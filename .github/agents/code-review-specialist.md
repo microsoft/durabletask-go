@@ -4,11 +4,6 @@ description: >
   Performs rigorous, evidence-backed code review for durabletask-go PRs.
   Focuses on orchestration correctness, interface contracts, serialization safety,
   and parity with the Durable Task cross-SDK protocol.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Code Review Specialist — durabletask-go

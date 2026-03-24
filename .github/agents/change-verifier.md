@@ -4,11 +4,6 @@ description: >
   Verifies that a change in durabletask-go is complete, correct, and safe to merge.
   Runs all validation checks and produces a structured pass/fail report.
   Use as the final gate before declaring a PR ready for review.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Change Verifier — durabletask-go

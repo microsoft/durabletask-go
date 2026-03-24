@@ -1,7 +1,8 @@
-# Copilot Instructions - durabletask-go
+# Copilot Instructions — durabletask-go
 
 > These instructions apply to every Copilot interaction in this repository.
 > They encode repo-specific facts, not generic advice.
+> Detailed rules for specific file types are in `.github/instructions/*.instructions.md`.
 
 ## What This Repository Is
 
@@ -48,14 +49,7 @@ Key facts before making any change:
 - The errorlint linter enforces correct wrapping - run golangci-lint run before declaring done.
 - Never swallow errors silently.
 
-Sentinel errors in api/: ErrInstanceNotFound, ErrNotStarted, ErrNotCompleted,
-ErrNoFailures, ErrDuplicateInstance, ErrIgnoreInstance
-
-Sentinel errors in backend/: ErrTaskHubExists, ErrTaskHubNotFound, ErrNotInitialized,
-ErrWorkItemLockLost, ErrBackendAlreadyStarted, ErrOperationAborted,
-ErrNilHistoryEvent, ErrNilEventTimestamp, ErrNotExecutionStarted, ErrNoWorkItems
-
-Sentinel errors in task/: ErrTaskBlocked, ErrTaskCanceled
+For the full sentinel error list and examples, see `.github/instructions/go-source.instructions.md`.
 
 ### Interfaces and types
 
@@ -78,6 +72,8 @@ Sentinel errors in task/: ErrTaskBlocked, ErrTaskCanceled
   Do not recover from this panic in application code.
 - Worker concurrency uses marusama/semaphore/v2.
 - Worker polling uses cenkalti/backoff/v4: InitialInterval 50ms, MaxInterval 5s.
+
+For detailed rules, see `.github/instructions/go-source.instructions.md`.
 
 ### gRPC and proto
 
@@ -103,12 +99,15 @@ All changes must pass:
     go vet ./...
     golangci-lint run
     go test ./tests/...
-    POSTGRES_ENABLED=true go test ./tests/...       -coverpkg ./api,./task,./client,./backend/...,./internal/helpers
+    POSTGRES_ENABLED=true go test ./tests/... -coverpkg ./api,./task,./client,./backend/...,./internal/helpers
 
 Do not claim a change is complete until go test ./tests/... passes locally.
 
 Coverage packages: ./api,./task,./client,./backend/...,./internal/helpers
 Excluded from lint: internal/protos/ (generated), tests/mocks/ (generated).
+
+For test conventions and patterns, see `.github/instructions/tests.instructions.md`.
+For backend-specific rules, see `.github/instructions/backend-implementations.instructions.md`.
 
 ## Change-Scoping Discipline
 

@@ -3,11 +3,6 @@ name: Feature Designer
 description: >
   Designs new features for durabletask-go with orchestration-aware, parity-conscious,
   and API-stability-sensitive analysis. Use when starting any new capability.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Feature Designer — durabletask-go

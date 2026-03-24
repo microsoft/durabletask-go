@@ -3,11 +3,6 @@ name: Deployment & Release Readiness Reviewer
 description: >
   Validates that durabletask-go is ready for a new release tag. Checks changelog,
   versioning, API stability, CI health, and cross-SDK compatibility markers.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Deployment & Release Readiness Reviewer — durabletask-go

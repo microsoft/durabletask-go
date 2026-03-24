@@ -3,11 +3,6 @@ name: Cleanup & Refactor Specialist
 description: >
   Performs safe, behavior-preserving cleanup and refactoring in durabletask-go.
   Never mixes semantic changes into cleanup PRs without explicit justification.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Cleanup & Refactor Specialist — durabletask-go

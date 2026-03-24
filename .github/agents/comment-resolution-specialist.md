@@ -3,11 +3,6 @@ name: Comment Resolution Specialist
 description: >
   Resolves PR review comments on durabletask-go with code evidence, not appeasement.
   Use when addressing reviewer feedback on an open PR.
-tools:
-  - read_file
-  - list_directory
-  - search_files
-  - run_terminal_command
 ---
 
 # Comment Resolution Specialist — durabletask-go

@@ -23,6 +23,12 @@ Use this skill before pushing a `vX.Y.Z` tag to validate that the release is com
 
 ---
 
+## Shell Command Note
+
+The shell commands in this skill target Linux/macOS (matching CI). On Windows, use WSL, Git Bash, or adapt commands to PowerShell equivalents.
+
+---
+
 ## Step 1: Determine Release Version
 
 ```bash
