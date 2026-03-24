@@ -432,14 +432,21 @@ func getActivityExecutionKey(iid string, taskID int32) string {
 
 // CompleteEntityTask implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) CompleteEntityTask(ctx context.Context, res *protos.EntityBatchResult) (*protos.CompleteTaskResponse, error) {
-	// EntityBatchResult doesn't include instance ID (unlike OrchestratorResponse/ActivityResponse).
-	// We use a FIFO queue to correlate completions with dispatched entity work items, since the
-	// worker processes them in order.
+	// EntityBatchResult doesn't include an instance ID field (unlike OrchestratorResponse/ActivityResponse).
+	// The worker passes the instance ID via gRPC metadata for correlation.
 	var key string
-	select {
-	case key = <-g.entityQueue:
-	default:
-		return emptyCompleteTaskResponse, fmt.Errorf("no pending entity found for completion")
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if values := md.Get("entity-instance-id"); len(values) > 0 {
+			key = values[0]
+		}
+	}
+	if key == "" {
+		// Fallback to FIFO queue for non-Go workers that don't send metadata.
+		select {
+		case key = <-g.entityQueue:
+		default:
+			return emptyCompleteTaskResponse, fmt.Errorf("no pending entity found for completion: missing entity-instance-id metadata")
+		}
 	}
 
 	p, ok := g.pendingEntities.LoadAndDelete(key)

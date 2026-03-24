@@ -14,6 +14,7 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
 	"google.golang.org/grpc/codes"
+	grpcmetadata "google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -122,7 +123,7 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 			} else if actReq := workItem.GetActivityRequest(); actReq != nil {
 				go c.processActivityWorkItem(ctx, executor, actReq)
 			} else if entityReq := workItem.GetEntityRequest(); entityReq != nil {
-				c.processEntityWorkItem(ctx, executor, entityReq)
+				go c.processEntityWorkItem(ctx, executor, entityReq)
 			} else {
 				c.logger.Warnf("received unknown work item type: %v", workItem)
 			}
@@ -225,7 +226,11 @@ func (c *TaskHubGrpcClient) processEntityWorkItem(
 		}
 	}
 
-	if _, err = c.client.CompleteEntityTask(ctx, result); err != nil {
+	// Pass the entity instance ID via gRPC metadata so the server can correlate
+	// the completion with the correct pending entity (EntityBatchResult doesn't
+	// include an instance ID field in the proto).
+	completeCtx := grpcmetadata.AppendToOutgoingContext(ctx, "entity-instance-id", req.InstanceId)
+	if _, err = c.client.CompleteEntityTask(completeCtx, result); err != nil {
 		if ctx.Err() != nil {
 			c.logger.Warn("failed to complete entity task: context canceled")
 		} else {
