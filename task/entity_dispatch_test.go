@@ -279,6 +279,30 @@ func Test_EntityDispatcher_ExplicitDeleteOverridesImplicit(t *testing.T) {
 	assert.Equal(t, 42, state.Value)
 }
 
+type entityWithContextDelete struct {
+	Value   int  `json:"value"`
+	Deleted bool `json:"deleted"`
+}
+
+func (e *entityWithContextDelete) Delete(ctx *EntityContext) (any, error) {
+	e.Deleted = true
+	return "deleted via ctx", ctx.SetState(nil)
+}
+
+func Test_EntityDispatcher_ExplicitContextDeleteCanClearState(t *testing.T) {
+	entity := NewEntityFor[entityWithContextDelete]()
+
+	ctx := &EntityContext{
+		ID:        api.NewEntityID("e", "k"),
+		Operation: "delete",
+		state:     entityState{value: []byte(`{"value":42,"deleted":false}`), hasValue: true},
+	}
+	result, err := entity(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "deleted via ctx", result)
+	assert.False(t, ctx.HasState())
+}
+
 // Throws_ExceptionPreserved: error propagation from entity methods
 type errorEntity struct{}
 
@@ -496,6 +520,34 @@ func Test_EntityDispatcher_ContextAndInputBinding(t *testing.T) {
 	require.NoError(t, ctx.GetState(&state))
 	require.Len(t, state.Log, 1)
 	assert.Equal(t, "@logger@main:Process:hello world", state.Log[0])
+}
+
+type explicitStateEntity struct {
+	Value int    `json:"value"`
+	Mode  string `json:"mode,omitempty"`
+}
+
+func (e *explicitStateEntity) Replace(ctx *EntityContext, value int) (any, error) {
+	e.Value = value
+	e.Mode = "receiver"
+	return value, ctx.SetState(explicitStateEntity{Value: value * 2, Mode: "context"})
+}
+
+func Test_EntityDispatcher_ExplicitContextStateWins(t *testing.T) {
+	entity := NewEntityFor[explicitStateEntity]()
+
+	ctx := &EntityContext{
+		ID:        api.NewEntityID("explicit", "k"),
+		Operation: "Replace",
+		rawInput:  []byte("5"),
+	}
+	result, err := entity(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 5, result)
+
+	var state explicitStateEntity
+	require.NoError(t, ctx.GetState(&state))
+	assert.Equal(t, explicitStateEntity{Value: 10, Mode: "context"}, state)
 }
 
 func Test_EntityDispatcher_ZeroValueInitialization(t *testing.T) {

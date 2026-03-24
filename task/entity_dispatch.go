@@ -74,8 +74,10 @@ func NewEntityFor[S any]() Entity {
 		}
 
 		// Save state back
-		if err := ctx.SetState(state); err != nil {
-			return nil, fmt.Errorf("failed to save entity state: %w", err)
+		if !ctx.stateDirty {
+			if err := ctx.SetState(state); err != nil {
+				return nil, fmt.Errorf("failed to save entity state: %w", err)
+			}
 		}
 		return result, nil
 	}

@@ -23,6 +23,7 @@ type EntityContext struct {
 
 	rawInput    []byte
 	state       entityState
+	stateDirty  bool
 	actions     []*protos.OperationAction
 	actionIDSeq int32
 }
@@ -53,6 +54,7 @@ func (ctx *EntityContext) GetState(v any) error {
 // SetState sets the entity state. The state must be JSON-serializable.
 // Passing nil deletes the entity state.
 func (ctx *EntityContext) SetState(state any) error {
+	ctx.stateDirty = true
 	if state == nil {
 		ctx.state.value = nil
 		ctx.state.hasValue = false
