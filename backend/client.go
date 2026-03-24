@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/helpers"
@@ -243,7 +245,21 @@ func (c *backendClient) SignalEntity(ctx context.Context, entityID api.EntityID,
 		return fmt.Errorf("failed to create entity instance: %w", createErr)
 	}
 
-	e := helpers.NewEventRaisedEvent(req.Name, req.Input)
+	// Build the .NET-compatible EntityRequestMessage payload with isSignal=true.
+	reqMsg := helpers.EntityRequestMessage{
+		ID:        uuid.New().String(),
+		IsSignal:  true,
+		Operation: req.Name,
+	}
+	if req.Input != nil {
+		reqMsg.Input = req.Input.GetValue()
+	}
+	payload, err := json.Marshal(reqMsg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal signal request: %w", err)
+	}
+
+	e := helpers.NewEventRaisedEvent(helpers.EntityRequestEventName, wrapperspb.String(string(payload)))
 	if err := c.be.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
 		return fmt.Errorf("failed to signal entity: %w", err)
 	}

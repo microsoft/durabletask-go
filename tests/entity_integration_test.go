@@ -126,3 +126,64 @@ func Test_InProcess_Entity_AutoDispatch(t *testing.T) {
 		return strings.Contains(meta.SerializedState, "2")
 	}, 10*time.Second, 200*time.Millisecond)
 }
+
+// Test that CallEntity works end-to-end: an orchestration calls an entity and gets a response.
+func Test_InProcess_Entity_CallEntity(t *testing.T) {
+	r := task.NewTaskRegistry()
+
+	// Register a counter entity
+	require.NoError(t, r.AddEntityN("counter", func(ctx *task.EntityContext) (any, error) {
+		var count int
+		if ctx.HasState() {
+			_ = ctx.GetState(&count)
+		}
+		switch ctx.Operation {
+		case "add":
+			var amount int
+			if err := ctx.GetInput(&amount); err != nil {
+				return nil, err
+			}
+			count += amount
+		case "get":
+			// just return
+		}
+		_ = ctx.SetState(count)
+		return count, nil
+	}))
+
+	// Register an orchestration that calls the entity and returns the result
+	require.NoError(t, r.AddOrchestratorN("CallEntityOrchestrator", func(ctx *task.OrchestrationContext) (any, error) {
+		entityID := api.NewEntityID("counter", "fromOrch")
+
+		// Call entity (request-response) to add and get result
+		var result int
+		if err := ctx.CallEntity(entityID, "add", task.WithEntityInput(15)).Await(&result); err != nil {
+			return nil, err
+		}
+
+		return result, nil
+	}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	baseClient, worker := initTaskHubWorker(ctx, r)
+	defer func() {
+		if err := worker.Shutdown(context.Background()); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
+
+	// Note: we do NOT pre-create the entity — the orchestration processor
+	// auto-creates entity instances when pending messages target entity IDs.
+
+	// Run the orchestration
+	id, err := baseClient.ScheduleNewOrchestration(ctx, "CallEntityOrchestrator")
+	require.NoError(t, err)
+
+	// Wait for orchestration to complete
+	metadata, err := baseClient.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, "ORCHESTRATION_STATUS_COMPLETED", metadata.RuntimeStatus.String())
+	assert.Contains(t, metadata.SerializedOutput, "15")
+}

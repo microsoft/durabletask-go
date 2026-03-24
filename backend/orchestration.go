@@ -2,10 +2,12 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -153,6 +155,27 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 // CompleteWorkItem implements TaskProcessor
 func (p *orchestratorProcessor) CompleteWorkItem(ctx context.Context, wi WorkItem) error {
 	owi := wi.(*OrchestrationWorkItem)
+
+	// Auto-create entity instances for any pending messages targeting entity IDs.
+	// This ensures CallEntity from orchestrations works even when the target entity
+	// doesn't exist yet, without requiring backend-specific entity support.
+	for _, msg := range owi.State.PendingMessages() {
+		if msg.HistoryEvent.GetExecutionStarted() != nil {
+			continue // sub-orchestration creation, handled by the backend
+		}
+		entityID, err := api.EntityIDFromString(msg.TargetInstanceID)
+		if err != nil {
+			continue // not an entity ID
+		}
+		startEvent := helpers.NewExecutionStartedEvent(entityID.Name, msg.TargetInstanceID, nil, nil, nil, nil)
+		if createErr := p.be.CreateOrchestrationInstance(ctx, startEvent, WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
+			Action:          protos.CreateOrchestrationAction_IGNORE,
+			OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING},
+		})); createErr != nil && !errors.Is(createErr, api.ErrDuplicateInstance) && !errors.Is(createErr, api.ErrIgnoreInstance) {
+			p.logger.Warnf("%v: failed to auto-create entity instance %s: %v", owi.InstanceID, msg.TargetInstanceID, createErr)
+		}
+	}
+
 	return p.be.CompleteOrchestrationWorkItem(ctx, owi)
 }
 
@@ -186,16 +209,61 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 		entityState = wrapperspb.String(meta.SerializedCustomStatus)
 	}
 
-	// Convert new EventRaised events into entity OperationRequests
+	// entityCallInfo tracks response routing for CallEntity requests.
+	type entityCallInfo struct {
+		callerInstanceID string
+		requestID        string
+		isSignal         bool
+	}
+
+	// Convert new EventRaised and EventSent events into entity OperationRequests.
+	// Events use the .NET-compatible protocol: event name is "op" and the payload
+	// is a JSON EntityRequestMessage containing routing and operation information.
 	var operations []*protos.OperationRequest
+	var callInfos []entityCallInfo // parallel array
 	for _, e := range wi.NewEvents {
+		var eventName string
+		var eventInput *wrapperspb.StringValue
+
 		if er := e.GetEventRaised(); er != nil {
-			operations = append(operations, &protos.OperationRequest{
-				Operation: er.Name,
-				RequestId: fmt.Sprintf("%d", e.EventId),
-				Input:     er.Input,
-			})
+			eventName = er.Name
+			eventInput = er.Input
+		} else if es := e.GetEventSent(); es != nil {
+			eventName = es.Name
+			eventInput = es.Input
+		} else {
+			continue
 		}
+
+		if eventName != helpers.EntityRequestEventName {
+			continue
+		}
+
+		var reqMsg helpers.EntityRequestMessage
+		if eventInput == nil || eventInput.GetValue() == "" {
+			w.logger.Warnf("%v: received 'op' event with no payload, skipping", wi.InstanceID)
+			continue
+		}
+		if err := json.Unmarshal([]byte(eventInput.GetValue()), &reqMsg); err != nil {
+			w.logger.Warnf("%v: failed to parse RequestMessage: %v", wi.InstanceID, err)
+			continue
+		}
+
+		var inputVal *wrapperspb.StringValue
+		if reqMsg.Input != "" {
+			inputVal = wrapperspb.String(reqMsg.Input)
+		}
+
+		operations = append(operations, &protos.OperationRequest{
+			Operation: reqMsg.Operation,
+			RequestId: reqMsg.ID,
+			Input:     inputVal,
+		})
+		callInfos = append(callInfos, entityCallInfo{
+			callerInstanceID: reqMsg.ParentInstanceID,
+			requestID:        reqMsg.ID,
+			isSignal:         reqMsg.IsSignal,
+		})
 	}
 
 	if len(operations) == 0 {
@@ -239,10 +307,57 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 	// Save entity state as the orchestration's custom status
 	wi.State.CustomStatus = batchResult.EntityState
 
+	// Send results back to calling orchestrations (for CallEntity requests)
+	for i, info := range callInfos {
+		if info.isSignal || info.callerInstanceID == "" || info.requestID == "" {
+			continue // signal, no response needed
+		}
+		if i >= len(batchResult.Results) {
+			break
+		}
+
+		// Build the .NET-compatible EntityResponseMessage payload.
+		var resp helpers.EntityResponseMessage
+		if success := batchResult.Results[i].GetSuccess(); success != nil {
+			if success.Result != nil {
+				resp.Result = success.Result.GetValue()
+			}
+		} else if failure := batchResult.Results[i].GetFailure(); failure != nil {
+			resp.ErrorMessage = failure.FailureDetails.GetErrorMessage()
+		}
+
+		respJSON, err := json.Marshal(resp)
+		if err != nil {
+			w.logger.Warnf("%v: failed to marshal entity response: %v", wi.InstanceID, err)
+			continue
+		}
+
+		// Send the result as an EventRaised to the caller orchestration, using the requestID
+		// as the event name so it matches the WaitForSingleEvent in CallEntity.
+		responseEvent := helpers.NewEventRaisedEvent(info.requestID, wrapperspb.String(string(respJSON)))
+		if err := w.be.AddNewOrchestrationEvent(ctx, api.InstanceID(info.callerInstanceID), responseEvent); err != nil {
+			w.logger.Warnf("%v: failed to send entity response to %s: %v", wi.InstanceID, info.callerInstanceID, err)
+		}
+	}
+
 	// Process actions from the entity batch result (signals to other entities, new orchestrations)
 	for _, action := range batchResult.Actions {
 		if signal := action.GetSendSignal(); signal != nil {
-			e := helpers.NewEventRaisedEvent(signal.Name, signal.Input)
+			// Wrap entity-to-entity signals in the .NET-compatible EntityRequestMessage format.
+			sigMsg := helpers.EntityRequestMessage{
+				ID:        uuid.New().String(),
+				IsSignal:  true,
+				Operation: signal.Name,
+			}
+			if signal.Input != nil {
+				sigMsg.Input = signal.Input.GetValue()
+			}
+			sigJSON, err := json.Marshal(sigMsg)
+			if err != nil {
+				w.logger.Warnf("%v: failed to marshal signal request: %v", wi.InstanceID, err)
+				continue
+			}
+			e := helpers.NewEventRaisedEvent("op", wrapperspb.String(string(sigJSON)))
 			if err := w.be.AddNewOrchestrationEvent(ctx, api.InstanceID(signal.InstanceId), e); err != nil {
 				w.logger.Warnf("%v: failed to send entity signal to %s: %v", wi.InstanceID, signal.InstanceId, err)
 			}

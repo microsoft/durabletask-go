@@ -2,7 +2,6 @@ package task
 
 import (
 	"container/list"
-	"crypto/sha1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
 	"github.com/microsoft/durabletask-go/internal/helpers"
@@ -243,45 +243,21 @@ func (octx *OrchestrationContext) SetCustomStatus(cs string) {
 	octx.customStatus = cs
 }
 
+// guidNamespace UUID matching the .NET SDK's DnsNamespaceValue
+var guidNamespace = uuid.MustParse("9e952958-5e33-4daf-827f-2fa12937b875")
+
 // NewGuid generates a deterministic UUID v5 that is safe for use in orchestrator functions.
 // The generated UUID is based on the orchestration instance ID, the current orchestrator
 // timestamp, and an internal counter, making it deterministic across replays.
 //
 // This is compatible with the .NET Durable Task SDK's NewGuid implementation.
 func (ctx *OrchestrationContext) NewGuid() string {
-	// Namespace UUID: 9e952958-5e33-4daf-827f-2fa12937b875
-	// This matches the .NET SDK's DnsNamespaceValue
-	namespaceBytes := [16]byte{
-		0x9e, 0x95, 0x29, 0x58,
-		0x5e, 0x33,
-		0x4d, 0xaf,
-		0x82, 0x7f,
-		0x2f, 0xa1, 0x29, 0x37, 0xb8, 0x75,
-	}
-
 	// Format: instanceID_timestamp_counter
 	// The timestamp uses .NET's 'o' format (7 fractional digits)
 	ts := ctx.CurrentTimeUtc.UTC().Format("2006-01-02T15:04:05.0000000Z")
 	name := fmt.Sprintf("%s_%s_%d", ctx.ID, ts, ctx.newGuidCounter)
 	ctx.newGuidCounter++
-
-	// SHA1(namespace + name) per UUID v5 spec
-	h := sha1.New()
-	h.Write(namespaceBytes[:])
-	h.Write([]byte(name))
-	hash := h.Sum(nil)
-
-	// Take first 16 bytes
-	guid := hash[:16]
-
-	// Set version to 5
-	guid[6] = (guid[6] & 0x0F) | 0x50
-	// Set variant to RFC 4122
-	guid[8] = (guid[8] & 0x3F) | 0x80
-
-	// Format as UUID string
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		guid[0:4], guid[4:6], guid[6:8], guid[8:10], guid[10:16])
+	return uuid.NewSHA1(guidNamespace, []byte(name)).String()
 }
 
 // GetInput unmarshals the serialized orchestration input and stores it in [v].
@@ -493,17 +469,34 @@ func (ctx *OrchestrationContext) CallEntity(entityID api.EntityID, operationName
 	// Generate a deterministic request ID for response correlation.
 	requestID := ctx.NewGuid()
 
-	// Send the operation request to the entity via a SendEvent action.
+	// Build the .NET-compatible RequestMessage payload.
+	reqMsg := helpers.EntityRequestMessage{
+		ID:               requestID,
+		ParentInstanceID: string(ctx.ID),
+		IsSignal:         false,
+		Operation:        operationName,
+	}
+	if options.rawInput != nil {
+		reqMsg.Input = options.rawInput.GetValue()
+	}
+	payload, err := json.Marshal(reqMsg)
+	if err != nil {
+		failedTask := newTask(ctx)
+		failedTask.fail(helpers.NewTaskFailureDetails(err))
+		return failedTask
+	}
+
 	sendEventAction := helpers.NewSendEventAction(
 		entityID.String(),
-		operationName+"|"+requestID,
-		options.rawInput,
+		helpers.EntityRequestEventName,
+		wrapperspb.String(string(payload)),
 	)
 	sendEventAction.Id = ctx.getNextSequenceNumber()
 	ctx.pendingActions[sendEventAction.Id] = sendEventAction
 
 	// Wait for the entity's response via an external event keyed on the request ID.
-	return ctx.WaitForSingleEvent(requestID, -1)
+	// Wrap the task to unwrap the ResponseMessage payload.
+	return &entityResponseTask{delegate: ctx.WaitForSingleEvent(requestID, -1)}
 }
 
 // SignalEntity sends a fire-and-forget signal to an entity.
@@ -520,10 +513,24 @@ func (ctx *OrchestrationContext) SignalEntity(entityID api.EntityID, operationNa
 		}
 	}
 
+	// Build the .NET-compatible RequestMessage payload with isSignal=true.
+	reqMsg := helpers.EntityRequestMessage{
+		ID:        ctx.NewGuid(),
+		IsSignal:  true,
+		Operation: operationName,
+	}
+	if options.rawInput != nil {
+		reqMsg.Input = options.rawInput.GetValue()
+	}
+	payload, err := json.Marshal(reqMsg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal signal request: %w", err)
+	}
+
 	sendEventAction := helpers.NewSendEventAction(
 		entityID.String(),
-		operationName,
-		options.rawInput,
+		helpers.EntityRequestEventName,
+		wrapperspb.String(string(payload)),
 	)
 	sendEventAction.Id = ctx.getNextSequenceNumber()
 	ctx.pendingActions[sendEventAction.Id] = sendEventAction
@@ -858,4 +865,34 @@ func (ctx *OrchestrationContext) actions() []*protos.OrchestratorAction {
 		}
 	}
 	return actions
+}
+
+// entityResponseTask wraps a task to unwrap entity response payloads.
+type entityResponseTask struct {
+	delegate Task
+}
+
+func (t *entityResponseTask) Await(v any) error {
+	var resp helpers.EntityResponseMessage
+	if err := t.delegate.Await(&resp); err != nil {
+		return err
+	}
+	if resp.ErrorMessage != "" {
+		return &taskFailedError{ErrorMessage: resp.ErrorMessage}
+	}
+	if v != nil && resp.Result != "" {
+		if err := unmarshalData([]byte(resp.Result), v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// taskFailedError represents a failure returned by an entity operation.
+type taskFailedError struct {
+	ErrorMessage string
+}
+
+func (e *taskFailedError) Error() string {
+	return e.ErrorMessage
 }
