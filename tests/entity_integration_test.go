@@ -71,18 +71,8 @@ func Test_InProcess_Entity_SignalAndQuery(t *testing.T) {
 
 // Test that entities work with the auto-dispatch pattern.
 func Test_InProcess_Entity_AutoDispatch(t *testing.T) {
-	type counter struct {
-		Value int `json:"value"`
-	}
-
 	r := task.NewTaskRegistry()
-	require.NoError(t, r.AddEntityN("smartcounter", task.NewEntityFor[counter]()))
-	// Register a dummy Add method on counter for the dispatcher
-	// Actually, we need counter to have methods. Let's use the raw entity pattern instead.
-	// Re-register with raw function since we can't add methods to a local type.
-
-	r2 := task.NewTaskRegistry()
-	require.NoError(t, r2.AddEntityN("counter", func(ctx *task.EntityContext) (any, error) {
+	require.NoError(t, r.AddEntityN("counter", func(ctx *task.EntityContext) (any, error) {
 		var val int
 		if ctx.HasState() {
 			_ = ctx.GetState(&val)
@@ -101,7 +91,7 @@ func Test_InProcess_Entity_AutoDispatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	baseClient, worker := initTaskHubWorker(ctx, r2)
+	baseClient, worker := initTaskHubWorker(ctx, r)
 	client := baseClient.(backend.EntityTaskHubClient)
 	defer func() {
 		if err := worker.Shutdown(context.Background()); err != nil {

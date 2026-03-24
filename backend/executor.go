@@ -233,6 +233,7 @@ func (g *grpcExecutor) Shutdown(ctx context.Context) error {
 func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, iid api.InstanceID, req *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
 	key := req.InstanceId
 	result := &entityExecutionResult{complete: make(chan struct{})}
+	executor.pendingEntities.Store(key, result)
 
 	workItem := &protos.WorkItem{
 		Request: &protos.WorkItem_EntityRequest{
@@ -240,15 +241,14 @@ func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, iid api.Instanc
 		},
 	}
 
-	// Send the work item first, then register pending state
 	select {
 	case <-ctx.Done():
+		executor.pendingEntities.Delete(key)
 		executor.logger.Warnf("%s: context canceled before dispatching entity work item", iid)
 		return nil, ctx.Err()
 	case executor.workItemQueue <- workItem:
 	}
 
-	executor.pendingEntities.Store(key, result)
 	executor.entityQueue <- key
 
 	select {
@@ -513,6 +513,17 @@ func (g *grpcExecutor) RaiseEvent(ctx context.Context, req *protos.RaiseEventReq
 
 // SignalEntity implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) SignalEntity(ctx context.Context, req *protos.SignalEntityRequest) (*protos.SignalEntityResponse, error) {
+	// Ensure the entity orchestration instance exists. Create with IGNORE policy
+	// so it's a no-op if the instance already exists.
+	startEvent := helpers.NewExecutionStartedEvent(req.Name, req.InstanceId, nil, nil, nil, nil)
+	createErr := g.backend.CreateOrchestrationInstance(ctx, startEvent, WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
+		Action:          protos.CreateOrchestrationAction_IGNORE,
+		OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING},
+	}))
+	if createErr != nil && !errors.Is(createErr, api.ErrDuplicateInstance) && !errors.Is(createErr, api.ErrIgnoreInstance) {
+		return nil, fmt.Errorf("failed to create entity instance: %w", createErr)
+	}
+
 	e := helpers.NewEventRaisedEvent(req.Name, req.Input)
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
 		return nil, fmt.Errorf("failed to signal entity: %w", err)
