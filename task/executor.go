@@ -170,10 +170,6 @@ func (te *taskExecutor) ExecuteEntity(ctx context.Context, id api.InstanceID, re
 				}
 			}
 
-			// Operation succeeded - commit state
-			state = entityCtx.state
-			allActions = append(allActions, entityCtx.actions...)
-
 			var rawResult *wrapperspb.StringValue
 			if output != nil {
 				bytes, marshalErr := marshalData(output)
@@ -193,6 +189,10 @@ func (te *taskExecutor) ExecuteEntity(ctx context.Context, id api.InstanceID, re
 					rawResult = wrapperspb.String(string(bytes))
 				}
 			}
+
+			// Only commit state after successful marshal
+			state = entityCtx.state
+			allActions = append(allActions, entityCtx.actions...)
 
 			return &protos.OperationResult{
 				ResultType: &protos.OperationResult_Success{

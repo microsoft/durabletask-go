@@ -19,7 +19,7 @@ type EntityID struct {
 
 // NewEntityID creates a new EntityID with the specified name and key.
 func NewEntityID(name string, key string) EntityID {
-	return EntityID{Name: name, Key: key}
+	return EntityID{Name: strings.ToLower(name), Key: key}
 }
 
 // String returns the entity instance ID in the format "@<name>@<key>".

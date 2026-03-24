@@ -2,6 +2,7 @@ package backend
 
 import (
 	context "context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -520,9 +522,29 @@ func (g *grpcExecutor) RaiseEvent(ctx context.Context, req *protos.RaiseEventReq
 
 // SignalEntity implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) SignalEntity(ctx context.Context, req *protos.SignalEntityRequest) (*protos.SignalEntityResponse, error) {
+	// Parse entity name from the instance ID
+	entityID, err := api.EntityIDFromString(req.InstanceId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse entity instance ID: %w", err)
+	}
+
+	// Build wire-compatible EntityRequestMessage
+	requestMsg := helpers.EntityRequestMessage{
+		ID:        uuid.New().String(),
+		IsSignal:  true,
+		Operation: req.Name,
+	}
+	if req.Input != nil {
+		requestMsg.Input = req.Input.GetValue()
+	}
+	payload, err := json.Marshal(requestMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal entity request message: %w", err)
+	}
+
 	// Ensure the entity orchestration instance exists. Create with IGNORE policy
 	// so it's a no-op if the instance already exists.
-	startEvent := helpers.NewExecutionStartedEvent(req.Name, req.InstanceId, nil, nil, nil, nil)
+	startEvent := helpers.NewExecutionStartedEvent(entityID.Name, req.InstanceId, nil, nil, nil, nil)
 	createErr := g.backend.CreateOrchestrationInstance(ctx, startEvent, WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
 		Action:          protos.CreateOrchestrationAction_IGNORE,
 		OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING},
@@ -531,7 +553,7 @@ func (g *grpcExecutor) SignalEntity(ctx context.Context, req *protos.SignalEntit
 		return nil, fmt.Errorf("failed to create entity instance: %w", createErr)
 	}
 
-	e := helpers.NewEventRaisedEvent(req.Name, req.Input)
+	e := helpers.NewEventRaisedEvent(helpers.EntityRequestEventName, wrapperspb.String(string(payload)))
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
 		return nil, fmt.Errorf("failed to signal entity: %w", err)
 	}

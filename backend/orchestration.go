@@ -301,7 +301,12 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 
 	// Add incoming events to state history
 	for _, e := range wi.NewEvents {
-		_ = wi.State.AddEvent(e)
+		if err := wi.State.AddEvent(e); err != nil {
+			if !errors.Is(err, ErrDuplicateEvent) {
+				return fmt.Errorf("failed to add event to entity state: %w", err)
+			}
+			w.logger.Debugf("%v: skipping duplicate event in entity history", wi.InstanceID)
+		}
 	}
 
 	// Save entity state as the orchestration's custom status
