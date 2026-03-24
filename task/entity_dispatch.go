@@ -131,24 +131,39 @@ func dispatchToMethod[S any](ctx *EntityContext, state *S) (any, error) {
 	results := method.Func.Call(args)
 
 	// Parse return values: expect (any, error) or (error) or ()
+	errorType := reflect.TypeOf((*error)(nil)).Elem()
+	isNilValue := func(v reflect.Value) bool {
+		switch v.Kind() {
+		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+			return v.IsNil()
+		default:
+			return false
+		}
+	}
+
 	switch len(results) {
 	case 0:
 		return nil, nil
 	case 1:
-		// Could be just error
-		if results[0].Type().Implements(reflect.TypeOf((*error)(nil)).Elem()) {
-			if results[0].IsNil() {
+		if results[0].Type().Implements(errorType) {
+			if isNilValue(results[0]) {
 				return nil, nil
 			}
 			return nil, results[0].Interface().(error)
 		}
 		return results[0].Interface(), nil
 	case 2:
-		var retErr error
-		if !results[1].IsNil() {
-			retErr = results[1].Interface().(error)
+		errVal := results[1]
+		if !errVal.Type().Implements(errorType) {
+			return nil, fmt.Errorf("method '%s' has unsupported error return type: %s", ctx.Operation, errVal.Type())
 		}
-		if results[0].IsNil() {
+
+		var retErr error
+		if !isNilValue(errVal) {
+			retErr = errVal.Interface().(error)
+		}
+
+		if isNilValue(results[0]) {
 			return nil, retErr
 		}
 		return results[0].Interface(), retErr

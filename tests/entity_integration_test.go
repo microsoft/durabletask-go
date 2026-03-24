@@ -3,6 +3,7 @@ package tests
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,22 +54,19 @@ func Test_InProcess_Entity_SignalAndQuery(t *testing.T) {
 	err := client.SignalEntity(ctx, entityID, "add", api.WithSignalInput(5))
 	require.NoError(t, err)
 
-	// Give the entity worker time to process
-	time.Sleep(2 * time.Second)
-
 	// Signal again to add 3
 	err = client.SignalEntity(ctx, entityID, "add", api.WithSignalInput(3))
 	require.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
-
-	// Verify state via FetchEntityMetadata
-	meta, err := client.FetchEntityMetadata(ctx, entityID, true)
-	require.NoError(t, err)
-	require.NotNil(t, meta)
-	assert.Equal(t, entityID, meta.InstanceID)
-	// State should be 8 (5+3), stored as custom status
-	assert.Contains(t, meta.SerializedState, "8")
+	// Poll until state contains "8"
+	require.Eventually(t, func() bool {
+		meta, err := client.FetchEntityMetadata(ctx, entityID, true)
+		if err != nil || meta == nil {
+			return false
+		}
+		return assert.ObjectsAreEqual(entityID, meta.InstanceID) &&
+			strings.Contains(meta.SerializedState, "8")
+	}, 10*time.Second, 200*time.Millisecond)
 }
 
 // Test that entities work with the auto-dispatch pattern.
@@ -119,11 +117,12 @@ func Test_InProcess_Entity_AutoDispatch(t *testing.T) {
 	require.NoError(t, client.SignalEntity(ctx, entityID, "increment"))
 	require.NoError(t, client.SignalEntity(ctx, entityID, "decrement"))
 
-	time.Sleep(3 * time.Second)
-
-	// Should be 2 (3 increments - 1 decrement)
-	meta, err := client.FetchEntityMetadata(ctx, entityID, true)
-	require.NoError(t, err)
-	require.NotNil(t, meta)
-	assert.Contains(t, meta.SerializedState, "2")
+	// Poll until state contains "2"
+	require.Eventually(t, func() bool {
+		meta, err := client.FetchEntityMetadata(ctx, entityID, true)
+		if err != nil || meta == nil {
+			return false
+		}
+		return strings.Contains(meta.SerializedState, "2")
+	}, 10*time.Second, 200*time.Millisecond)
 }

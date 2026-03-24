@@ -233,8 +233,6 @@ func (g *grpcExecutor) Shutdown(ctx context.Context) error {
 func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, iid api.InstanceID, req *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
 	key := req.InstanceId
 	result := &entityExecutionResult{complete: make(chan struct{})}
-	executor.pendingEntities.Store(key, result)
-	executor.entityQueue <- key
 
 	workItem := &protos.WorkItem{
 		Request: &protos.WorkItem_EntityRequest{
@@ -242,6 +240,7 @@ func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, iid api.Instanc
 		},
 	}
 
+	// Send the work item first, then register pending state
 	select {
 	case <-ctx.Done():
 		executor.logger.Warnf("%s: context canceled before dispatching entity work item", iid)
@@ -249,8 +248,12 @@ func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, iid api.Instanc
 	case executor.workItemQueue <- workItem:
 	}
 
+	executor.pendingEntities.Store(key, result)
+	executor.entityQueue <- key
+
 	select {
 	case <-ctx.Done():
+		executor.pendingEntities.Delete(key)
 		executor.logger.Warnf("%s: context canceled before receiving entity result", iid)
 		return nil, ctx.Err()
 	case <-result.complete:

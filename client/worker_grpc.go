@@ -122,7 +122,7 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 			} else if actReq := workItem.GetActivityRequest(); actReq != nil {
 				go c.processActivityWorkItem(ctx, executor, actReq)
 			} else if entityReq := workItem.GetEntityRequest(); entityReq != nil {
-				go c.processEntityWorkItem(ctx, executor, entityReq)
+				c.processEntityWorkItem(ctx, executor, entityReq)
 			} else {
 				c.logger.Warnf("received unknown work item type: %v", workItem)
 			}

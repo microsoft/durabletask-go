@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -69,8 +68,10 @@ func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkIte
 	w.logger.Debugf("%v: received work item with %d new event(s): %v", wi.InstanceID, len(wi.NewEvents), helpers.HistoryListSummary(wi.NewEvents))
 
 	// Detect entity instances by their "@name@key" prefix and route to entity executor
-	if w.entityExecutor != nil && strings.HasPrefix(string(wi.InstanceID), "@") {
-		return w.processEntityWorkItem(ctx, wi)
+	if w.entityExecutor != nil {
+		if _, err := api.EntityIDFromString(string(wi.InstanceID)); err == nil {
+			return w.processEntityWorkItem(ctx, wi)
+		}
 	}
 
 	// TODO: Caching
@@ -214,7 +215,8 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 		return fmt.Errorf("failed to execute entity: %w", err)
 	}
 	if batchResult.FailureDetails != nil {
-		return fmt.Errorf("entity execution failed: %s", batchResult.FailureDetails.ErrorMessage)
+		w.logger.Errorf("%v: non-retriable entity execution failure: %s", wi.InstanceID, batchResult.FailureDetails.ErrorMessage)
+		return nil
 	}
 
 	// Ensure the entity orchestration instance exists in state

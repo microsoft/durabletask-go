@@ -496,7 +496,7 @@ func (ctx *OrchestrationContext) CallEntity(entityID api.EntityID, operationName
 	// Send the operation request to the entity via a SendEvent action.
 	sendEventAction := helpers.NewSendEventAction(
 		entityID.String(),
-		operationName,
+		operationName+"|"+requestID,
 		options.rawInput,
 	)
 	sendEventAction.Id = ctx.getNextSequenceNumber()
@@ -544,41 +544,7 @@ func (ctx *OrchestrationContext) SignalEntity(entityID api.EntityID, operationNa
 //	defer unlock()
 //	// ... perform entity operations safely ...
 func (ctx *OrchestrationContext) LockEntities(entityIDs ...api.EntityID) (unlock func(), err error) {
-	if len(entityIDs) == 0 {
-		return func() {}, nil
-	}
-
-	// Generate a deterministic ID for this critical section
-	criticalSectionID := ctx.NewGuid()
-
-	// Send lock acquisition events to each entity and wait for confirmation
-	for _, entityID := range entityIDs {
-		sendEventAction := helpers.NewSendEventAction(
-			entityID.String(),
-			"lock:"+criticalSectionID,
-			nil,
-		)
-		sendEventAction.Id = ctx.getNextSequenceNumber()
-		ctx.pendingActions[sendEventAction.Id] = sendEventAction
-
-		// Wait for the lock confirmation
-		if err := ctx.WaitForSingleEvent("lock:"+entityID.String(), -1).Await(nil); err != nil {
-			return nil, fmt.Errorf("failed to acquire lock on entity %s: %w", entityID, err)
-		}
-	}
-
-	// Return an unlock function that releases all locks
-	return func() {
-		for _, entityID := range entityIDs {
-			releaseAction := helpers.NewSendEventAction(
-				entityID.String(),
-				"unlock:"+criticalSectionID,
-				nil,
-			)
-			releaseAction.Id = ctx.getNextSequenceNumber()
-			ctx.pendingActions[releaseAction.Id] = releaseAction
-		}
-	}, nil
+	return nil, fmt.Errorf("entity locking is not yet fully implemented: requires backend-level entity scheduler support")
 }
 
 func (ctx *OrchestrationContext) ContinueAsNew(newInput any, options ...ContinueAsNewOption) {

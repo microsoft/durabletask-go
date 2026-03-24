@@ -37,7 +37,7 @@ func EntityIDFromString(s string) (EntityID, error) {
 	if !ok {
 		return EntityID{}, fmt.Errorf("invalid entity instance ID format: missing second '@'")
 	}
-	return EntityID{Name: before, Key: after}, nil
+	return EntityID{Name: strings.ToLower(before), Key: after}, nil
 }
 
 // EntityMetadata contains metadata about an entity instance.
