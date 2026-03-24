@@ -482,8 +482,7 @@ func Test_Executor_EntityWildcardRegistration(t *testing.T) {
 func Test_Executor_EntitySignalAndStartOrchestrationActions(t *testing.T) {
 	r := task.NewTaskRegistry()
 	require.NoError(t, r.AddEntityN("coordinator", func(ctx *task.EntityContext) (any, error) {
-		switch ctx.Operation {
-		case "notify_all":
+		if ctx.Operation == "notify_all" {
 			// Signal another entity
 			_ = ctx.SignalEntity(api.NewEntityID("worker", "w1"), "process", nil)
 			_ = ctx.SignalEntity(api.NewEntityID("worker", "w2"), "process", nil)

@@ -46,13 +46,16 @@ func main() {
 
 	// Signal the entity to perform operations
 	if err := client.SignalEntity(ctx, counterID, "add", api.WithSignalInput(10)); err != nil {
-		log.Fatalf("Failed to signal entity: %v", err)
+		log.Printf("Failed to signal entity: %v", err) //nolint:gocritic // sample code, keeping simple
+		return
 	}
 	if err := client.SignalEntity(ctx, counterID, "add", api.WithSignalInput(5)); err != nil {
-		log.Fatalf("Failed to signal entity: %v", err)
+		log.Printf("Failed to signal entity: %v", err)
+		return
 	}
 	if err := client.SignalEntity(ctx, counterID, "add", api.WithSignalInput(-3)); err != nil {
-		log.Fatalf("Failed to signal entity: %v", err)
+		log.Printf("Failed to signal entity: %v", err)
+		return
 	}
 
 	// Wait for processing
@@ -61,7 +64,8 @@ func main() {
 	// Query the entity state
 	meta, err := client.FetchEntityMetadata(ctx, counterID, true)
 	if err != nil {
-		log.Fatalf("Failed to fetch entity: %v", err)
+		log.Printf("Failed to fetch entity: %v", err)
+		return
 	}
 	fmt.Printf("Counter state: %s\n", meta.SerializedState) // Expected: 12
 
@@ -70,20 +74,24 @@ func main() {
 	accountID := api.NewEntityID("bankaccount", "checking-001")
 
 	if err := client.SignalEntity(ctx, accountID, "Deposit", api.WithSignalInput(1000)); err != nil {
-		log.Fatalf("Failed to signal entity: %v", err)
+		log.Printf("Failed to signal entity: %v", err)
+		return
 	}
 	if err := client.SignalEntity(ctx, accountID, "Deposit", api.WithSignalInput(500)); err != nil {
-		log.Fatalf("Failed to signal entity: %v", err)
+		log.Printf("Failed to signal entity: %v", err)
+		return
 	}
 	if err := client.SignalEntity(ctx, accountID, "Withdraw", api.WithSignalInput(200)); err != nil {
-		log.Fatalf("Failed to signal entity: %v", err)
+		log.Printf("Failed to signal entity: %v", err)
+		return
 	}
 
 	time.Sleep(3 * time.Second)
 
 	meta, err = client.FetchEntityMetadata(ctx, accountID, true)
 	if err != nil {
-		log.Fatalf("Failed to fetch entity: %v", err)
+		log.Printf("Failed to fetch entity: %v", err)
+		return
 	}
 	fmt.Printf("Bank account state: %s\n", meta.SerializedState) // Expected: {"balance":1300}
 
