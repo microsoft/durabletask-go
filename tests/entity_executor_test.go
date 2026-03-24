@@ -49,7 +49,6 @@ func Test_Executor_EntityBasicOperation(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@counter@myCounter")
 
 	// Test "add" operation with no initial state
 	req := &protos.EntityBatchRequest{
@@ -63,7 +62,7 @@ func Test_Executor_EntityBasicOperation(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.Len(t, result.Results, 1)
 	require.NotNil(t, result.Results[0].GetSuccess())
@@ -83,7 +82,7 @@ func Test_Executor_EntityBasicOperation(t *testing.T) {
 		},
 	}
 
-	result2, err := executor.ExecuteEntity(entityCtx, iid, req2)
+	result2, err := executor.ExecuteEntity(entityCtx, req2)
 	require.NoError(t, err)
 	require.Len(t, result2.Results, 1)
 	require.NotNil(t, result2.Results[0].GetSuccess())
@@ -102,7 +101,7 @@ func Test_Executor_EntityBasicOperation(t *testing.T) {
 		},
 	}
 
-	result3, err := executor.ExecuteEntity(entityCtx, iid, req3)
+	result3, err := executor.ExecuteEntity(entityCtx, req3)
 	require.NoError(t, err)
 	require.Len(t, result3.Results, 1)
 	require.NotNil(t, result3.Results[0].GetSuccess())
@@ -138,7 +137,6 @@ func Test_Executor_EntityBatchOperations(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@counter@myCounter")
 
 	// Batch multiple operations
 	req := &protos.EntityBatchRequest{
@@ -150,7 +148,7 @@ func Test_Executor_EntityBatchOperations(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.Len(t, result.Results, 3)
 
@@ -191,7 +189,6 @@ func Test_Executor_EntityOperationError(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@faulty@key1")
 
 	// Batch: add, fail, add — the "fail" operation should not affect state
 	req := &protos.EntityBatchRequest{
@@ -203,7 +200,7 @@ func Test_Executor_EntityOperationError(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.Len(t, result.Results, 3)
 
@@ -230,7 +227,6 @@ func Test_Executor_EntityPanic(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@panicky@key1")
 
 	req := &protos.EntityBatchRequest{
 		InstanceId: "@panicky@key1",
@@ -239,7 +235,7 @@ func Test_Executor_EntityPanic(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.Len(t, result.Results, 1)
 	require.NotNil(t, result.Results[0].GetFailure())
@@ -250,7 +246,6 @@ func Test_Executor_EntityNotRegistered(t *testing.T) {
 	r := task.NewTaskRegistry()
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@unknown@key1")
 
 	req := &protos.EntityBatchRequest{
 		InstanceId: "@unknown@key1",
@@ -259,7 +254,7 @@ func Test_Executor_EntityNotRegistered(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.NotNil(t, result.FailureDetails)
 	assert.Equal(t, "EntityNotRegistered", result.FailureDetails.ErrorType)
@@ -273,7 +268,6 @@ func Test_Executor_EntitySignalAction(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@sender@key1")
 
 	req := &protos.EntityBatchRequest{
 		InstanceId: "@sender@key1",
@@ -282,7 +276,7 @@ func Test_Executor_EntitySignalAction(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.Len(t, result.Results, 1)
 	require.NotNil(t, result.Results[0].GetSuccess())
@@ -310,7 +304,6 @@ func Test_Executor_EntityDeleteState(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@deletable@key1")
 
 	// First set state
 	req := &protos.EntityBatchRequest{
@@ -320,7 +313,7 @@ func Test_Executor_EntityDeleteState(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	assert.Equal(t, "42", result.EntityState.GetValue())
 
@@ -333,7 +326,7 @@ func Test_Executor_EntityDeleteState(t *testing.T) {
 		},
 	}
 
-	result2, err := executor.ExecuteEntity(entityCtx, iid, req2)
+	result2, err := executor.ExecuteEntity(entityCtx, req2)
 	require.NoError(t, err)
 	assert.Nil(t, result2.EntityState)
 }
@@ -358,7 +351,6 @@ func Test_Executor_EntityStatePersistsAcrossBatches(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@counter@persist")
 
 	// Batch 1: increment 3 times
 	req := &protos.EntityBatchRequest{
@@ -369,7 +361,7 @@ func Test_Executor_EntityStatePersistsAcrossBatches(t *testing.T) {
 			{Operation: "increment", RequestId: "r3"},
 		},
 	}
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.Len(t, result.Results, 3)
 	assert.Equal(t, "3", result.EntityState.GetValue())
@@ -383,7 +375,7 @@ func Test_Executor_EntityStatePersistsAcrossBatches(t *testing.T) {
 			{Operation: "get", RequestId: "r5"},
 		},
 	}
-	result2, err := executor.ExecuteEntity(entityCtx, iid, req2)
+	result2, err := executor.ExecuteEntity(entityCtx, req2)
 	require.NoError(t, err)
 	require.Len(t, result2.Results, 2)
 	// After 4th increment: 4
@@ -423,7 +415,6 @@ func Test_Executor_EntityErrorRollbackInBatch(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@rollback@key1")
 
 	req := &protos.EntityBatchRequest{
 		InstanceId: "@rollback@key1",
@@ -434,7 +425,7 @@ func Test_Executor_EntityErrorRollbackInBatch(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.Len(t, result.Results, 3)
 
@@ -463,7 +454,6 @@ func Test_Executor_EntityWildcardRegistration(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@anything@key1")
 
 	req := &protos.EntityBatchRequest{
 		InstanceId: "@anything@key1",
@@ -472,7 +462,7 @@ func Test_Executor_EntityWildcardRegistration(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.Len(t, result.Results, 1)
 	require.NotNil(t, result.Results[0].GetSuccess())
@@ -498,7 +488,6 @@ func Test_Executor_EntitySignalAndStartOrchestrationActions(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@coordinator@main")
 
 	req := &protos.EntityBatchRequest{
 		InstanceId: "@coordinator@main",
@@ -507,7 +496,7 @@ func Test_Executor_EntitySignalAndStartOrchestrationActions(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.Len(t, result.Results, 1)
 	require.NotNil(t, result.Results[0].GetSuccess())
@@ -569,7 +558,6 @@ func Test_Executor_EntityComplexState(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@cart@user1")
 
 	req := &protos.EntityBatchRequest{
 		InstanceId: "@cart@user1",
@@ -580,7 +568,7 @@ func Test_Executor_EntityComplexState(t *testing.T) {
 		},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	require.Len(t, result.Results, 3)
 
@@ -603,14 +591,13 @@ func Test_Executor_EntityEmptyBatch(t *testing.T) {
 
 	executor := newEntityExecutor(r)
 	entityCtx := context.Background()
-	iid := api.InstanceID("@noop@key1")
 
 	req := &protos.EntityBatchRequest{
 		InstanceId: "@noop@key1",
 		Operations: []*protos.OperationRequest{},
 	}
 
-	result, err := executor.ExecuteEntity(entityCtx, iid, req)
+	result, err := executor.ExecuteEntity(entityCtx, req)
 	require.NoError(t, err)
 	assert.Empty(t, result.Results)
 	assert.Empty(t, result.Actions)

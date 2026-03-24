@@ -1,8 +1,15 @@
 package task
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/helpers"
+	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_computeNextDelay(t *testing.T) {
@@ -171,4 +178,30 @@ func Test_NewGuid_Format(t *testing.T) {
 	if guid[14] != '5' {
 		t.Errorf("expected version 5 at position 14, got: %c in %s", guid[14], guid)
 	}
+}
+
+func Test_OrchestrationContext_SignalEntity_SetsParentInstanceID(t *testing.T) {
+	ctx := &OrchestrationContext{
+		ID:             api.InstanceID("orchestrator-instance"),
+		pendingActions: make(map[int32]*protos.OrchestratorAction),
+	}
+
+	err := ctx.SignalEntity(api.NewEntityID("counter", "key1"), "increment")
+	require.NoError(t, err)
+	require.Len(t, ctx.pendingActions, 1)
+
+	var action *protos.OrchestratorAction
+	for _, candidate := range ctx.pendingActions {
+		action = candidate
+	}
+	require.NotNil(t, action)
+
+	send := action.GetSendEvent()
+	require.NotNil(t, send)
+
+	var msg helpers.EntityRequestMessage
+	require.NoError(t, json.Unmarshal([]byte(send.Data.GetValue()), &msg))
+	assert.Equal(t, "orchestrator-instance", msg.ParentInstanceID)
+	assert.True(t, msg.IsSignal)
+	assert.Equal(t, "increment", msg.Operation)
 }

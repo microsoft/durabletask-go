@@ -33,7 +33,7 @@ type OrchestratorExecutor interface {
 // entity work items will be automatically dispatched.
 type EntityExecutor interface {
 	Executor
-	ExecuteEntity(context.Context, api.InstanceID, *protos.EntityBatchRequest) (*protos.EntityBatchResult, error)
+	ExecuteEntity(context.Context, *protos.EntityBatchRequest) (*protos.EntityBatchResult, error)
 }
 
 type orchestratorProcessor struct {
@@ -305,7 +305,7 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 		Operations:  operations,
 	}
 
-	batchResult, err := w.entityExecutor.ExecuteEntity(ctx, wi.InstanceID, batchReq)
+	batchResult, err := w.entityExecutor.ExecuteEntity(ctx, batchReq)
 	if err != nil {
 		return fmt.Errorf("failed to execute entity: %w", err)
 	}

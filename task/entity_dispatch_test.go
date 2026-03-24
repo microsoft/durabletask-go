@@ -550,6 +550,12 @@ func Test_EntityDispatcher_ExplicitContextStateWins(t *testing.T) {
 	assert.Equal(t, explicitStateEntity{Value: 10, Mode: "context"}, state)
 }
 
+func Test_EntityDispatcher_RejectsPointerStateType(t *testing.T) {
+	assert.PanicsWithValue(t, "NewEntityFor does not support pointer state types", func() {
+		_ = NewEntityFor[*testCounter]()
+	})
+}
+
 func Test_EntityDispatcher_ZeroValueInitialization(t *testing.T) {
 	entity := NewEntityFor[testCounter]()
 

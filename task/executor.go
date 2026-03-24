@@ -97,7 +97,7 @@ func (te taskExecutor) Shutdown(ctx context.Context) error {
 }
 
 // ExecuteEntity implements backend.Executor and executes an entity batch in the current goroutine.
-func (te *taskExecutor) ExecuteEntity(ctx context.Context, id api.InstanceID, req *protos.EntityBatchRequest) (result *protos.EntityBatchResult, err error) {
+func (te *taskExecutor) ExecuteEntity(ctx context.Context, req *protos.EntityBatchRequest) (result *protos.EntityBatchResult, err error) {
 	entityID, parseErr := api.EntityIDFromString(req.InstanceId)
 	if parseErr != nil {
 		return nil, fmt.Errorf("invalid entity instance ID: %w", parseErr)

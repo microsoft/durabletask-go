@@ -50,6 +50,10 @@ import (
 //
 // The special operation "delete" resets the entity state (unless a Delete method exists).
 func NewEntityFor[S any]() Entity {
+	if reflect.TypeFor[S]().Kind() == reflect.Ptr {
+		panic("NewEntityFor does not support pointer state types")
+	}
+
 	return func(ctx *EntityContext) (any, error) {
 		// Load state
 		var state S

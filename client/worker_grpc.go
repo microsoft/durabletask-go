@@ -215,7 +215,7 @@ func (c *TaskHubGrpcClient) processEntityWorkItem(
 		return
 	}
 
-	result, err := ee.ExecuteEntity(ctx, api.InstanceID(req.InstanceId), req)
+	result, err := ee.ExecuteEntity(ctx, req)
 
 	if err != nil {
 		result = &protos.EntityBatchResult{

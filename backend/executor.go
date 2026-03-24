@@ -47,6 +47,44 @@ type entityExecutionResult struct {
 	pending  chan string
 }
 
+type entityExecutionQueue struct {
+	mu   sync.Mutex
+	keys []string
+}
+
+func (q *entityExecutionQueue) Enqueue(key string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.keys = append(q.keys, key)
+}
+
+func (q *entityExecutionQueue) Dequeue() (string, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if len(q.keys) == 0 {
+		return "", false
+	}
+
+	key := q.keys[0]
+	q.keys = q.keys[1:]
+	return key, true
+}
+
+func (q *entityExecutionQueue) Remove(key string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for i, candidate := range q.keys {
+		if candidate == key {
+			q.keys = append(q.keys[:i], q.keys[i+1:]...)
+			return true
+		}
+	}
+
+	return false
+}
+
 type Executor interface {
 	ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*ExecutionResults, error)
 	ExecuteActivity(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error)
@@ -59,7 +97,7 @@ type grpcExecutor struct {
 	pendingOrchestrators *sync.Map // map[api.InstanceID]*ExecutionResults
 	pendingActivities    *sync.Map // map[string]*activityExecutionResult
 	pendingEntities      *sync.Map // map[string]*entityExecutionResult
-	entityQueue          chan string
+	entityQueue          *entityExecutionQueue
 	backend              Backend
 	logger               Logger
 	onWorkItemConnection func(context.Context) error
@@ -98,7 +136,7 @@ func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) (ex
 		pendingOrchestrators: &sync.Map{},
 		pendingActivities:    &sync.Map{},
 		pendingEntities:      &sync.Map{},
-		entityQueue:          make(chan string, 100),
+		entityQueue:          &entityExecutionQueue{},
 	}
 
 	for _, opt := range opts {
@@ -232,7 +270,7 @@ func (g *grpcExecutor) Shutdown(ctx context.Context) error {
 }
 
 // ExecuteEntity implements Executor
-func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, iid api.InstanceID, req *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
+func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, req *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
 	key := req.InstanceId
 	result := &entityExecutionResult{complete: make(chan struct{})}
 	if _, loaded := executor.pendingEntities.LoadOrStore(key, result); loaded {
@@ -248,26 +286,25 @@ func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, iid api.Instanc
 	select {
 	case <-ctx.Done():
 		executor.pendingEntities.Delete(key)
-		executor.logger.Warnf("%s: context canceled before dispatching entity work item", iid)
+		executor.logger.Warnf("%s: context canceled before dispatching entity work item", key)
 		return nil, ctx.Err()
 	case executor.workItemQueue <- workItem:
 	}
 
-	// Non-blocking send to FIFO queue (fallback for non-Go workers without metadata).
-	// Go workers use gRPC metadata for correlation and never drain this queue.
-	select {
-	case executor.entityQueue <- key:
-	default:
-	}
+	// Track FIFO completion order for workers that don't send metadata.
+	// Metadata-based completions remove their corresponding key from this queue.
+	executor.entityQueue.Enqueue(key)
 
 	select {
 	case <-ctx.Done():
 		executor.pendingEntities.Delete(key)
-		executor.logger.Warnf("%s: context canceled before receiving entity result", iid)
+		executor.entityQueue.Remove(key)
+		executor.logger.Warnf("%s: context canceled before receiving entity result", key)
 		return nil, ctx.Err()
 	case <-result.complete:
 		executor.logger.Debugf("%s: entity got result", key)
 		if result.response == nil {
+			executor.entityQueue.Remove(key)
 			return nil, ErrOperationAborted
 		}
 	}
@@ -451,11 +488,12 @@ func (g *grpcExecutor) CompleteEntityTask(ctx context.Context, res *protos.Entit
 	}
 	if key == "" {
 		// Fallback to FIFO queue for non-Go workers that don't send metadata.
-		select {
-		case key = <-g.entityQueue:
-		default:
+		var ok bool
+		if key, ok = g.entityQueue.Dequeue(); !ok {
 			return emptyCompleteTaskResponse, fmt.Errorf("no pending entity found for completion: missing entity-instance-id metadata")
 		}
+	} else {
+		g.entityQueue.Remove(key)
 	}
 
 	p, ok := g.pendingEntities.LoadAndDelete(key)

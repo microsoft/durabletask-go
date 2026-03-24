@@ -11,6 +11,7 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -66,7 +67,7 @@ func Test_GrpcExecutor_ExecuteEntity_RejectsConcurrentInstance(t *testing.T) {
 	req := &protos.EntityBatchRequest{InstanceId: "@counter@key"}
 	g.pendingEntities.Store(req.InstanceId, &entityExecutionResult{complete: make(chan struct{})})
 
-	_, err := g.ExecuteEntity(context.Background(), api.InstanceID(req.InstanceId), req)
+	_, err := g.ExecuteEntity(context.Background(), req)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already pending")
 }
@@ -108,4 +109,27 @@ func Test_GrpcExecutor_SignalEntity_PreservesScheduledTimeAndRequestID(t *testin
 	require.Equal(t, "request-123", msg.ID)
 	require.True(t, msg.IsSignal)
 	require.Equal(t, "increment", msg.Operation)
+}
+
+func Test_GrpcExecutor_CompleteEntityTask_RemovesMetadataCorrelatedQueueEntry(t *testing.T) {
+	executor, _ := NewGrpcExecutor(nil, DefaultLogger())
+	g := executor.(*grpcExecutor)
+
+	first := &entityExecutionResult{complete: make(chan struct{})}
+	second := &entityExecutionResult{complete: make(chan struct{})}
+	g.pendingEntities.Store("@counter@one", first)
+	g.pendingEntities.Store("@counter@two", second)
+	g.entityQueue.Enqueue("@counter@one")
+	g.entityQueue.Enqueue("@counter@two")
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("entity-instance-id", "@counter@one"))
+	_, err := g.CompleteEntityTask(ctx, &protos.EntityBatchResult{})
+	require.NoError(t, err)
+
+	next, ok := g.entityQueue.Dequeue()
+	require.True(t, ok)
+	assert.Equal(t, "@counter@two", next)
+
+	_, ok = g.entityQueue.Dequeue()
+	assert.False(t, ok)
 }

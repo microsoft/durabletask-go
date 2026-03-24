@@ -523,9 +523,10 @@ func (ctx *OrchestrationContext) SignalEntity(entityID api.EntityID, operationNa
 
 	// Build the .NET-compatible RequestMessage payload with isSignal=true.
 	reqMsg := helpers.EntityRequestMessage{
-		ID:        ctx.NewGuid(),
-		IsSignal:  true,
-		Operation: operationName,
+		ID:               ctx.NewGuid(),
+		ParentInstanceID: string(ctx.ID),
+		IsSignal:         true,
+		Operation:        operationName,
 	}
 	if options.rawInput != nil {
 		reqMsg.Input = options.rawInput.GetValue()

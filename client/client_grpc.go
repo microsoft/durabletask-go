@@ -315,7 +315,7 @@ func (c *TaskHubGrpcClient) QueryEntities(ctx context.Context, query api.EntityQ
 	for _, e := range resp.Entities {
 		entityID, parseErr := api.EntityIDFromString(e.InstanceId)
 		if parseErr != nil {
-			continue
+			return nil, fmt.Errorf("failed to parse entity ID %q: %w", e.InstanceId, parseErr)
 		}
 		meta := &api.EntityMetadata{
 			InstanceID:       entityID,
