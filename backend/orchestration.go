@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -235,7 +236,7 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 			continue
 		}
 
-		if eventName != helpers.EntityRequestEventName {
+		if !strings.EqualFold(eventName, helpers.EntityRequestEventName) {
 			continue
 		}
 
@@ -266,27 +267,6 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 		})
 	}
 
-	if len(operations) == 0 {
-		w.logger.Debugf("%v: no entity operations to process", wi.InstanceID)
-		return nil
-	}
-
-	// Build and execute the entity batch
-	batchReq := &protos.EntityBatchRequest{
-		InstanceId:  iid,
-		EntityState: entityState,
-		Operations:  operations,
-	}
-
-	batchResult, err := w.entityExecutor.ExecuteEntity(ctx, wi.InstanceID, batchReq)
-	if err != nil {
-		return fmt.Errorf("failed to execute entity: %w", err)
-	}
-	if batchResult.FailureDetails != nil {
-		w.logger.Errorf("%v: non-retriable entity execution failure: %s", wi.InstanceID, batchResult.FailureDetails.ErrorMessage)
-		return nil
-	}
-
 	// Ensure the entity orchestration instance exists in state
 	if wi.State.startEvent == nil {
 		entityID, _ := api.EntityIDFromString(iid)
@@ -307,6 +287,27 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 			}
 			w.logger.Debugf("%v: skipping duplicate event in entity history", wi.InstanceID)
 		}
+	}
+
+	if len(operations) == 0 {
+		w.logger.Debugf("%v: no entity operations to process", wi.InstanceID)
+		return nil
+	}
+
+	// Build and execute the entity batch
+	batchReq := &protos.EntityBatchRequest{
+		InstanceId:  iid,
+		EntityState: entityState,
+		Operations:  operations,
+	}
+
+	batchResult, err := w.entityExecutor.ExecuteEntity(ctx, wi.InstanceID, batchReq)
+	if err != nil {
+		return fmt.Errorf("failed to execute entity: %w", err)
+	}
+	if batchResult.FailureDetails != nil {
+		w.logger.Errorf("%v: non-retriable entity execution failure: %s", wi.InstanceID, batchResult.FailureDetails.ErrorMessage)
+		return nil
 	}
 
 	// Save entity state as the orchestration's custom status

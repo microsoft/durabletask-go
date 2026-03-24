@@ -547,9 +547,12 @@ func (g *grpcExecutor) SignalEntity(ctx context.Context, req *protos.SignalEntit
 		return nil, fmt.Errorf("failed to marshal entity request message: %w", err)
 	}
 
+	// Normalize the instance ID to lowercase for consistent routing
+	normalizedID := entityID.String()
+
 	// Ensure the entity orchestration instance exists. Create with IGNORE policy
 	// so it's a no-op if the instance already exists.
-	startEvent := helpers.NewExecutionStartedEvent(entityID.Name, req.InstanceId, nil, nil, nil, nil)
+	startEvent := helpers.NewExecutionStartedEvent(entityID.Name, normalizedID, nil, nil, nil, nil)
 	createErr := g.backend.CreateOrchestrationInstance(ctx, startEvent, WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
 		Action:          protos.CreateOrchestrationAction_IGNORE,
 		OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING},
@@ -559,7 +562,7 @@ func (g *grpcExecutor) SignalEntity(ctx context.Context, req *protos.SignalEntit
 	}
 
 	e := helpers.NewEventRaisedEvent(helpers.EntityRequestEventName, wrapperspb.String(string(payload)))
-	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
+	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(normalizedID), e); err != nil {
 		return nil, fmt.Errorf("failed to signal entity: %w", err)
 	}
 	return &protos.SignalEntityResponse{}, nil
