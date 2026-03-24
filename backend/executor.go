@@ -251,7 +251,12 @@ func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, iid api.Instanc
 	case executor.workItemQueue <- workItem:
 	}
 
-	executor.entityQueue <- key
+	// Non-blocking send to FIFO queue (fallback for non-Go workers without metadata).
+	// Go workers use gRPC metadata for correlation and never drain this queue.
+	select {
+	case executor.entityQueue <- key:
+	default:
+	}
 
 	select {
 	case <-ctx.Done():
