@@ -47,10 +47,10 @@ Follow this template for orchestration tests:
 func TestBehaviorName(t *testing.T) {
     r := task.NewTaskRegistry()
     // Add orchestrators and activities with descriptive inline functions
-    r.AddOrchestratorN("MyOrch", func(ctx *task.OrchestrationContext) (any, error) {
+    require.NoError(t, r.AddOrchestratorN("MyOrch", func(ctx *task.OrchestrationContext) (any, error) {
         // minimal orchestrator that exercises the specific behavior
         return nil, nil
-    })
+    }))
 
     ctx := context.Background()
     client, worker := initTaskHubWorker(ctx, r)

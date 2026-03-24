@@ -59,7 +59,7 @@ Sentinel errors in task/: ErrTaskBlocked, ErrTaskCanceled
 
 ### Interfaces and types
 
-- Prefer any over interface{} everywhere (Go 1.18+ convention, enforced since PR #118).
+- In core packages (api/, backend/, task/, internal/), prefer any over interface{} (enforced since PR #118). Existing uses of interface{} in samples or other non-core code may remain unless you are actively modifying that code.
 - Do not add a new interface unless at least two concrete implementations exist or are planned.
 
 ### Serialization contracts
@@ -84,7 +84,7 @@ Sentinel errors in task/: ErrTaskBlocked, ErrTaskCanceled
 - gRPC service name: TaskHubSidecarService.
   Helper IsDurableTaskGrpcRequest() matches /TaskHubSidecarService/ prefix.
 - Regenerate protos:
-    protoc --go_out=. --go-grpc_out=.       -I ./submodules/durabletask-protobuf/protos       orchestrator_service.proto
+    protoc --go_out=. --go-grpc_out=. -I ./submodules/durabletask-protobuf/protos orchestrator_service.proto
   using protoc-gen-go@v1.30 and protoc-gen-go-grpc@v1.3.
 
 ## Evidence-First Rule
@@ -150,7 +150,7 @@ A change is reviewer-ready when:
 
 - Do not edit internal/protos/*.pb.go directly - regenerate with protoc.
 - Do not edit tests/mocks/*.go directly - regenerate with mockery.
-- Do not use interface{} - use any.
+- Do not use interface{} in core packages (api/, backend/, task/, internal/) - use any.
 - Do not introduce CGO dependencies.
 - Do not add a new direct dependency without clear PR justification.
 - Do not call time.Now() inside orchestrator functions.

@@ -37,14 +37,14 @@ Most orchestration tests follow this structure:
 ```go
 func TestSomeBehavior(t *testing.T) {
     r := task.NewTaskRegistry()
-    r.AddOrchestratorN("MyOrchestrator", func(ctx *task.OrchestrationContext) (any, error) {
+    require.NoError(t, r.AddOrchestratorN("MyOrchestrator", func(ctx *task.OrchestrationContext) (any, error) {
         // orchestrator logic
         return nil, nil
-    })
-    r.AddActivityN("MyActivity", func(ctx task.ActivityContext) (any, error) {
+    }))
+    require.NoError(t, r.AddActivityN("MyActivity", func(ctx task.ActivityContext) (any, error) {
         // activity logic
         return "result", nil
-    })
+    }))
 
     ctx := context.Background()
     client, worker := initTaskHubWorker(ctx, r)
