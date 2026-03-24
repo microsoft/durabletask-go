@@ -1,6 +1,7 @@
 package task
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -110,6 +111,21 @@ func Test_EntityContext_StartNewOrchestration(t *testing.T) {
 	assert.Equal(t, "MyOrchestrator", startOrch.Name)
 	assert.Equal(t, "my-instance", startOrch.InstanceId)
 	assert.Equal(t, `"hello"`, startOrch.Input.GetValue())
+}
+
+func Test_EntityContext_StartNewOrchestration_DefaultInstanceID(t *testing.T) {
+	ctx := &EntityContext{
+		ID:        api.NewEntityID("test", "key1"),
+		Operation: "op",
+	}
+
+	err := ctx.StartNewOrchestration("MyOrchestrator")
+	require.NoError(t, err)
+	require.Len(t, ctx.actions, 1)
+
+	startOrch := ctx.actions[0].GetStartNewOrchestration()
+	require.NotNil(t, startOrch)
+	assert.Regexp(t, regexp.MustCompile("^[a-f0-9]{32}$"), startOrch.InstanceId)
 }
 
 func Test_EntityRegistry(t *testing.T) {

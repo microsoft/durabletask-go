@@ -69,6 +69,57 @@ func Test_InProcess_Entity_SignalAndQuery(t *testing.T) {
 	}, 10*time.Second, 200*time.Millisecond)
 }
 
+func Test_InProcess_Entity_SignalScheduledTime(t *testing.T) {
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddEntityN("counter", func(ctx *task.EntityContext) (any, error) {
+		var count int
+		if ctx.HasState() {
+			_ = ctx.GetState(&count)
+		}
+		if ctx.Operation == "add" {
+			var amount int
+			if err := ctx.GetInput(&amount); err != nil {
+				return nil, err
+			}
+			count += amount
+		}
+		_ = ctx.SetState(count)
+		return count, nil
+	}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	baseClient, worker := initTaskHubWorker(ctx, r)
+	client := baseClient.(backend.EntityTaskHubClient)
+	defer func() {
+		if err := worker.Shutdown(context.Background()); err != nil {
+			t.Logf("shutdown: %v", err)
+		}
+	}()
+
+	entityID := api.NewEntityID("counter", "scheduled")
+	fireAt := time.Now().Add(750 * time.Millisecond)
+
+	require.NoError(t, client.SignalEntity(ctx, entityID, "add", api.WithSignalInput(5), api.WithSignalScheduledTime(fireAt)))
+
+	require.Never(t, func() bool {
+		meta, err := client.FetchEntityMetadata(ctx, entityID, true)
+		if err != nil || meta == nil {
+			return false
+		}
+		return strings.Contains(meta.SerializedState, "5")
+	}, 300*time.Millisecond, 100*time.Millisecond)
+
+	require.Eventually(t, func() bool {
+		meta, err := client.FetchEntityMetadata(ctx, entityID, true)
+		if err != nil || meta == nil {
+			return false
+		}
+		return strings.Contains(meta.SerializedState, "5")
+	}, 10*time.Second, 100*time.Millisecond)
+}
+
 // Test that entities work with the auto-dispatch pattern.
 func Test_InProcess_Entity_AutoDispatch(t *testing.T) {
 	r := task.NewTaskRegistry()

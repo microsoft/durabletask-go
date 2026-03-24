@@ -1,9 +1,11 @@
 package task
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -96,6 +98,10 @@ func (ctx *EntityContext) StartNewOrchestration(name string, opts ...entityStart
 		if err := configure(options); err != nil {
 			return err
 		}
+	}
+	if options.instanceID == "" {
+		id := uuid.New()
+		options.instanceID = hex.EncodeToString(id[:])
 	}
 
 	action := &protos.OperationAction{

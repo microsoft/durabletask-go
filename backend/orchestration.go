@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -269,7 +270,10 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 
 	// Ensure the entity orchestration instance exists in state
 	if wi.State.startEvent == nil {
-		entityID, _ := api.EntityIDFromString(iid)
+		entityID, err := api.EntityIDFromString(iid)
+		if err != nil {
+			return fmt.Errorf("invalid entity instance ID format: %w", err)
+		}
 		startEvent := helpers.NewExecutionStartedEvent(entityID.Name, iid, nil, nil, nil, nil)
 		if err := wi.State.AddEvent(helpers.NewOrchestratorStartedEvent()); err != nil {
 			return fmt.Errorf("failed to add orchestrator started event: %w", err)
@@ -363,16 +367,20 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 				w.logger.Warnf("%v: failed to marshal signal request: %v", wi.InstanceID, err)
 				continue
 			}
-			e := helpers.NewEventRaisedEvent("op", wrapperspb.String(string(sigJSON)))
+			e := helpers.NewEventRaisedEvent(helpers.EntityRequestEventName, wrapperspb.String(string(sigJSON)))
+			if signal.ScheduledTime != nil {
+				e.Timestamp = signal.ScheduledTime
+			}
 			if err := w.be.AddNewOrchestrationEvent(ctx, api.InstanceID(signal.InstanceId), e); err != nil {
 				w.logger.Warnf("%v: failed to send entity signal to %s: %v", wi.InstanceID, signal.InstanceId, err)
 			}
 		} else if startOrch := action.GetStartNewOrchestration(); startOrch != nil {
 			orchInstanceID := startOrch.InstanceId
 			if orchInstanceID == "" {
-				orchInstanceID = fmt.Sprintf("%s:%04x", iid, action.Id)
+				id := uuid.New()
+				orchInstanceID = hex.EncodeToString(id[:])
 			}
-			e := helpers.NewExecutionStartedEvent(startOrch.Name, orchInstanceID, startOrch.Input, nil, nil, nil)
+			e := helpers.NewExecutionStartedEvent(startOrch.Name, orchInstanceID, startOrch.Input, nil, nil, startOrch.ScheduledTime)
 			if err := w.be.CreateOrchestrationInstance(ctx, e); err != nil {
 				w.logger.Warnf("%v: failed to start orchestration %s: %v", wi.InstanceID, orchInstanceID, err)
 			}

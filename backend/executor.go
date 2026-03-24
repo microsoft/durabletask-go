@@ -235,7 +235,9 @@ func (g *grpcExecutor) Shutdown(ctx context.Context) error {
 func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, iid api.InstanceID, req *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
 	key := req.InstanceId
 	result := &entityExecutionResult{complete: make(chan struct{})}
-	executor.pendingEntities.Store(key, result)
+	if _, loaded := executor.pendingEntities.LoadOrStore(key, result); loaded {
+		return nil, fmt.Errorf("entity batch for instance '%s' is already pending", key)
+	}
 
 	workItem := &protos.WorkItem{
 		Request: &protos.WorkItem_EntityRequest{
@@ -534,8 +536,12 @@ func (g *grpcExecutor) SignalEntity(ctx context.Context, req *protos.SignalEntit
 	}
 
 	// Build wire-compatible EntityRequestMessage
+	requestID := req.RequestId
+	if requestID == "" {
+		requestID = uuid.New().String()
+	}
 	requestMsg := helpers.EntityRequestMessage{
-		ID:        uuid.New().String(),
+		ID:        requestID,
 		IsSignal:  true,
 		Operation: req.Name,
 	}
@@ -562,6 +568,9 @@ func (g *grpcExecutor) SignalEntity(ctx context.Context, req *protos.SignalEntit
 	}
 
 	e := helpers.NewEventRaisedEvent(helpers.EntityRequestEventName, wrapperspb.String(string(payload)))
+	if req.ScheduledTime != nil {
+		e.Timestamp = req.ScheduledTime
+	}
 	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(normalizedID), e); err != nil {
 		return nil, fmt.Errorf("failed to signal entity: %w", err)
 	}

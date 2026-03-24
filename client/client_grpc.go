@@ -42,7 +42,6 @@ func (c *TaskHubGrpcClient) ScheduleNewOrchestration(ctx context.Context, orches
 	if req.InstanceId == "" {
 		req.InstanceId = uuid.NewString()
 	}
-
 	resp, err := c.client.StartInstance(ctx, req)
 	if err != nil {
 		if ctx.Err() != nil {

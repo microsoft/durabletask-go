@@ -21,6 +21,7 @@ func Test_API_EntityIDFromString(t *testing.T) {
 	}{
 		{name: "valid", input: "@counter@key1", want: EntityID{Name: "counter", Key: "key1"}},
 		{name: "empty key", input: "@entity@", want: EntityID{Name: "entity", Key: ""}},
+		{name: "empty name", input: "@@key1", want: EntityID{Name: "", Key: "key1"}},
 		{name: "invalid no prefix", input: "no-at-sign", wantErr: true},
 		{name: "invalid no second @", input: "@onlyone", wantErr: true},
 	}

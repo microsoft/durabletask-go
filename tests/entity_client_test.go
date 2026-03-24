@@ -12,6 +12,7 @@ import (
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/tests/mocks"
 )
 
@@ -256,5 +257,32 @@ func Test_EntityClient_SignalEntity(t *testing.T) {
 	).Return(nil).Once()
 
 	err := client.SignalEntity(ctx, entityID, "increment", api.WithSignalInput(5))
+	require.NoError(t, err)
+}
+
+func Test_EntityClient_SignalEntity_PreservesScheduledTime(t *testing.T) {
+	be := &mocks.Backend{}
+	client := newEntityClient(be)
+	ctx := context.Background()
+
+	entityID := api.NewEntityID("counter", "signalTest")
+	scheduledTime := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Millisecond)
+
+	be.EXPECT().CreateOrchestrationInstance(
+		ctx,
+		mock.AnythingOfType("*protos.HistoryEvent"),
+		mock.AnythingOfType("backend.OrchestrationIdReusePolicyOptions"),
+	).Return(nil).Once()
+
+	be.EXPECT().AddNewOrchestrationEvent(
+		ctx,
+		api.InstanceID("@counter@signalTest"),
+		mock.AnythingOfType("*protos.HistoryEvent"),
+	).Run(func(_ context.Context, _ api.InstanceID, e *protos.HistoryEvent) {
+		require.NotNil(t, e.Timestamp)
+		require.WithinDuration(t, scheduledTime, e.Timestamp.AsTime(), time.Millisecond)
+	}).Return(nil).Once()
+
+	err := client.SignalEntity(ctx, entityID, "increment", api.WithSignalScheduledTime(scheduledTime))
 	require.NoError(t, err)
 }

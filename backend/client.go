@@ -246,8 +246,12 @@ func (c *backendClient) SignalEntity(ctx context.Context, entityID api.EntityID,
 	}
 
 	// Build the .NET-compatible EntityRequestMessage payload with isSignal=true.
+	requestID := req.RequestId
+	if requestID == "" {
+		requestID = uuid.New().String()
+	}
 	reqMsg := helpers.EntityRequestMessage{
-		ID:        uuid.New().String(),
+		ID:        requestID,
 		IsSignal:  true,
 		Operation: req.Name,
 	}
@@ -260,6 +264,9 @@ func (c *backendClient) SignalEntity(ctx context.Context, entityID api.EntityID,
 	}
 
 	e := helpers.NewEventRaisedEvent(helpers.EntityRequestEventName, wrapperspb.String(string(payload)))
+	if req.ScheduledTime != nil {
+		e.Timestamp = req.ScheduledTime
+	}
 	if err := c.be.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
 		return fmt.Errorf("failed to signal entity: %w", err)
 	}
