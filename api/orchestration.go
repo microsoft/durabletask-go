@@ -80,6 +80,9 @@ type PurgeOptions func(*protos.PurgeInstancesRequest) error
 // a random UUID value will be used for the orchestration instance ID.
 func WithInstanceID(id InstanceID) NewOrchestrationOptions {
 	return func(req *protos.CreateInstanceRequest) error {
+		if err := helpers.ValidateOrchestrationInstanceID(string(id)); err != nil {
+			return err
+		}
 		req.InstanceId = string(id)
 		return nil
 	}

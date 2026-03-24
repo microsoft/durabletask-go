@@ -465,6 +465,11 @@ func (ctx *OrchestrationContext) CallEntity(entityID api.EntityID, operationName
 			return failedTask
 		}
 	}
+	if err := helpers.ValidateEntityName(entityID.Name); err != nil {
+		failedTask := newTask(ctx)
+		failedTask.fail(helpers.NewTaskFailureDetails(err))
+		return failedTask
+	}
 
 	// Generate a deterministic request ID for response correlation.
 	requestID := ctx.NewGuid()
@@ -511,6 +516,9 @@ func (ctx *OrchestrationContext) SignalEntity(entityID api.EntityID, operationNa
 		if err := configure(options); err != nil {
 			return err
 		}
+	}
+	if err := helpers.ValidateEntityName(entityID.Name); err != nil {
+		return err
 	}
 
 	// Build the .NET-compatible RequestMessage payload with isSignal=true.

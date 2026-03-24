@@ -65,6 +65,9 @@ func (r *TaskRegistry) AddEntity(e Entity) error {
 
 // AddEntityN adds an entity function to the registry with a specified name.
 func (r *TaskRegistry) AddEntityN(name string, e Entity) error {
+	if err := helpers.ValidateEntityName(name); err != nil {
+		return err
+	}
 	name = strings.ToLower(name)
 	if _, ok := r.entities[name]; ok {
 		return fmt.Errorf("entity named '%s' is already registered", name)

@@ -380,6 +380,10 @@ func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *O
 				id := uuid.New()
 				orchInstanceID = hex.EncodeToString(id[:])
 			}
+			if err := helpers.ValidateOrchestrationInstanceID(orchInstanceID); err != nil {
+				w.logger.Warnf("%v: dropping entity start-orchestration action for reserved instance ID %q: %v", wi.InstanceID, orchInstanceID, err)
+				continue
+			}
 			e := helpers.NewExecutionStartedEvent(startOrch.Name, orchInstanceID, startOrch.Input, nil, nil, startOrch.ScheduledTime)
 			if err := w.be.CreateOrchestrationInstance(ctx, e); err != nil {
 				w.logger.Warnf("%v: failed to start orchestration %s: %v", wi.InstanceID, orchInstanceID, err)

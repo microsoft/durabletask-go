@@ -620,11 +620,13 @@ func (be *sqliteBackend) AddNewOrchestrationEvent(ctx context.Context, iid api.I
 		return err
 	}
 
+	visibleTime := helpers.GetVisibleTime(e)
 	_, err = be.db.ExecContext(
 		ctx,
-		`INSERT INTO NewEvents ([InstanceID], [EventPayload]) VALUES (?, ?)`,
+		`INSERT INTO NewEvents ([InstanceID], [EventPayload], [VisibleTime]) VALUES (?, ?, ?)`,
 		string(iid),
 		eventPayload,
+		visibleTime,
 	)
 
 	if err != nil {

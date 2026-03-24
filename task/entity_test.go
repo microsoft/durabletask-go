@@ -92,6 +92,17 @@ func Test_EntityContext_SignalEntity(t *testing.T) {
 	assert.Equal(t, "5", signal.Input.GetValue())
 }
 
+func Test_EntityContext_SignalEntity_RejectsInvalidEntityID(t *testing.T) {
+	ctx := &EntityContext{
+		ID:        api.NewEntityID("test", "key1"),
+		Operation: "op",
+	}
+
+	err := ctx.SignalEntity(api.EntityID{Name: "bad@name", Key: "key2"}, "increment", 5)
+	require.Error(t, err)
+	require.Empty(t, ctx.actions)
+}
+
 func Test_EntityContext_StartNewOrchestration(t *testing.T) {
 	ctx := &EntityContext{
 		ID:        api.NewEntityID("test", "key1"),
@@ -128,6 +139,17 @@ func Test_EntityContext_StartNewOrchestration_DefaultInstanceID(t *testing.T) {
 	assert.Regexp(t, regexp.MustCompile("^[a-f0-9]{32}$"), startOrch.InstanceId)
 }
 
+func Test_EntityContext_StartNewOrchestration_RejectsEntityInstanceID(t *testing.T) {
+	ctx := &EntityContext{
+		ID:        api.NewEntityID("test", "key1"),
+		Operation: "op",
+	}
+
+	err := ctx.StartNewOrchestration("MyOrchestrator", WithEntityStartOrchestrationInstanceID("@counter@key1"))
+	require.Error(t, err)
+	require.Empty(t, ctx.actions)
+}
+
 func Test_EntityRegistry(t *testing.T) {
 	r := NewTaskRegistry()
 
@@ -138,4 +160,10 @@ func Test_EntityRegistry(t *testing.T) {
 	err := r.AddEntityN("counter", myEntity)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already registered")
+
+	err = r.AddEntityN("", myEntity)
+	require.Error(t, err)
+
+	err = r.AddEntityN("bad@name", myEntity)
+	require.Error(t, err)
 }

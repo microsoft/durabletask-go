@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -68,6 +69,10 @@ func (ctx *EntityContext) SetState(state any) error {
 
 // SignalEntity sends a fire-and-forget signal to another entity.
 func (ctx *EntityContext) SignalEntity(entityID api.EntityID, operationName string, input any) error {
+	if err := helpers.ValidateEntityName(entityID.Name); err != nil {
+		return err
+	}
+
 	var rawInput *wrapperspb.StringValue
 	if input != nil {
 		bytes, err := json.Marshal(input)
@@ -102,6 +107,8 @@ func (ctx *EntityContext) StartNewOrchestration(name string, opts ...entityStart
 	if options.instanceID == "" {
 		id := uuid.New()
 		options.instanceID = hex.EncodeToString(id[:])
+	} else if err := helpers.ValidateOrchestrationInstanceID(options.instanceID); err != nil {
+		return err
 	}
 
 	action := &protos.OperationAction{

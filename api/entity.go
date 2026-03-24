@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -19,6 +20,9 @@ type EntityID struct {
 
 // NewEntityID creates a new EntityID with the specified name and key.
 func NewEntityID(name string, key string) EntityID {
+	if err := helpers.ValidateEntityName(name); err != nil {
+		panic(err)
+	}
 	return EntityID{Name: strings.ToLower(name), Key: key}
 }
 
@@ -29,15 +33,11 @@ func (e EntityID) String() string {
 
 // EntityIDFromString parses an entity instance ID string in the format "@<name>@<key>".
 func EntityIDFromString(s string) (EntityID, error) {
-	if !strings.HasPrefix(s, "@") {
-		return EntityID{}, fmt.Errorf("invalid entity instance ID format: %q", s)
+	name, key, err := helpers.ParseEntityInstanceID(s)
+	if err != nil {
+		return EntityID{}, err
 	}
-	s = s[1:] // trim leading '@'
-	before, after, ok := strings.Cut(s, "@")
-	if !ok {
-		return EntityID{}, fmt.Errorf("invalid entity instance ID format: missing second '@'")
-	}
-	return EntityID{Name: strings.ToLower(before), Key: after}, nil
+	return EntityID{Name: name, Key: key}, nil
 }
 
 // EntityMetadata contains metadata about an entity instance.

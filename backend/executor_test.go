@@ -71,6 +71,18 @@ func Test_GrpcExecutor_ExecuteEntity_RejectsConcurrentInstance(t *testing.T) {
 	assert.Contains(t, err.Error(), "already pending")
 }
 
+func Test_GrpcExecutor_StartInstance_RejectsEntityInstanceID(t *testing.T) {
+	executor, _ := NewGrpcExecutor(nil, DefaultLogger())
+	g := executor.(*grpcExecutor)
+
+	_, err := g.StartInstance(context.Background(), &protos.CreateInstanceRequest{
+		Name:       "orchestrator",
+		InstanceId: "@counter@key",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved entity format")
+}
+
 func Test_GrpcExecutor_SignalEntity_PreservesScheduledTimeAndRequestID(t *testing.T) {
 	be := &capturingBackend{}
 	executor, _ := NewGrpcExecutor(be, DefaultLogger())

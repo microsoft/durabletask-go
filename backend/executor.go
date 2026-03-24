@@ -580,6 +580,9 @@ func (g *grpcExecutor) SignalEntity(ctx context.Context, req *protos.SignalEntit
 // StartInstance implements protos.TaskHubSidecarServiceServer
 func (g *grpcExecutor) StartInstance(ctx context.Context, req *protos.CreateInstanceRequest) (*protos.CreateInstanceResponse, error) {
 	instanceID := req.InstanceId
+	if err := helpers.ValidateOrchestrationInstanceID(instanceID); err != nil {
+		return nil, err
+	}
 	ctx, span := helpers.StartNewCreateOrchestrationSpan(ctx, req.Name, req.Version.GetValue(), instanceID)
 	defer span.End()
 

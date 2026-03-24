@@ -66,6 +66,9 @@ func (c *backendClient) ScheduleNewOrchestration(ctx context.Context, orchestrat
 		}
 		req.InstanceId = u.String()
 	}
+	if err := helpers.ValidateOrchestrationInstanceID(req.InstanceId); err != nil {
+		return api.EmptyInstanceID, err
+	}
 
 	var span trace.Span
 	ctx, span = helpers.StartNewCreateOrchestrationSpan(ctx, req.Name, req.Version.GetValue(), req.InstanceId)
@@ -224,6 +227,10 @@ func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.Inst
 //
 // If the entity doesn't exist, it will be created automatically when the signal is processed.
 func (c *backendClient) SignalEntity(ctx context.Context, entityID api.EntityID, operationName string, opts ...api.SignalEntityOptions) error {
+	if err := helpers.ValidateEntityName(entityID.Name); err != nil {
+		return err
+	}
+
 	req := &protos.SignalEntityRequest{
 		InstanceId: entityID.String(),
 		Name:       operationName,
@@ -279,6 +286,9 @@ func (c *backendClient) SignalEntity(ctx context.Context, entityID api.EntityID,
 // If the backend implements [EntityBackend], its native entity storage is used.
 // Otherwise, falls back to orchestration metadata.
 func (c *backendClient) FetchEntityMetadata(ctx context.Context, entityID api.EntityID, includeState bool) (*api.EntityMetadata, error) {
+	if err := helpers.ValidateEntityName(entityID.Name); err != nil {
+		return nil, err
+	}
 	if eb, ok := c.be.(EntityBackend); ok {
 		return eb.GetEntityMetadata(ctx, entityID, includeState)
 	}

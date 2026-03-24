@@ -12,6 +12,7 @@ import (
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
@@ -41,6 +42,9 @@ func (c *TaskHubGrpcClient) ScheduleNewOrchestration(ctx context.Context, orches
 	}
 	if req.InstanceId == "" {
 		req.InstanceId = uuid.NewString()
+	}
+	if err := helpers.ValidateOrchestrationInstanceID(req.InstanceId); err != nil {
+		return api.EmptyInstanceID, err
 	}
 	resp, err := c.client.StartInstance(ctx, req)
 	if err != nil {
@@ -216,6 +220,10 @@ func (c *TaskHubGrpcClient) PurgeOrchestrationState(ctx context.Context, id api.
 //
 // If the entity doesn't exist, it will be created automatically when the signal is processed.
 func (c *TaskHubGrpcClient) SignalEntity(ctx context.Context, entityID api.EntityID, operationName string, opts ...api.SignalEntityOptions) error {
+	if err := helpers.ValidateEntityName(entityID.Name); err != nil {
+		return err
+	}
+
 	req := &protos.SignalEntityRequest{
 		InstanceId: entityID.String(),
 		Name:       operationName,
@@ -239,6 +247,10 @@ func (c *TaskHubGrpcClient) SignalEntity(ctx context.Context, entityID api.Entit
 //
 // Returns nil if the entity doesn't exist.
 func (c *TaskHubGrpcClient) FetchEntityMetadata(ctx context.Context, entityID api.EntityID, includeState bool) (*api.EntityMetadata, error) {
+	if err := helpers.ValidateEntityName(entityID.Name); err != nil {
+		return nil, err
+	}
+
 	req := &protos.GetEntityRequest{
 		InstanceId:   entityID.String(),
 		IncludeState: includeState,
