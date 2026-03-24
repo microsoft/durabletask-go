@@ -110,6 +110,25 @@ type Backend interface {
 	PurgeOrchestrationState(context.Context, api.InstanceID) error
 }
 
+// EntityBackend is an optional interface that backends can implement to support
+// entity-specific storage operations like querying and cleanup.
+// If a backend does not implement this interface, entity queries and cleanup
+// operations will not be available through the in-process client.
+type EntityBackend interface {
+	Backend
+
+	// GetEntityMetadata retrieves metadata for a specific entity instance.
+	// Returns nil if the entity doesn't exist.
+	GetEntityMetadata(context.Context, api.EntityID, bool) (*api.EntityMetadata, error)
+
+	// QueryEntities queries entity instances matching the specified filter criteria.
+	QueryEntities(context.Context, api.EntityQuery) (*api.EntityQueryResults, error)
+
+	// CleanEntityStorage performs garbage collection on entity storage, removing
+	// empty entities and releasing orphaned locks.
+	CleanEntityStorage(context.Context, api.CleanEntityStorageRequest) (*api.CleanEntityStorageResult, error)
+}
+
 // MarshalHistoryEvent serializes the [HistoryEvent] into a protobuf byte array.
 func MarshalHistoryEvent(e *HistoryEvent) ([]byte, error) {
 	if bytes, err := proto.Marshal(e); err != nil {

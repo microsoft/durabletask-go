@@ -6,10 +6,11 @@ import (
 	"github.com/microsoft/durabletask-go/internal/helpers"
 )
 
-// TaskRegistry contains maps of names to corresponding orchestrator and activity functions.
+// TaskRegistry contains maps of names to corresponding orchestrator, activity, and entity functions.
 type TaskRegistry struct {
 	orchestrators map[string]Orchestrator
 	activities    map[string]Activity
+	entities      map[string]Entity
 }
 
 // NewTaskRegistry returns a new [TaskRegistry] struct.
@@ -17,6 +18,7 @@ func NewTaskRegistry() *TaskRegistry {
 	r := &TaskRegistry{
 		orchestrators: make(map[string]Orchestrator),
 		activities:    make(map[string]Activity),
+		entities:      make(map[string]Entity),
 	}
 	return r
 }
@@ -50,5 +52,21 @@ func (r *TaskRegistry) AddActivityN(name string, a Activity) error {
 		return fmt.Errorf("activity named '%s' is already registered", name)
 	}
 	r.activities[name] = a
+	return nil
+}
+
+// AddEntity adds an entity function to the registry. The name of the entity
+// function is determined using reflection.
+func (r *TaskRegistry) AddEntity(e Entity) error {
+	name := helpers.GetTaskFunctionName(e)
+	return r.AddEntityN(name, e)
+}
+
+// AddEntityN adds an entity function to the registry with a specified name.
+func (r *TaskRegistry) AddEntityN(name string, e Entity) error {
+	if _, ok := r.entities[name]; ok {
+		return fmt.Errorf("entity named '%s' is already registered", name)
+	}
+	r.entities[name] = e
 	return nil
 }

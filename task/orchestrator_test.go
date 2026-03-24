@@ -131,3 +131,44 @@ func Test_computeNextDelay(t *testing.T) {
 		})
 	}
 }
+
+func Test_NewGuid_Deterministic(t *testing.T) {
+	ctx := &OrchestrationContext{
+		ID:             "test-instance-123",
+		CurrentTimeUtc: time.Date(2024, 1, 15, 10, 30, 45, 0, time.UTC),
+	}
+
+	// Generate two GUIDs and verify they're different
+	guid1 := ctx.NewGuid()
+	guid2 := ctx.NewGuid()
+	if guid1 == guid2 {
+		t.Errorf("expected different GUIDs, got same: %s", guid1)
+	}
+
+	// Verify determinism by resetting the counter
+	ctx.newGuidCounter = 0
+	guid1Again := ctx.NewGuid()
+	if guid1 != guid1Again {
+		t.Errorf("expected deterministic GUID, got %s vs %s", guid1, guid1Again)
+	}
+}
+
+func Test_NewGuid_Format(t *testing.T) {
+	ctx := &OrchestrationContext{
+		ID:             "test-instance",
+		CurrentTimeUtc: time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	guid := ctx.NewGuid()
+	// UUID format: 8-4-4-4-12 hex chars
+	if len(guid) != 36 {
+		t.Errorf("expected UUID length 36, got %d: %s", len(guid), guid)
+	}
+	if guid[8] != '-' || guid[13] != '-' || guid[18] != '-' || guid[23] != '-' {
+		t.Errorf("expected UUID format with dashes, got: %s", guid)
+	}
+	// Version should be 5 (char at position 14)
+	if guid[14] != '5' {
+		t.Errorf("expected version 5 at position 14, got: %c in %s", guid[14], guid)
+	}
+}

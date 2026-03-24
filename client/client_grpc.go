@@ -7,6 +7,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -210,6 +211,138 @@ func (c *TaskHubGrpcClient) PurgeOrchestrationState(ctx context.Context, id api.
 		return api.ErrInstanceNotFound
 	}
 	return nil
+}
+
+// SignalEntity sends a fire-and-forget signal to an entity, triggering the specified operation.
+//
+// If the entity doesn't exist, it will be created automatically when the signal is processed.
+func (c *TaskHubGrpcClient) SignalEntity(ctx context.Context, entityID api.EntityID, operationName string, opts ...api.SignalEntityOptions) error {
+	req := &protos.SignalEntityRequest{
+		InstanceId: entityID.String(),
+		Name:       operationName,
+	}
+	for _, configure := range opts {
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure signal entity request: %w", err)
+		}
+	}
+
+	if _, err := c.client.SignalEntity(ctx, req); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("failed to signal entity: %w", err)
+	}
+	return nil
+}
+
+// FetchEntityMetadata retrieves metadata about an entity instance.
+//
+// Returns nil if the entity doesn't exist.
+func (c *TaskHubGrpcClient) FetchEntityMetadata(ctx context.Context, entityID api.EntityID, includeState bool) (*api.EntityMetadata, error) {
+	req := &protos.GetEntityRequest{
+		InstanceId:   entityID.String(),
+		IncludeState: includeState,
+	}
+
+	resp, err := c.client.GetEntity(ctx, req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("failed to get entity metadata: %w", err)
+	}
+	if !resp.Exists || resp.Entity == nil {
+		return nil, nil
+	}
+
+	result := &api.EntityMetadata{
+		InstanceID:       entityID,
+		BacklogQueueSize: resp.Entity.BacklogQueueSize,
+		LockedBy:         resp.Entity.LockedBy.GetValue(),
+		SerializedState:  resp.Entity.SerializedState.GetValue(),
+	}
+	if resp.Entity.LastModifiedTime != nil {
+		result.LastModifiedTime = resp.Entity.LastModifiedTime.AsTime()
+	}
+	return result, nil
+}
+
+// QueryEntities queries entities matching the specified filter criteria.
+func (c *TaskHubGrpcClient) QueryEntities(ctx context.Context, query api.EntityQuery) (*api.EntityQueryResults, error) {
+	protoQuery := &protos.EntityQuery{
+		IncludeState:     query.IncludeState,
+		IncludeTransient: query.IncludeTransient,
+	}
+	if query.InstanceIDStartsWith != "" {
+		protoQuery.InstanceIdStartsWith = wrapperspb.String(query.InstanceIDStartsWith)
+	}
+	if !query.LastModifiedFrom.IsZero() {
+		protoQuery.LastModifiedFrom = timestamppb.New(query.LastModifiedFrom)
+	}
+	if !query.LastModifiedTo.IsZero() {
+		protoQuery.LastModifiedTo = timestamppb.New(query.LastModifiedTo)
+	}
+	if query.PageSize > 0 {
+		protoQuery.PageSize = wrapperspb.Int32(query.PageSize)
+	}
+	if query.ContinuationToken != "" {
+		protoQuery.ContinuationToken = wrapperspb.String(query.ContinuationToken)
+	}
+
+	resp, err := c.client.QueryEntities(ctx, &protos.QueryEntitiesRequest{Query: protoQuery})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("failed to query entities: %w", err)
+	}
+
+	results := &api.EntityQueryResults{
+		ContinuationToken: resp.ContinuationToken.GetValue(),
+	}
+	for _, e := range resp.Entities {
+		entityID, parseErr := api.EntityIDFromString(e.InstanceId)
+		if parseErr != nil {
+			continue
+		}
+		meta := &api.EntityMetadata{
+			InstanceID:       entityID,
+			BacklogQueueSize: e.BacklogQueueSize,
+			LockedBy:         e.LockedBy.GetValue(),
+			SerializedState:  e.SerializedState.GetValue(),
+		}
+		if e.LastModifiedTime != nil {
+			meta.LastModifiedTime = e.LastModifiedTime.AsTime()
+		}
+		results.Entities = append(results.Entities, meta)
+	}
+	return results, nil
+}
+
+// CleanEntityStorage performs garbage collection on entity storage.
+func (c *TaskHubGrpcClient) CleanEntityStorage(ctx context.Context, req api.CleanEntityStorageRequest) (*api.CleanEntityStorageResult, error) {
+	protoReq := &protos.CleanEntityStorageRequest{
+		RemoveEmptyEntities:  req.RemoveEmptyEntities,
+		ReleaseOrphanedLocks: req.ReleaseOrphanedLocks,
+	}
+	if req.ContinuationToken != "" {
+		protoReq.ContinuationToken = wrapperspb.String(req.ContinuationToken)
+	}
+
+	resp, err := c.client.CleanEntityStorage(ctx, protoReq)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("failed to clean entity storage: %w", err)
+	}
+
+	return &api.CleanEntityStorageResult{
+		EmptyEntitiesRemoved:  resp.EmptyEntitiesRemoved,
+		OrphanedLocksReleased: resp.OrphanedLocksReleased,
+		ContinuationToken:     resp.ContinuationToken.GetValue(),
+	}, nil
 }
 
 func makeGetInstanceRequest(id api.InstanceID, opts []api.FetchOrchestrationMetadataOptions) *protos.GetInstanceRequest {

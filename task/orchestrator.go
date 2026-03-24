@@ -2,6 +2,7 @@ package task
 
 import (
 	"container/list"
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +41,7 @@ type OrchestrationContext struct {
 	continuedAsNew      bool
 	continuedAsNewInput any
 	customStatus        string
+	newGuidCounter      int
 
 	bufferedExternalEvents     map[string]*list.List
 	pendingExternalEventTasks  map[string]*list.List
@@ -227,6 +229,8 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 		err = ctx.onExecutionResumed(er)
 	} else if et := e.GetExecutionTerminated(); et != nil {
 		err = ctx.onExecutionTerminated(et)
+	} else if ev := e.GetEventSent(); ev != nil {
+		err = ctx.onEventSent(e.EventId, ev)
 	} else if oc := e.GetOrchestratorCompleted(); oc != nil {
 		// Nothing to do
 	} else {
@@ -237,6 +241,47 @@ func (ctx *OrchestrationContext) processEvent(e *backend.HistoryEvent) error {
 
 func (octx *OrchestrationContext) SetCustomStatus(cs string) {
 	octx.customStatus = cs
+}
+
+// NewGuid generates a deterministic UUID v5 that is safe for use in orchestrator functions.
+// The generated UUID is based on the orchestration instance ID, the current orchestrator
+// timestamp, and an internal counter, making it deterministic across replays.
+//
+// This is compatible with the .NET Durable Task SDK's NewGuid implementation.
+func (ctx *OrchestrationContext) NewGuid() string {
+	// Namespace UUID: 9e952958-5e33-4daf-827f-2fa12937b875
+	// This matches the .NET SDK's DnsNamespaceValue
+	namespaceBytes := [16]byte{
+		0x9e, 0x95, 0x29, 0x58,
+		0x5e, 0x33,
+		0x4d, 0xaf,
+		0x82, 0x7f,
+		0x2f, 0xa1, 0x29, 0x37, 0xb8, 0x75,
+	}
+
+	// Format: instanceID_timestamp_counter
+	// The timestamp uses .NET's 'o' format (7 fractional digits)
+	ts := ctx.CurrentTimeUtc.UTC().Format("2006-01-02T15:04:05.0000000Z")
+	name := fmt.Sprintf("%s_%s_%d", ctx.ID, ts, ctx.newGuidCounter)
+	ctx.newGuidCounter++
+
+	// SHA1(namespace + name) per UUID v5 spec
+	h := sha1.New()
+	h.Write(namespaceBytes[:])
+	h.Write([]byte(name))
+	hash := h.Sum(nil)
+
+	// Take first 16 bytes
+	guid := hash[:16]
+
+	// Set version to 5
+	guid[6] = (guid[6] & 0x0F) | 0x50
+	// Set variant to RFC 4122
+	guid[8] = (guid[8] & 0x3F) | 0x80
+
+	// Format as UUID string
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		guid[0:4], guid[4:6], guid[6:8], guid[8:10], guid[10:16])
 }
 
 // GetInput unmarshals the serialized orchestration input and stores it in [v].
@@ -429,6 +474,113 @@ func (ctx *OrchestrationContext) WaitForSingleEvent(eventName string, timeout ti
 	return task
 }
 
+// CallEntity sends an operation request to an entity and waits for a response.
+// The [entityID] parameter identifies the target entity. The [operationName] parameter
+// specifies the operation to invoke on the entity.
+//
+// This method returns a [Task] that completes when the entity operation finishes.
+// The result of the entity operation can be obtained by calling [Await] on the returned task.
+func (ctx *OrchestrationContext) CallEntity(entityID api.EntityID, operationName string, opts ...callEntityOption) Task {
+	options := new(callEntityOptions)
+	for _, configure := range opts {
+		if err := configure(options); err != nil {
+			failedTask := newTask(ctx)
+			failedTask.fail(helpers.NewTaskFailureDetails(err))
+			return failedTask
+		}
+	}
+
+	// Generate a deterministic request ID for response correlation.
+	requestID := ctx.NewGuid()
+
+	// Send the operation request to the entity via a SendEvent action.
+	sendEventAction := helpers.NewSendEventAction(
+		entityID.String(),
+		operationName,
+		options.rawInput,
+	)
+	sendEventAction.Id = ctx.getNextSequenceNumber()
+	ctx.pendingActions[sendEventAction.Id] = sendEventAction
+
+	// Wait for the entity's response via an external event keyed on the request ID.
+	return ctx.WaitForSingleEvent(requestID, -1)
+}
+
+// SignalEntity sends a fire-and-forget signal to an entity.
+// The [entityID] parameter identifies the target entity. The [operationName] parameter
+// specifies the operation to invoke on the entity.
+//
+// Unlike [CallEntity], this method does not wait for a response. The signal is
+// processed asynchronously by the target entity.
+func (ctx *OrchestrationContext) SignalEntity(entityID api.EntityID, operationName string, opts ...signalEntityOption) error {
+	options := new(signalEntityOptions)
+	for _, configure := range opts {
+		if err := configure(options); err != nil {
+			return err
+		}
+	}
+
+	sendEventAction := helpers.NewSendEventAction(
+		entityID.String(),
+		operationName,
+		options.rawInput,
+	)
+	sendEventAction.Id = ctx.getNextSequenceNumber()
+	ctx.pendingActions[sendEventAction.Id] = sendEventAction
+	return nil
+}
+
+// LockEntities acquires locks on the specified entities, ensuring exclusive access.
+// The locks are acquired by sending lock-acquisition events to each entity and waiting
+// for confirmation. The returned unlock function must be called to release the locks.
+//
+// While holding locks, the orchestration is in a "critical section" and can safely
+// call entity operations without the risk of conflicts from other orchestrations.
+//
+// Example usage:
+//
+//	unlock, err := ctx.LockEntities(entityID1, entityID2)
+//	if err != nil { return nil, err }
+//	defer unlock()
+//	// ... perform entity operations safely ...
+func (ctx *OrchestrationContext) LockEntities(entityIDs ...api.EntityID) (unlock func(), err error) {
+	if len(entityIDs) == 0 {
+		return func() {}, nil
+	}
+
+	// Generate a deterministic ID for this critical section
+	criticalSectionID := ctx.NewGuid()
+
+	// Send lock acquisition events to each entity and wait for confirmation
+	for _, entityID := range entityIDs {
+		sendEventAction := helpers.NewSendEventAction(
+			entityID.String(),
+			"lock:"+criticalSectionID,
+			nil,
+		)
+		sendEventAction.Id = ctx.getNextSequenceNumber()
+		ctx.pendingActions[sendEventAction.Id] = sendEventAction
+
+		// Wait for the lock confirmation
+		if err := ctx.WaitForSingleEvent("lock:"+entityID.String(), -1).Await(nil); err != nil {
+			return nil, fmt.Errorf("failed to acquire lock on entity %s: %w", entityID, err)
+		}
+	}
+
+	// Return an unlock function that releases all locks
+	return func() {
+		for _, entityID := range entityIDs {
+			releaseAction := helpers.NewSendEventAction(
+				entityID.String(),
+				"unlock:"+criticalSectionID,
+				nil,
+			)
+			releaseAction.Id = ctx.getNextSequenceNumber()
+			ctx.pendingActions[releaseAction.Id] = releaseAction
+		}
+	}, nil
+}
+
 func (ctx *OrchestrationContext) ContinueAsNew(newInput any, options ...ContinueAsNewOption) {
 	ctx.continuedAsNew = true
 	ctx.continuedAsNewInput = newInput
@@ -591,6 +743,18 @@ func (ctx *OrchestrationContext) onTimerFired(tf *protos.TimerFiredEvent) error 
 
 	// completing a task will resume the corresponding Await() call
 	task.complete(nil)
+	return nil
+}
+
+func (ctx *OrchestrationContext) onEventSent(eventID int32, es *protos.EventSentEvent) error {
+	if a, ok := ctx.pendingActions[eventID]; !ok || a.GetSendEvent() == nil {
+		return fmt.Errorf(
+			"a previous execution sent an event to '%s' with sequence number %d at this point in the orchestration logic, but the current execution doesn't have this action with this sequence number",
+			es.InstanceId,
+			eventID,
+		)
+	}
+	delete(ctx.pendingActions, eventID)
 	return nil
 }
 

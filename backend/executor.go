@@ -39,6 +39,12 @@ type activityExecutionResult struct {
 	pending  chan string
 }
 
+type entityExecutionResult struct {
+	response *protos.EntityBatchResult
+	complete chan struct{}
+	pending  chan string
+}
+
 type Executor interface {
 	ExecuteOrchestrator(ctx context.Context, iid api.InstanceID, oldEvents []*protos.HistoryEvent, newEvents []*protos.HistoryEvent) (*ExecutionResults, error)
 	ExecuteActivity(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error)
@@ -50,6 +56,8 @@ type grpcExecutor struct {
 	workItemQueue        chan *protos.WorkItem
 	pendingOrchestrators *sync.Map // map[api.InstanceID]*ExecutionResults
 	pendingActivities    *sync.Map // map[string]*activityExecutionResult
+	pendingEntities      *sync.Map // map[string]*entityExecutionResult
+	entityQueue          chan string
 	backend              Backend
 	logger               Logger
 	onWorkItemConnection func(context.Context) error
@@ -87,6 +95,8 @@ func NewGrpcExecutor(be Backend, logger Logger, opts ...grpcExecutorOptions) (ex
 		logger:               logger,
 		pendingOrchestrators: &sync.Map{},
 		pendingActivities:    &sync.Map{},
+		pendingEntities:      &sync.Map{},
+		entityQueue:          make(chan string, 100),
 	}
 
 	for _, opt := range opts {
@@ -208,8 +218,49 @@ func (g *grpcExecutor) Shutdown(ctx context.Context) error {
 		}
 		return true
 	})
+	g.pendingEntities.Range(func(_, value any) bool {
+		p, ok := value.(*entityExecutionResult)
+		if ok {
+			close(p.complete)
+		}
+		return true
+	})
 
 	return nil
+}
+
+// ExecuteEntity implements Executor
+func (executor *grpcExecutor) ExecuteEntity(ctx context.Context, iid api.InstanceID, req *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
+	key := req.InstanceId
+	result := &entityExecutionResult{complete: make(chan struct{})}
+	executor.pendingEntities.Store(key, result)
+	executor.entityQueue <- key
+
+	workItem := &protos.WorkItem{
+		Request: &protos.WorkItem_EntityRequest{
+			EntityRequest: req,
+		},
+	}
+
+	select {
+	case <-ctx.Done():
+		executor.logger.Warnf("%s: context canceled before dispatching entity work item", iid)
+		return nil, ctx.Err()
+	case executor.workItemQueue <- workItem:
+	}
+
+	select {
+	case <-ctx.Done():
+		executor.logger.Warnf("%s: context canceled before receiving entity result", iid)
+		return nil, ctx.Err()
+	case <-result.complete:
+		executor.logger.Debugf("%s: entity got result", key)
+		if result.response == nil {
+			return nil, ErrOperationAborted
+		}
+	}
+
+	return result.response, nil
 }
 
 // Hello implements protos.TaskHubSidecarServiceServer
@@ -240,6 +291,8 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 	pendingActivityCh := make(chan string, 1)
 	pendingOrchestrators := make(map[string]struct{})
 	pendingOrchestratorCh := make(chan string, 1)
+	pendingEntities := make(map[string]struct{})
+	pendingEntityCh := make(chan string, 1)
 	defer func() {
 		// If there's any pending activity left, remove them
 		for key := range pendingActivities {
@@ -255,6 +308,14 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 			p, ok := g.pendingOrchestrators.LoadAndDelete(api.InstanceID(key))
 			if ok {
 				pending := p.(*ExecutionResults)
+				close(pending.complete)
+			}
+		}
+		for key := range pendingEntities {
+			g.logger.Debugf("cleaning up pending entity: %s", key)
+			p, ok := g.pendingEntities.LoadAndDelete(key)
+			if ok {
+				pending := p.(*entityExecutionResult)
 				close(pending.complete)
 			}
 		}
@@ -285,6 +346,13 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 				if ok {
 					p.(*activityExecutionResult).pending = pendingActivityCh
 				}
+			case *protos.WorkItem_EntityRequest:
+				key := x.EntityRequest.GetInstanceId()
+				pendingEntities[key] = struct{}{}
+				p, ok := g.pendingEntities.Load(key)
+				if ok {
+					p.(*entityExecutionResult).pending = pendingEntityCh
+				}
 			}
 
 			if err := stream.Send(wi); err != nil {
@@ -295,6 +363,8 @@ func (g *grpcExecutor) GetWorkItems(req *protos.GetWorkItemsRequest, stream prot
 			delete(pendingActivities, key)
 		case key := <-pendingOrchestratorCh:
 			delete(pendingOrchestrators, key)
+		case key := <-pendingEntityCh:
+			delete(pendingEntities, key)
 		case <-g.streamShutdownChan:
 			return errShuttingDown
 		}
@@ -357,6 +427,32 @@ func getActivityExecutionKey(iid string, taskID int32) string {
 	return iid + "/" + strconv.FormatInt(int64(taskID), 10)
 }
 
+// CompleteEntityTask implements protos.TaskHubSidecarServiceServer
+func (g *grpcExecutor) CompleteEntityTask(ctx context.Context, res *protos.EntityBatchResult) (*protos.CompleteTaskResponse, error) {
+	// EntityBatchResult doesn't include instance ID (unlike OrchestratorResponse/ActivityResponse).
+	// We use a FIFO queue to correlate completions with dispatched entity work items, since the
+	// worker processes them in order.
+	var key string
+	select {
+	case key = <-g.entityQueue:
+	default:
+		return emptyCompleteTaskResponse, fmt.Errorf("no pending entity found for completion")
+	}
+
+	p, ok := g.pendingEntities.LoadAndDelete(key)
+	if !ok {
+		return emptyCompleteTaskResponse, fmt.Errorf("pending entity '%s' was already completed", key)
+	}
+
+	pending := p.(*entityExecutionResult)
+	pending.response = res
+	if pending.pending != nil {
+		pending.pending <- key
+	}
+	close(pending.complete)
+	return emptyCompleteTaskResponse, nil
+}
+
 // CreateTaskHub implements protos.TaskHubSidecarServiceServer
 func (grpcExecutor) CreateTaskHub(context.Context, *protos.CreateTaskHubRequest) (*protos.CreateTaskHubResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "CreateTaskHub is not implemented")
@@ -410,6 +506,15 @@ func (g *grpcExecutor) RaiseEvent(ctx context.Context, req *protos.RaiseEventReq
 	}
 
 	return &protos.RaiseEventResponse{}, nil
+}
+
+// SignalEntity implements protos.TaskHubSidecarServiceServer
+func (g *grpcExecutor) SignalEntity(ctx context.Context, req *protos.SignalEntityRequest) (*protos.SignalEntityResponse, error) {
+	e := helpers.NewEventRaisedEvent(req.Name, req.Input)
+	if err := g.backend.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
+		return nil, fmt.Errorf("failed to signal entity: %w", err)
+	}
+	return &protos.SignalEntityResponse{}, nil
 }
 
 // StartInstance implements protos.TaskHubSidecarServiceServer

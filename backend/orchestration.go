@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -24,10 +25,19 @@ type OrchestratorExecutor interface {
 		newEvents []*protos.HistoryEvent) (*ExecutionResults, error)
 }
 
+// EntityExecutor is an optional extension of [Executor] that adds entity execution support.
+// If the executor passed to [NewOrchestrationWorker] implements this interface,
+// entity work items will be automatically dispatched.
+type EntityExecutor interface {
+	Executor
+	ExecuteEntity(context.Context, api.InstanceID, *protos.EntityBatchRequest) (*protos.EntityBatchResult, error)
+}
+
 type orchestratorProcessor struct {
-	be       Backend
-	executor OrchestratorExecutor
-	logger   Logger
+	be             Backend
+	executor       OrchestratorExecutor
+	entityExecutor EntityExecutor
+	logger         Logger
 }
 
 func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor, logger Logger, opts ...NewTaskWorkerOptions) TaskWorker {
@@ -35,6 +45,10 @@ func NewOrchestrationWorker(be Backend, executor OrchestratorExecutor, logger Lo
 		be:       be,
 		executor: executor,
 		logger:   logger,
+	}
+	// If the executor also implements EntityExecutor, use it for entity dispatch
+	if ee, ok := executor.(EntityExecutor); ok {
+		processor.entityExecutor = ee
 	}
 	return NewTaskWorker(processor, logger, opts...)
 }
@@ -53,6 +67,11 @@ func (p *orchestratorProcessor) FetchWorkItem(ctx context.Context) (WorkItem, er
 func (w *orchestratorProcessor) ProcessWorkItem(ctx context.Context, cwi WorkItem) error {
 	wi := cwi.(*OrchestrationWorkItem)
 	w.logger.Debugf("%v: received work item with %d new event(s): %v", wi.InstanceID, len(wi.NewEvents), helpers.HistoryListSummary(wi.NewEvents))
+
+	// Detect entity instances by their "@name@key" prefix and route to entity executor
+	if w.entityExecutor != nil && strings.HasPrefix(string(wi.InstanceID), "@") {
+		return w.processEntityWorkItem(ctx, wi)
+	}
 
 	// TODO: Caching
 	// In the fullness of time, we should consider caching executors and runtime state
@@ -140,6 +159,105 @@ func (p *orchestratorProcessor) CompleteWorkItem(ctx context.Context, wi WorkIte
 func (p *orchestratorProcessor) AbandonWorkItem(ctx context.Context, wi WorkItem) error {
 	owi := wi.(*OrchestrationWorkItem)
 	return p.be.AbandonOrchestrationWorkItem(ctx, owi)
+}
+
+// processEntityWorkItem handles orchestration work items that represent entity instances.
+// Entity instances are identified by their "@name@key" instance ID format.
+// This method converts incoming orchestration events into entity operations,
+// executes them via the EntityExecutor, and writes the results back as orchestration state.
+func (w *orchestratorProcessor) processEntityWorkItem(ctx context.Context, wi *OrchestrationWorkItem) error {
+	iid := string(wi.InstanceID)
+	w.logger.Debugf("%v: processing as entity work item", wi.InstanceID)
+
+	// Load existing state if needed
+	if wi.State == nil {
+		state, err := w.be.GetOrchestrationRuntimeState(ctx, wi)
+		if err != nil {
+			return fmt.Errorf("failed to load entity state: %w", err)
+		}
+		wi.State = state
+	}
+
+	// Extract entity state from the orchestration metadata (stored as CustomStatus)
+	var entityState *wrapperspb.StringValue
+	meta, err := w.be.GetOrchestrationMetadata(ctx, wi.InstanceID)
+	if err == nil && meta != nil && meta.SerializedCustomStatus != "" {
+		entityState = wrapperspb.String(meta.SerializedCustomStatus)
+	}
+
+	// Convert new EventRaised events into entity OperationRequests
+	var operations []*protos.OperationRequest
+	for _, e := range wi.NewEvents {
+		if er := e.GetEventRaised(); er != nil {
+			operations = append(operations, &protos.OperationRequest{
+				Operation: er.Name,
+				RequestId: fmt.Sprintf("%d", e.EventId),
+				Input:     er.Input,
+			})
+		}
+	}
+
+	if len(operations) == 0 {
+		w.logger.Debugf("%v: no entity operations to process", wi.InstanceID)
+		return nil
+	}
+
+	// Build and execute the entity batch
+	batchReq := &protos.EntityBatchRequest{
+		InstanceId:  iid,
+		EntityState: entityState,
+		Operations:  operations,
+	}
+
+	batchResult, err := w.entityExecutor.ExecuteEntity(ctx, wi.InstanceID, batchReq)
+	if err != nil {
+		return fmt.Errorf("failed to execute entity: %w", err)
+	}
+	if batchResult.FailureDetails != nil {
+		return fmt.Errorf("entity execution failed: %s", batchResult.FailureDetails.ErrorMessage)
+	}
+
+	// Ensure the entity orchestration instance exists in state
+	if wi.State.startEvent == nil {
+		entityID, _ := api.EntityIDFromString(iid)
+		startEvent := helpers.NewExecutionStartedEvent(entityID.Name, iid, nil, nil, nil, nil)
+		if err := wi.State.AddEvent(helpers.NewOrchestratorStartedEvent()); err != nil {
+			return fmt.Errorf("failed to add orchestrator started event: %w", err)
+		}
+		if err := wi.State.AddEvent(startEvent); err != nil {
+			return fmt.Errorf("failed to initialize entity state: %w", err)
+		}
+	}
+
+	// Add incoming events to state history
+	for _, e := range wi.NewEvents {
+		_ = wi.State.AddEvent(e)
+	}
+
+	// Save entity state as the orchestration's custom status
+	wi.State.CustomStatus = batchResult.EntityState
+
+	// Process actions from the entity batch result (signals to other entities, new orchestrations)
+	for _, action := range batchResult.Actions {
+		if signal := action.GetSendSignal(); signal != nil {
+			e := helpers.NewEventRaisedEvent(signal.Name, signal.Input)
+			if err := w.be.AddNewOrchestrationEvent(ctx, api.InstanceID(signal.InstanceId), e); err != nil {
+				w.logger.Warnf("%v: failed to send entity signal to %s: %v", wi.InstanceID, signal.InstanceId, err)
+			}
+		} else if startOrch := action.GetStartNewOrchestration(); startOrch != nil {
+			orchInstanceID := startOrch.InstanceId
+			if orchInstanceID == "" {
+				orchInstanceID = fmt.Sprintf("%s:%04x", iid, action.Id)
+			}
+			e := helpers.NewExecutionStartedEvent(startOrch.Name, orchInstanceID, startOrch.Input, nil, nil, nil)
+			if err := w.be.CreateOrchestrationInstance(ctx, e); err != nil {
+				w.logger.Warnf("%v: failed to start orchestration %s: %v", wi.InstanceID, orchInstanceID, err)
+			}
+		}
+	}
+
+	w.logger.Debugf("%v: entity processed %d operation(s)", wi.InstanceID, len(operations))
+	return nil
 }
 
 func (w *orchestratorProcessor) applyWorkItem(ctx context.Context, wi *OrchestrationWorkItem) (context.Context, trace.Span, bool) {

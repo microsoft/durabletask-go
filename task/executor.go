@@ -96,6 +96,128 @@ func (te taskExecutor) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// ExecuteEntity implements backend.Executor and executes an entity batch in the current goroutine.
+func (te *taskExecutor) ExecuteEntity(ctx context.Context, id api.InstanceID, req *protos.EntityBatchRequest) (result *protos.EntityBatchResult, err error) {
+	entityID, parseErr := api.EntityIDFromString(req.InstanceId)
+	if parseErr != nil {
+		return nil, fmt.Errorf("invalid entity instance ID: %w", parseErr)
+	}
+
+	invoker, ok := te.Registry.entities[entityID.Name]
+	if !ok {
+		// try the wildcard match
+		invoker, ok = te.Registry.entities["*"]
+		if !ok {
+			return &protos.EntityBatchResult{
+				FailureDetails: &protos.TaskFailureDetails{
+					ErrorType:    "EntityNotRegistered",
+					ErrorMessage: fmt.Sprintf("no entity named '%s' was registered", entityID.Name),
+				},
+			}, nil
+		}
+	}
+
+	// Initialize entity state from the batch request
+	var state entityState
+	if req.EntityState != nil {
+		state = entityState{
+			value:    []byte(req.EntityState.GetValue()),
+			hasValue: true,
+		}
+	}
+
+	results := make([]*protos.OperationResult, 0, len(req.Operations))
+	var allActions []*protos.OperationAction
+
+	for _, op := range req.Operations {
+		entityCtx := &EntityContext{
+			ID:        entityID,
+			Operation: op.Operation,
+			rawInput:  []byte(op.Input.GetValue()),
+			state:     state,
+		}
+
+		// Execute the entity function, converting panics to failures
+		opResult := func() (opResult *protos.OperationResult) {
+			defer func() {
+				panicVal := recover()
+				if panicVal != nil {
+					opResult = &protos.OperationResult{
+						ResultType: &protos.OperationResult_Failure{
+							Failure: &protos.OperationResultFailure{
+								FailureDetails: &protos.TaskFailureDetails{
+									ErrorType:    "EntityOperationPanic",
+									ErrorMessage: fmt.Sprintf("panic: %v", panicVal),
+								},
+							},
+						},
+					}
+				}
+			}()
+
+			output, opErr := invoker(entityCtx)
+			if opErr != nil {
+				// Operation failed - rollback state
+				return &protos.OperationResult{
+					ResultType: &protos.OperationResult_Failure{
+						Failure: &protos.OperationResultFailure{
+							FailureDetails: &protos.TaskFailureDetails{
+								ErrorType:    fmt.Sprintf("%T", opErr),
+								ErrorMessage: fmt.Sprintf("%+v", opErr),
+							},
+						},
+					},
+				}
+			}
+
+			// Operation succeeded - commit state
+			state = entityCtx.state
+			allActions = append(allActions, entityCtx.actions...)
+
+			var rawResult *wrapperspb.StringValue
+			if output != nil {
+				bytes, marshalErr := marshalData(output)
+				if marshalErr != nil {
+					return &protos.OperationResult{
+						ResultType: &protos.OperationResult_Failure{
+							Failure: &protos.OperationResultFailure{
+								FailureDetails: &protos.TaskFailureDetails{
+									ErrorType:    fmt.Sprintf("%T", marshalErr),
+									ErrorMessage: fmt.Sprintf("failed to marshal entity result: %+v", marshalErr),
+								},
+							},
+						},
+					}
+				}
+				if len(bytes) > 0 {
+					rawResult = wrapperspb.String(string(bytes))
+				}
+			}
+
+			return &protos.OperationResult{
+				ResultType: &protos.OperationResult_Success{
+					Success: &protos.OperationResultSuccess{
+						Result: rawResult,
+					},
+				},
+			}
+		}()
+
+		results = append(results, opResult)
+	}
+
+	batchResult := &protos.EntityBatchResult{
+		Results: results,
+		Actions: allActions,
+	}
+
+	if state.hasValue {
+		batchResult.EntityState = wrapperspb.String(string(state.value))
+	}
+
+	return batchResult, nil
+}
+
 func unmarshalData(data []byte, v any) error {
 	switch {
 	case v == nil:

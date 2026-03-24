@@ -121,6 +121,8 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 				go c.processOrchestrationWorkItem(ctx, executor, orchReq)
 			} else if actReq := workItem.GetActivityRequest(); actReq != nil {
 				go c.processActivityWorkItem(ctx, executor, actReq)
+			} else if entityReq := workItem.GetEntityRequest(); entityReq != nil {
+				go c.processEntityWorkItem(ctx, executor, entityReq)
 			} else {
 				c.logger.Warnf("received unknown work item type: %v", workItem)
 			}
@@ -197,6 +199,37 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 			c.logger.Warn("failed to complete activity task: context canceled")
 		} else {
 			c.logger.Errorf("failed to complete activity task: %v", err)
+		}
+	}
+}
+
+func (c *TaskHubGrpcClient) processEntityWorkItem(
+	ctx context.Context,
+	executor backend.Executor,
+	req *protos.EntityBatchRequest,
+) {
+	ee, ok := executor.(backend.EntityExecutor)
+	if !ok {
+		c.logger.Errorf("executor does not support entity execution")
+		return
+	}
+
+	result, err := ee.ExecuteEntity(ctx, api.InstanceID(req.InstanceId), req)
+
+	if err != nil {
+		result = &protos.EntityBatchResult{
+			FailureDetails: &protos.TaskFailureDetails{
+				ErrorType:    fmt.Sprintf("%T", err),
+				ErrorMessage: err.Error(),
+			},
+		}
+	}
+
+	if _, err = c.client.CompleteEntityTask(ctx, result); err != nil {
+		if ctx.Err() != nil {
+			c.logger.Warn("failed to complete entity task: context canceled")
+		} else {
+			c.logger.Errorf("failed to complete entity task: %v", err)
 		}
 	}
 }

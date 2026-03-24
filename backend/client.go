@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,6 +26,17 @@ type TaskHubClient interface {
 	SuspendOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	ResumeOrchestration(ctx context.Context, id api.InstanceID, reason string) error
 	PurgeOrchestrationState(ctx context.Context, id api.InstanceID, opts ...api.PurgeOptions) error
+}
+
+// EntityTaskHubClient is an optional extension of [TaskHubClient] that adds entity-specific
+// operations. Clients returned by [NewTaskHubClient] always implement this interface.
+// The gRPC client ([TaskHubGrpcClient]) also implements this interface.
+type EntityTaskHubClient interface {
+	TaskHubClient
+	SignalEntity(ctx context.Context, entityID api.EntityID, operationName string, opts ...api.SignalEntityOptions) error
+	FetchEntityMetadata(ctx context.Context, entityID api.EntityID, includeState bool) (*api.EntityMetadata, error)
+	QueryEntities(ctx context.Context, query api.EntityQuery) (*api.EntityQueryResults, error)
+	CleanEntityStorage(ctx context.Context, req api.CleanEntityStorageRequest) (*api.CleanEntityStorageResult, error)
 }
 
 type backendClient struct {
@@ -204,4 +216,89 @@ func (c *backendClient) PurgeOrchestrationState(ctx context.Context, id api.Inst
 		return fmt.Errorf("failed to purge orchestration state: %w", err)
 	}
 	return nil
+}
+
+// SignalEntity sends a fire-and-forget signal to an entity, triggering the specified operation.
+//
+// If the entity doesn't exist, it will be created automatically when the signal is processed.
+func (c *backendClient) SignalEntity(ctx context.Context, entityID api.EntityID, operationName string, opts ...api.SignalEntityOptions) error {
+	req := &protos.SignalEntityRequest{
+		InstanceId: entityID.String(),
+		Name:       operationName,
+	}
+	for _, configure := range opts {
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure signal entity request: %w", err)
+		}
+	}
+
+	// Ensure the entity orchestration instance exists. Create with IGNORE policy
+	// so it's a no-op if the instance already exists.
+	startEvent := helpers.NewExecutionStartedEvent(entityID.Name, req.InstanceId, nil, nil, nil, nil)
+	createErr := c.be.CreateOrchestrationInstance(ctx, startEvent, WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
+		Action:          protos.CreateOrchestrationAction_IGNORE,
+		OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING},
+	}))
+	if createErr != nil && !errors.Is(createErr, api.ErrDuplicateInstance) && !errors.Is(createErr, api.ErrIgnoreInstance) {
+		return fmt.Errorf("failed to create entity instance: %w", createErr)
+	}
+
+	e := helpers.NewEventRaisedEvent(req.Name, req.Input)
+	if err := c.be.AddNewOrchestrationEvent(ctx, api.InstanceID(req.InstanceId), e); err != nil {
+		return fmt.Errorf("failed to signal entity: %w", err)
+	}
+	return nil
+}
+
+// FetchEntityMetadata retrieves metadata about an entity instance.
+//
+// Returns nil if the entity doesn't exist.
+// If the backend implements [EntityBackend], its native entity storage is used.
+// Otherwise, falls back to orchestration metadata.
+func (c *backendClient) FetchEntityMetadata(ctx context.Context, entityID api.EntityID, includeState bool) (*api.EntityMetadata, error) {
+	if eb, ok := c.be.(EntityBackend); ok {
+		return eb.GetEntityMetadata(ctx, entityID, includeState)
+	}
+
+	// Fallback: entities are backed by orchestrations
+	iid := api.InstanceID(entityID.String())
+	metadata, err := c.be.GetOrchestrationMetadata(ctx, iid)
+	if err != nil {
+		if errors.Is(err, api.ErrInstanceNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get entity metadata: %w", err)
+	}
+	if metadata == nil {
+		return nil, nil
+	}
+
+	result := &api.EntityMetadata{
+		InstanceID:       entityID,
+		LastModifiedTime: metadata.LastUpdatedAt,
+	}
+	if includeState {
+		result.SerializedState = metadata.SerializedCustomStatus
+	}
+	return result, nil
+}
+
+// QueryEntities queries entities matching the specified filter criteria.
+//
+// Requires the backend to implement [EntityBackend].
+func (c *backendClient) QueryEntities(ctx context.Context, query api.EntityQuery) (*api.EntityQueryResults, error) {
+	if eb, ok := c.be.(EntityBackend); ok {
+		return eb.QueryEntities(ctx, query)
+	}
+	return nil, fmt.Errorf("QueryEntities requires the backend to implement EntityBackend")
+}
+
+// CleanEntityStorage performs garbage collection on entity storage.
+//
+// Requires the backend to implement [EntityBackend].
+func (c *backendClient) CleanEntityStorage(ctx context.Context, req api.CleanEntityStorageRequest) (*api.CleanEntityStorageResult, error) {
+	if eb, ok := c.be.(EntityBackend); ok {
+		return eb.CleanEntityStorage(ctx, req)
+	}
+	return nil, fmt.Errorf("CleanEntityStorage requires the backend to implement EntityBackend")
 }
