@@ -1,0 +1,4 @@
+Source: https://github.com/microsoft/durabletask-protobuf
+Branch: main
+Commit: 4207e1dbd14cedc268f69c3befee60fcaad19367
+URL:    https://github.com/microsoft/durabletask-protobuf/blob/4207e1dbd14cedc268f69c3befee60fcaad19367/protos/orchestrator_service.proto

@@ -253,7 +253,7 @@ Clone the repository as you normally would:
 git clone https://github.com/microsoft/durabletask-go
 ```
 
-The protocol buffer definitions used to generate the gRPC bindings are vendored under [`internal/durabletask-protobuf/protos`](./internal/durabletask-protobuf/protos). See [`internal/durabletask-protobuf/README.md`](./internal/durabletask-protobuf/README.md) for details on how to refresh them from the upstream [microsoft/durabletask-protobuf](https://github.com/microsoft/durabletask-protobuf) repository.
+The protocol buffer definitions used to generate the gRPC bindings are vendored under [`vendored/durabletask-protobuf/protos`](./vendored/durabletask-protobuf/protos). See [`vendored/durabletask-protobuf/README.md`](./vendored/durabletask-protobuf/README.md) for details on how to refresh them from the upstream [microsoft/durabletask-protobuf](https://github.com/microsoft/durabletask-protobuf) repository.
 
 ## Building the project
 
@@ -261,11 +261,11 @@ This project requires go v1.19.x or greater. You can build a standalone executab
 
 ### Generating protobuf
 
-Use the following command to regenerate the protobuf bindings from the vendored proto file. Use this whenever updating the proto file under [`internal/durabletask-protobuf/protos`](./internal/durabletask-protobuf/protos).
+Use the following command to regenerate the protobuf bindings from the vendored proto file. Use this whenever updating the proto file under [`vendored/durabletask-protobuf/protos`](./vendored/durabletask-protobuf/protos).
 
 ```bash
 # NOTE: assumes the .proto file defines: option go_package = "/internal/protos"
-protoc --go_out=. --go-grpc_out=. -I internal/durabletask-protobuf/protos orchestrator_service.proto
+protoc --go_out=. --go-grpc_out=. -I vendored/durabletask-protobuf/protos orchestrator_service.proto
 ```
 
 ### Generating mocks for testing

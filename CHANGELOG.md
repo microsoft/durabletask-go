@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Removed the `submodules/durabletask-protobuf` git submodule. The `orchestrator_service.proto` file is now vendored under `internal/durabletask-protobuf/protos/`, with the source commit hash tracked in `internal/durabletask-protobuf/PROTO_SOURCE_COMMIT_HASH` and a helper script (`internal/durabletask-protobuf/update-proto.sh`) for refreshing the proto from upstream.
+- Removed the `submodules/durabletask-protobuf` git submodule. The `orchestrator_service.proto` file is now vendored under `vendored/durabletask-protobuf/protos/`, with the source provenance (URL, branch/ref, commit hash) tracked in `vendored/durabletask-protobuf/PROTO_SOURCE_COMMIT_HASH` and a helper script (`vendored/durabletask-protobuf/update-proto.sh`) for refreshing the proto from upstream.
 
 ## [v0.6.0] - 2025-02-05
 

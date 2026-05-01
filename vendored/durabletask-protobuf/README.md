@@ -5,7 +5,7 @@ This directory contains the protocol buffer definitions used by the Durable Task
 ## Directory Structure
 
 - `protos/` - Contains the vendored proto files
-- `PROTO_SOURCE_COMMIT_HASH` - Contains the commit hash of the upstream `microsoft/durabletask-protobuf` repository that the proto files were last synced from
+- `PROTO_SOURCE_COMMIT_HASH` - Records the upstream source URL, branch/ref, and commit hash that the proto files were last synced from
 - `update-proto.sh` - Helper script to refresh the vendored proto file and commit hash from upstream
 
 ## Updating the proto files
@@ -14,16 +14,16 @@ Run the helper script from the repository root to download the latest `orchestra
 
 ```bash
 # Update from the default branch (main)
-./internal/durabletask-protobuf/update-proto.sh
+./vendored/durabletask-protobuf/update-proto.sh
 
-# Update from a specific branch
-./internal/durabletask-protobuf/update-proto.sh <branch-name>
+# Update from a specific branch, tag, or commit SHA
+./vendored/durabletask-protobuf/update-proto.sh <branch-tag-or-sha>
 ```
 
 After running the script, regenerate the Go gRPC bindings so that the committed `internal/protos/*.pb.go` files match the updated `.proto`:
 
 ```bash
-protoc --go_out=. --go-grpc_out=. -I ./internal/durabletask-protobuf/protos orchestrator_service.proto
+protoc --go_out=. --go-grpc_out=. -I ./vendored/durabletask-protobuf/protos orchestrator_service.proto
 ```
 
-Commit both the updated proto file, `PROTO_SOURCE_COMMIT_HASH`, and the regenerated `.pb.go` files together.
+Commit the updated proto file, `PROTO_SOURCE_COMMIT_HASH`, and the regenerated `.pb.go` files together.
