@@ -53,7 +53,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: true
           
       - name: Setup Go environment
         uses: actions/setup-go@v5
@@ -74,7 +73,7 @@ jobs:
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$PROTOC_GEN_GO_GRPC
 
       - name: Generate grpc code
-        run: protoc --go_out=. --go-grpc_out=. -I ./submodules/durabletask-protobuf/protos orchestrator_service.proto
+        run: protoc --go_out=. --go-grpc_out=. -I ./internal/durabletask-protobuf/protos orchestrator_service.proto
 
       - name: Run go vet
         run: go vet ./...
