@@ -267,6 +267,13 @@ message CreateInstanceRequest {
     google.protobuf.StringValue input = 4;
     google.protobuf.Timestamp scheduledStartTimestamp = 5;
     OrchestrationIdReusePolicy orchestrationIdReusePolicy = 6;
+    // Field numbers 7 (executionId), 8 (tags) and 10 (requestTime) are used by
+    // newer revisions of this proto upstream; they are reserved here so the
+    // wire-compatible parentTraceContext keeps field number 9, matching the
+    // host (Azure Functions Durable Task extension) which reads it on the
+    // server side to parent the orchestration span.
+    reserved 7, 8, 10;
+    TraceContext parentTraceContext = 9;
 }
 
 message OrchestrationIdReusePolicy {

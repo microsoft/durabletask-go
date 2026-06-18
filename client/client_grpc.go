@@ -6,11 +6,13 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/codes"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/backend"
+	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
@@ -42,8 +44,20 @@ func (c *TaskHubGrpcClient) ScheduleNewOrchestration(ctx context.Context, orches
 		req.InstanceId = uuid.NewString()
 	}
 
+	// Start a client span for the schedule operation and propagate its trace
+	// context to the server via ParentTraceContext. The server (a task hub
+	// worker or the Azure Functions Durable Task extension) reads it to parent
+	// the orchestration span, linking the caller's trace to the orchestration
+	// it starts. This mirrors the in-process backend client, which stamps the
+	// same span onto the ExecutionStarted event.
+	ctx, span := helpers.StartNewCreateOrchestrationSpan(ctx, req.Name, req.Version.GetValue(), req.InstanceId)
+	defer span.End()
+	req.ParentTraceContext = helpers.TraceContextFromSpan(span)
+
 	resp, err := c.client.StartInstance(ctx, req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		if ctx.Err() != nil {
 			return api.EmptyInstanceID, ctx.Err()
 		}
