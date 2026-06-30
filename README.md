@@ -10,6 +10,19 @@ The Durable Task engine is also intended to be used as the basis for the [Dapr e
 
 > This project is a work-in-progress and should not be used for production workloads. The public API surface is also not yet stable. The project itself is also in the very early stages and is missing some of the basics, such as contribution guidelines, etc.
 
+## Connecting to the Azure-managed Durable Task Scheduler (DTS)
+
+To connect this SDK to an [Azure-managed Durable Task Scheduler](https://learn.microsoft.com/azure/azure-functions/durable/durable-task-scheduler/durable-task-scheduler) task hub, use the [`azuremanaged`](./azuremanaged) module, which adds the required gRPC authentication and `taskhub` routing on top of the core client and worker:
+
+```go
+client, err := azuremanaged.NewClientFromConnectionString(
+    "Endpoint=myscheduler.westus2.durabletask.io;Authentication=DefaultAzure;TaskHub=myhub")
+worker, err := azuremanaged.NewWorkerFromConnectionString(
+    "Endpoint=myscheduler.westus2.durabletask.io;Authentication=DefaultAzure;TaskHub=myhub")
+```
+
+See the [`azuremanaged` README](./azuremanaged/README.md) for connection-string options, supported authentication types, and emulator usage. It is a separate Go module so the core engine does not depend on the Azure SDK.
+
 ## Storage providers
 
 This project includes a [sqlite](https://sqlite.org/) storage provider for persisting app state to disk.
