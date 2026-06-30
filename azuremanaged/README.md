@@ -12,6 +12,10 @@ metadata and authentication that DTS requires:
 
 It is a separate Go module so that the core engine does not take a dependency on the Azure SDK.
 
+This module exposes two distinct types, mirroring the other DTS SDKs: a `Client` that
+schedules and manages orchestration instances, and a `Worker` that executes orchestrator and
+activity functions. Neither can perform the other's role.
+
 ## Install
 
 ```bash
@@ -68,6 +72,25 @@ opts := &azuremanaged.Options{
 
 client, err := azuremanaged.NewClient(opts)
 worker, err := azuremanaged.NewWorker(opts)
+```
+
+A `Worker` registers orchestrator/activity functions through a `task.TaskRegistry` and starts
+processing work items with `Start`, which returns once the listener is connected and continues
+on a background goroutine until the context is canceled:
+
+```go
+r := task.NewTaskRegistry()
+// r.AddOrchestratorN(...) / r.AddActivityN(...)
+if err := worker.Start(context.Background(), r); err != nil {
+    // handle err
+}
+```
+
+A `Client` schedules and manages instances:
+
+```go
+id, err := client.ScheduleNewOrchestration(context.Background(), "MyOrchestrator")
+// ... WaitForOrchestrationCompletion, TerminateOrchestration, RaiseEvent, etc.
 ```
 
 When `Credential` is `nil`, an insecure channel is used (local/emulator only). The token scope

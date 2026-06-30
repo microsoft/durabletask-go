@@ -59,7 +59,7 @@ func ExampleNewClient() {
 		}
 		return "Hello, " + name + "!", nil
 	})
-	if err := worker.StartWorkItemListener(context.Background(), r); err != nil {
+	if err := worker.Start(context.Background(), r); err != nil {
 		panic(err)
 	}
 
