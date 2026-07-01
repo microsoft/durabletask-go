@@ -363,8 +363,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 			if es := msg.HistoryEvent.GetExecutionStarted(); es != nil {
 				// Need to insert a new row into the DB
 				if _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, backend.WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
-					OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED},
-					Action:          api.REUSE_ID_ACTION_TERMINATE,
+					ReplaceableStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED},
 				})); err != nil {
 					if errors.Is(err, backend.ErrDuplicateEvent) {
 						be.logger.Warnf(
@@ -433,10 +432,7 @@ func (be *postgresBackend) CreateOrchestrationInstance(ctx context.Context, e *b
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
 
 	var instanceID string
-	if instanceID, err = be.createOrchestrationInstanceInternal(ctx, e, tx, opts...); errors.Is(err, api.ErrIgnoreInstance) {
-		// choose to ignore, do nothing
-		return nil
-	} else if err != nil {
+	if instanceID, err = be.createOrchestrationInstanceInternal(ctx, e, tx, opts...); err != nil {
 		return err
 	}
 
@@ -550,36 +546,26 @@ func (be *postgresBackend) handleInstanceExists(ctx context.Context, tx pgx.Tx, 
 		return fmt.Errorf("failed to scan the Instances table result: %w", err)
 	}
 
-	// status not match, return instance duplicate error
-	if !isStatusMatch(policy.OperationStatus, helpers.FromRuntimeStatusString(*runtimeStatus)) {
+	// If the existing instance is not in a replaceable status, reject the duplicate.
+	if !isStatusMatch(policy.GetReplaceableStatus(), helpers.FromRuntimeStatusString(*runtimeStatus)) {
 		return api.ErrDuplicateInstance
 	}
 
-	// status match
-	switch policy.Action {
-	case protos.CreateOrchestrationAction_IGNORE:
-		// Log an warning message and ignore creating new instance
-		be.logger.Warnf("An instance with ID '%s' already exists; dropping duplicate create request", startEvent.OrchestrationInstance.InstanceId)
-		return api.ErrIgnoreInstance
-	case protos.CreateOrchestrationAction_TERMINATE:
-		// terminate existing instance
-		if err := be.cleanupOrchestrationStateInternal(ctx, tx, api.InstanceID(startEvent.OrchestrationInstance.InstanceId), false); err != nil {
-			return fmt.Errorf("failed to cleanup orchestration status: %w", err)
-		}
-		// create a new instance
-		var rows int64
-		if rows, err = insertOrIgnoreInstanceTableInternal(ctx, tx, e, startEvent); err != nil {
-			return err
-		}
-
-		// should never happen, because we clean up instance before create new one
-		if rows <= 0 {
-			return fmt.Errorf("failed to insert into Instances table because entry already exists")
-		}
-		return nil
+	// The existing instance is in a replaceable status: terminate it and create a new one.
+	if err := be.cleanupOrchestrationStateInternal(ctx, tx, api.InstanceID(startEvent.OrchestrationInstance.InstanceId), false); err != nil {
+		return fmt.Errorf("failed to cleanup orchestration status: %w", err)
 	}
-	// default behavior
-	return api.ErrDuplicateInstance
+	// create a new instance
+	var rows int64
+	if rows, err = insertOrIgnoreInstanceTableInternal(ctx, tx, e, startEvent); err != nil {
+		return err
+	}
+
+	// should never happen, because we clean up instance before create new one
+	if rows <= 0 {
+		return fmt.Errorf("failed to insert into Instances table because entry already exists")
+	}
+	return nil
 }
 
 func isStatusMatch(statuses []protos.OrchestrationStatus, runtimeStatus protos.OrchestrationStatus) bool {

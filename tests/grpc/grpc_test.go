@@ -308,7 +308,7 @@ func Test_Grpc_Terminate_Recursive(t *testing.T) {
 	}
 }
 
-func Test_Grpc_ReuseInstanceIDIgnore(t *testing.T) {
+func Test_Grpc_ReuseInstanceIDNonReplaceableStatus(t *testing.T) {
 	delayTime := 2 * time.Second
 	r := task.NewTaskRegistry()
 	require.NoError(t, r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
@@ -333,10 +333,12 @@ func Test_Grpc_ReuseInstanceIDIgnore(t *testing.T) {
 
 	cancelListener := startGrpcListener(t, r)
 	defer cancelListener()
-	instanceID := api.InstanceID("SKIP_IF_RUNNING_OR_COMPLETED")
+	instanceID := api.InstanceID("REPLACE_ONLY_IF_FAILED")
+	// The orchestration below always runs to success and is never FAILED/TERMINATED, so its
+	// current status is never in the replaceable set. The duplicate create request must
+	// therefore be rejected regardless of timing.
 	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
-		Action:          api.REUSE_ID_ACTION_IGNORE,
-		OperationStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
+		ReplaceableStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_FAILED, api.RUNTIME_STATUS_TERMINATED},
 	}
 
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))
@@ -344,19 +346,18 @@ func Test_Grpc_ReuseInstanceIDIgnore(t *testing.T) {
 	// wait orchestration to start
 	_, err = grpcClient.WaitForOrchestrationStart(ctx, id)
 	require.NoError(t, err)
-	pivotTime := time.Now()
-	// schedule again, it should ignore creating the new orchestration
-	id, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
-	require.NoError(t, err)
+	// schedule again; the running instance is not in a replaceable status, so this must fail
+	_, err = grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "orchestration instance already exists")
+	}
 	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelTimeout()
 	metadata, err := grpcClient.WaitForOrchestrationCompletion(timeoutCtx, id, api.WithFetchPayloads(true))
 	require.NoError(t, err)
 	assert.Equal(t, true, metadata.IsComplete())
-	// the first orchestration should complete as the second one is ignored
+	// the original orchestration should complete unaffected by the rejected duplicate
 	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
-	// assert the orchestration created timestamp
-	assert.True(t, pivotTime.After(metadata.CreatedAt))
 }
 
 func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
@@ -386,8 +387,7 @@ func Test_Grpc_ReuseInstanceIDTerminate(t *testing.T) {
 	defer cancelListener()
 	instanceID := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
 	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
-		Action:          api.REUSE_ID_ACTION_TERMINATE,
-		OperationStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
+		ReplaceableStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
 	}
 
 	id, err := grpcClient.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("世界"), api.WithInstanceID(instanceID))

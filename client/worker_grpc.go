@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -18,6 +19,12 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
+
+// defaultWorkItemConcurrency mirrors the other Durable Task SDKs, which default the maximum
+// number of concurrently dispatched work items to 100 per logical processor. The value is
+// advertised to the sidecar via GetWorkItemsRequest; a zero value causes some sidecars
+// (notably the Durable Task Scheduler) to withhold all work items.
+var defaultWorkItemConcurrency = int32(100 * runtime.NumCPU())
 
 type workItemsStream interface {
 	Recv() (*protos.WorkItem, error)
@@ -34,7 +41,11 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 			return fmt.Errorf("failed to connect to task hub service: %w", err)
 		}
 
-		req := protos.GetWorkItemsRequest{}
+		req := protos.GetWorkItemsRequest{
+			MaxConcurrentOrchestrationWorkItems: defaultWorkItemConcurrency,
+			MaxConcurrentActivityWorkItems:      defaultWorkItemConcurrency,
+			MaxConcurrentEntityWorkItems:        defaultWorkItemConcurrency,
+		}
 		stream, err = c.client.GetWorkItems(ctx, &req)
 		if err != nil {
 			return fmt.Errorf("failed to get work item stream: %w", err)
@@ -118,9 +129,12 @@ func (c *TaskHubGrpcClient) StartWorkItemListener(ctx context.Context, r *task.T
 			}
 
 			if orchReq := workItem.GetOrchestratorRequest(); orchReq != nil {
-				go c.processOrchestrationWorkItem(ctx, executor, orchReq)
+				go c.processOrchestrationWorkItem(ctx, executor, orchReq, workItem.GetCompletionToken())
 			} else if actReq := workItem.GetActivityRequest(); actReq != nil {
-				go c.processActivityWorkItem(ctx, executor, actReq)
+				go c.processActivityWorkItem(ctx, executor, actReq, workItem.GetCompletionToken())
+			} else if healthPing := workItem.GetHealthPing(); healthPing != nil {
+				// Health pings are periodic keep-alives sent by the sidecar to keep the
+				// work-item stream open. There is nothing to process, so ignore them.
 			} else {
 				c.logger.Warnf("received unknown work item type: %v", workItem)
 			}
@@ -133,10 +147,11 @@ func (c *TaskHubGrpcClient) processOrchestrationWorkItem(
 	ctx context.Context,
 	executor backend.Executor,
 	workItem *protos.OrchestratorRequest,
+	completionToken string,
 ) {
 	results, err := executor.ExecuteOrchestrator(ctx, api.InstanceID(workItem.InstanceId), workItem.PastEvents, workItem.NewEvents)
 
-	resp := protos.OrchestratorResponse{InstanceId: workItem.InstanceId}
+	resp := protos.OrchestratorResponse{InstanceId: workItem.InstanceId, CompletionToken: completionToken}
 	if err != nil {
 		// NOTE: At the time of writing, there's no known case where this error is returned.
 		//       We add error handling here anyways, just in case.
@@ -168,12 +183,13 @@ func (c *TaskHubGrpcClient) processActivityWorkItem(
 	ctx context.Context,
 	executor backend.Executor,
 	req *protos.ActivityRequest,
+	completionToken string,
 ) {
 	var tc *protos.TraceContext = nil // TODO: How to populate trace context?
 	event := helpers.NewTaskScheduledEvent(req.TaskId, req.Name, req.Version, req.Input, tc)
 	result, err := executor.ExecuteActivity(ctx, api.InstanceID(req.OrchestrationInstance.InstanceId), event)
 
-	resp := protos.ActivityResponse{InstanceId: req.OrchestrationInstance.InstanceId, TaskId: req.TaskId}
+	resp := protos.ActivityResponse{InstanceId: req.OrchestrationInstance.InstanceId, TaskId: req.TaskId, CompletionToken: completionToken}
 	if err != nil {
 		// NOTE: At the time of writing, there's no known case where this error is returned.
 		//       We add error handling here anyways, just in case.

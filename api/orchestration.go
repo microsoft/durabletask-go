@@ -18,17 +18,8 @@ var (
 	ErrNotCompleted      = errors.New("orchestration has not yet completed")
 	ErrNoFailures        = errors.New("orchestration did not report failure details")
 	ErrDuplicateInstance = errors.New("orchestration instance already exists")
-	ErrIgnoreInstance    = errors.New("ignore creating orchestration instance")
 
 	EmptyInstanceID = InstanceID("")
-)
-
-type CreateOrchestrationAction = protos.CreateOrchestrationAction
-
-const (
-	REUSE_ID_ACTION_ERROR     CreateOrchestrationAction = protos.CreateOrchestrationAction_ERROR
-	REUSE_ID_ACTION_IGNORE    CreateOrchestrationAction = protos.CreateOrchestrationAction_IGNORE
-	REUSE_ID_ACTION_TERMINATE CreateOrchestrationAction = protos.CreateOrchestrationAction_TERMINATE
 )
 
 type OrchestrationStatus = protos.OrchestrationStatus
@@ -90,8 +81,7 @@ func WithOrchestrationIdReusePolicy(policy *protos.OrchestrationIdReusePolicy) N
 	return func(req *protos.CreateInstanceRequest) error {
 		// initialize CreateInstanceOption
 		req.OrchestrationIdReusePolicy = &protos.OrchestrationIdReusePolicy{
-			Action:          policy.Action,
-			OperationStatus: policy.OperationStatus,
+			ReplaceableStatus: policy.GetReplaceableStatus(),
 		}
 		return nil
 	}

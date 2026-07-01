@@ -1324,7 +1324,7 @@ func Test_RecreateCompletedOrchestration(t *testing.T) {
 	)
 }
 
-func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
+func Test_SingleActivity_ReuseInstanceIDNonReplaceableStatus(t *testing.T) {
 	// Registration
 	r := task.NewTaskRegistry()
 	require.NoError(t, r.AddOrchestratorN("SingleActivity", func(ctx *task.OrchestrationContext) (any, error) {
@@ -1353,10 +1353,12 @@ func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
 		}
 	}()
 
-	instanceID := api.InstanceID("IGNORE_IF_RUNNING_OR_COMPLETED")
+	instanceID := api.InstanceID("REPLACE_ONLY_IF_FAILED")
+	// The orchestration below always runs to success (PENDING -> RUNNING -> COMPLETED) and is
+	// never FAILED/TERMINATED, so its current status is never in the replaceable set. The
+	// duplicate create request must therefore be rejected regardless of timing.
 	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
-		Action:          api.REUSE_ID_ACTION_IGNORE,
-		OperationStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
+		ReplaceableStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_FAILED, api.RUNTIME_STATUS_TERMINATED},
 	}
 
 	// Run the orchestration
@@ -1365,19 +1367,18 @@ func Test_SingleActivity_ReuseInstanceIDIgnore(t *testing.T) {
 	// wait orchestration to start
 	_, err = client.WaitForOrchestrationStart(ctx, id)
 	require.NoError(t, err)
-	pivotTime := time.Now()
-	// schedule again, it should ignore creating the new orchestration
-	id, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
-	require.NoError(t, err)
+	// schedule again; the instance is not in a replaceable status, so this must fail
+	_, err = client.ScheduleNewOrchestration(ctx, "SingleActivity", api.WithInput("World"), api.WithInstanceID(id), api.WithOrchestrationIdReusePolicy(reuseIdPolicy))
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "orchestration instance already exists")
+	}
 	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelTimeout()
 	metadata, err := client.WaitForOrchestrationCompletion(timeoutCtx, id)
 	require.NoError(t, err)
 	assert.Equal(t, true, metadata.IsComplete())
-	// the first orchestration should complete as the second one is ignored
+	// the original orchestration should complete unaffected by the rejected duplicate
 	assert.Equal(t, `"Hello, 世界!"`, metadata.SerializedOutput)
-	// assert the orchestration created timestamp
-	assert.True(t, pivotTime.After(metadata.CreatedAt))
 }
 
 func Test_SingleActivity_ReuseInstanceIDTerminate(t *testing.T) {
@@ -1411,8 +1412,7 @@ func Test_SingleActivity_ReuseInstanceIDTerminate(t *testing.T) {
 
 	instanceID := api.InstanceID("TERMINATE_IF_RUNNING_OR_COMPLETED")
 	reuseIdPolicy := &api.OrchestrationIdReusePolicy{
-		Action:          api.REUSE_ID_ACTION_TERMINATE,
-		OperationStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
+		ReplaceableStatus: []api.OrchestrationStatus{api.RUNTIME_STATUS_RUNNING, api.RUNTIME_STATUS_COMPLETED, api.RUNTIME_STATUS_PENDING},
 	}
 
 	// Run the orchestration
