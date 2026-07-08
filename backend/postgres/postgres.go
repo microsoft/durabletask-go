@@ -370,7 +370,15 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 					OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED},
 					Action:          api.REUSE_ID_ACTION_TERMINATE,
 				})); err != nil {
-					if errors.Is(err, backend.ErrDuplicateEvent) {
+					// A target instance that already exists (in a status the
+					// reuse policy does not reclaim) must not fail the whole
+					// work item — drop the duplicate creation instead of
+					// poison-looping on redelivery. handleInstanceExists
+					// surfaces this as api.ErrDuplicateInstance /
+					// api.ErrIgnoreInstance.
+					if errors.Is(err, backend.ErrDuplicateEvent) ||
+						errors.Is(err, api.ErrDuplicateInstance) ||
+						errors.Is(err, api.ErrIgnoreInstance) {
 						be.logger.Warnf(
 							"%v: dropping sub-orchestration creation event because an instance with the target ID (%v) already exists.",
 							wi.InstanceID,
@@ -885,7 +893,11 @@ func (be *postgresBackend) GetActivityWorkItem(ctx context.Context) (*backend.Ac
 	}
 
 	now := time.Now().UTC()
-	newLockExpiration := now.Add(be.options.OrchestrationLockTimeout)
+	// Activity work-items use the ActivityLockTimeout (activities can run far
+	// longer than orchestration turns, e.g. CloudStack cluster create) — not
+	// the orchestration timeout. Locks are not renewed, so this must exceed
+	// the longest activity.
+	newLockExpiration := now.Add(be.options.ActivityLockTimeout)
 
 	row := be.db.QueryRow(
 		ctx,
