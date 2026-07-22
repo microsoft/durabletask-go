@@ -820,6 +820,7 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 			SELECT SequenceNumber FROM NewEvents
 			WHERE InstanceID = $2 AND (VisibleTime IS NULL OR VisibleTime <= $3)
 			LIMIT 1000
+			FOR UPDATE SKIP LOCKED
 		)
 		RETURNING EventPayload, DequeueCount`,
 		be.workerName,
