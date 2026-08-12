@@ -30,46 +30,6 @@ var emptyString string = ""
 // generated SQL well below PostgreSQL's parameter and query-size limits.
 const maxRowsPerInsert = 1000
 
-// multiRowPlaceholders returns a "($1,$2),($3,$4),..." value clause for the
-// given number of rows and columns. It uses strconv rather than fmt to avoid
-// per-row formatter overhead and to keep the placeholder math in one place.
-func multiRowPlaceholders(rowCount, colCount int) string {
-	var b strings.Builder
-	// Pre-size the builder roughly: each cell costs about 8 bytes including
-	// the comma/placeholder/parentheses overhead.
-	b.Grow(rowCount * colCount * 8)
-
-	for i := 0; i < rowCount; i++ {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteByte('(')
-		for j := 0; j < colCount; j++ {
-			if j > 0 {
-				b.WriteByte(',')
-			}
-			b.WriteByte('$')
-			b.WriteString(strconv.Itoa(i*colCount + j + 1))
-		}
-		b.WriteByte(')')
-	}
-	return b.String()
-}
-
-const updateInstancesSQL = `
-UPDATE Instances SET
-    CreatedTime = COALESCE($1::timestamp, CreatedTime),
-    Input = COALESCE($2::text, Input),
-    CompletedTime = COALESCE($3::timestamp, CompletedTime),
-    Output = COALESCE($4::text, Output),
-    FailureDetails = COALESCE($5::bytea, FailureDetails),
-    CustomStatus = COALESCE($6::text, CustomStatus),
-    RuntimeStatus = $7,
-    LastUpdatedTime = $8::timestamp,
-    LockExpiration = NULL
-WHERE InstanceID = $9 AND LockedBy = $10
-`
-
 type PostgresOptions struct {
 	PgOptions                *pgxpool.Config
 	OrchestrationLockTimeout time.Duration
@@ -240,6 +200,20 @@ func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi 
 
 // CompleteOrchestrationWorkItem implements backend.Backend
 func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi *backend.OrchestrationWorkItem) error {
+	const updateInstancesSQL = `
+		UPDATE Instances SET
+			CreatedTime = COALESCE($1::timestamp, CreatedTime),
+			Input = COALESCE($2::text, Input),
+			CompletedTime = COALESCE($3::timestamp, CompletedTime),
+			Output = COALESCE($4::text, Output),
+			FailureDetails = COALESCE($5::bytea, FailureDetails),
+			CustomStatus = COALESCE($6::text, CustomStatus),
+			RuntimeStatus = $7,
+			LastUpdatedTime = $8::timestamp,
+			LockExpiration = NULL
+		WHERE InstanceID = $9 AND LockedBy = $10
+	`
+
 	if err := be.ensureDB(); err != nil {
 		return err
 	}
@@ -1128,6 +1102,12 @@ func (be *postgresBackend) Stop(context.Context) error {
 	return nil
 }
 
+func (be *postgresBackend) String() string {
+	maskedPassword := strings.Repeat("*", len(be.options.PgOptions.ConnConfig.Password))
+	connectionURI := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", be.options.PgOptions.ConnConfig.User, maskedPassword, be.options.PgOptions.ConnConfig.Host, be.options.PgOptions.ConnConfig.Port, be.options.PgOptions.ConnConfig.Database)
+	return connectionURI
+}
+
 func (be *postgresBackend) ensureDB() error {
 	if be.db == nil {
 		return backend.ErrNotInitialized
@@ -1135,8 +1115,28 @@ func (be *postgresBackend) ensureDB() error {
 	return nil
 }
 
-func (be *postgresBackend) String() string {
-	maskedPassword := strings.Repeat("*", len(be.options.PgOptions.ConnConfig.Password))
-	connectionURI := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", be.options.PgOptions.ConnConfig.User, maskedPassword, be.options.PgOptions.ConnConfig.Host, be.options.PgOptions.ConnConfig.Port, be.options.PgOptions.ConnConfig.Database)
-	return connectionURI
+// multiRowPlaceholders returns a "($1,$2),($3,$4),..." value clause for the
+// given number of rows and columns. It uses strconv rather than fmt to avoid
+// per-row formatter overhead and to keep the placeholder math in one place.
+func multiRowPlaceholders(rowCount, colCount int) string {
+	var b strings.Builder
+	// Pre-size the builder roughly: each cell costs about 8 bytes including
+	// the comma/placeholder/parentheses overhead.
+	b.Grow(rowCount * colCount * 8)
+
+	for i := 0; i < rowCount; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('(')
+		for j := 0; j < colCount; j++ {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteByte('$')
+			b.WriteString(strconv.Itoa(i*colCount + j + 1))
+		}
+		b.WriteByte(')')
+	}
+	return b.String()
 }
