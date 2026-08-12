@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,50 @@ import (
 var schema string
 
 var emptyString string = ""
+
+// maxRowsPerInsert caps the number of rows per multi-row INSERT to keep the
+// generated SQL well below PostgreSQL's parameter and query-size limits.
+const maxRowsPerInsert = 1000
+
+// multiRowPlaceholders returns a "($1,$2),($3,$4),..." value clause for the
+// given number of rows and columns. It uses strconv rather than fmt to avoid
+// per-row formatter overhead and to keep the placeholder math in one place.
+func multiRowPlaceholders(rowCount, colCount int) string {
+	var b strings.Builder
+	// Pre-size the builder roughly: each cell costs about 8 bytes including
+	// the comma/placeholder/parentheses overhead.
+	b.Grow(rowCount * colCount * 8)
+
+	for i := 0; i < rowCount; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('(')
+		for j := 0; j < colCount; j++ {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteByte('$')
+			b.WriteString(strconv.Itoa(i*colCount + j + 1))
+		}
+		b.WriteByte(')')
+	}
+	return b.String()
+}
+
+const updateInstancesSQL = `
+UPDATE Instances SET
+    CreatedTime = COALESCE($1::timestamp, CreatedTime),
+    Input = COALESCE($2::text, Input),
+    CompletedTime = COALESCE($3::timestamp, CompletedTime),
+    Output = COALESCE($4::text, Output),
+    FailureDetails = COALESCE($5::bytea, FailureDetails),
+    CustomStatus = COALESCE($6::text, CustomStatus),
+    RuntimeStatus = $7,
+    LastUpdatedTime = $8::timestamp,
+    LockExpiration = NULL
+WHERE InstanceID = $9 AND LockedBy = $10
+`
 
 type PostgresOptions struct {
 	PgOptions                *pgxpool.Config
@@ -207,15 +252,23 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 
 	now := time.Now().UTC()
 
-	// Dynamically generate the UPDATE statement for the Instances table
-	var sqlSB strings.Builder
-	sqlSB.WriteString("UPDATE Instances SET ")
+	// Update the Instances table with a fixed-shape statement.
+	runtimeStatus := helpers.ToRuntimeStatusString(wi.State.RuntimeStatus())
+	updateArgs := []any{
+		(*time.Time)(nil), // CreatedTime
+		(*string)(nil),    // Input
+		(*time.Time)(nil), // CompletedTime
+		(*string)(nil),    // Output
+		([]byte)(nil),     // FailureDetails
+		(*string)(nil),    // CustomStatus
+		runtimeStatus,
+		now,
+		string(wi.InstanceID),
+		wi.LockedBy,
+	}
 
-	sqlUpdateArgs := make([]any, 0, 10)
 	isCreated := false
 	isCompleted := false
-
-	currIndex := 1
 	for _, e := range wi.State.NewEvents() {
 		if es := e.GetExecutionStarted(); es != nil {
 			if isCreated {
@@ -223,52 +276,43 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 				continue
 			}
 			isCreated = true
-			fmt.Fprintf(&sqlSB, "CreatedTime = $%d, Input = $%d, ", currIndex, currIndex+1)
-			currIndex += 2
-			sqlUpdateArgs = append(sqlUpdateArgs, e.Timestamp.AsTime())
-			sqlUpdateArgs = append(sqlUpdateArgs, es.Input.GetValue())
+			created := e.Timestamp.AsTime()
+			input := es.Input.GetValue()
+			updateArgs[0] = &created
+			updateArgs[1] = &input
 		} else if ec := e.GetExecutionCompleted(); ec != nil {
 			if isCompleted {
 				// TODO: Log warning about duplicate completion event
 				continue
 			}
 			isCompleted = true
-			fmt.Fprintf(&sqlSB, "CompletedTime = $%d, Output = $%d, FailureDetails = $%d, ", currIndex, currIndex+1, currIndex+2)
-			currIndex += 3
-			sqlUpdateArgs = append(sqlUpdateArgs, now)
-			sqlUpdateArgs = append(sqlUpdateArgs, ec.Result.GetValue())
+			completed := now
+			output := ec.Result.GetValue()
+			updateArgs[2] = &completed
+			updateArgs[3] = &output
 			if ec.FailureDetails != nil {
-				bytes, err := proto.Marshal(ec.FailureDetails)
+				failureDetails, err := proto.Marshal(ec.FailureDetails)
 				if err != nil {
 					return fmt.Errorf("failed to marshal FailureDetails: %w", err)
 				}
-				sqlUpdateArgs = append(sqlUpdateArgs, &bytes)
-			} else {
-				sqlUpdateArgs = append(sqlUpdateArgs, nil)
+				updateArgs[4] = failureDetails
 			}
 		}
 		// TODO: Execution suspended & resumed
 	}
 
 	if wi.State.CustomStatus != nil {
-		fmt.Fprintf(&sqlSB, "CustomStatus = $%d, ", currIndex)
-		currIndex++
-		sqlUpdateArgs = append(sqlUpdateArgs, wi.State.CustomStatus.Value)
+		customStatus := wi.State.CustomStatus.Value
+		updateArgs[5] = &customStatus
 	}
 
-	// TODO: Support for stickiness, which would extend the LockExpiration
-	fmt.Fprintf(&sqlSB, "RuntimeStatus = $%d, LastUpdatedTime = $%d, LockExpiration = NULL WHERE InstanceID = $%d AND LockedBy = $%d", currIndex, currIndex+1, currIndex+2, currIndex+3)
-	sqlUpdateArgs = append(sqlUpdateArgs, helpers.ToRuntimeStatusString(wi.State.RuntimeStatus()), now, string(wi.InstanceID), wi.LockedBy)
-
-	result, err := tx.Exec(ctx, sqlSB.String(), sqlUpdateArgs...)
+	result, err := tx.Exec(ctx, updateInstancesSQL, updateArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to update Instances table: %w", err)
 	}
 
 	count := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get the number of rows affected by the Instance table update: %w", err)
-	} else if count == 0 {
+	if count == 0 {
 		return fmt.Errorf("instance '%s' no longer exists or was locked by a different worker", string(wi.InstanceID))
 	}
 
@@ -282,116 +326,133 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 	// Save new history events
 	newHistoryCount := len(wi.State.NewEvents())
 	if newHistoryCount > 0 {
-		builder := strings.Builder{}
-		builder.WriteString("INSERT INTO History (InstanceID, SequenceNumber, EventPayload) VALUES ")
-		for i := 0; i < newHistoryCount; i++ {
-			fmt.Fprintf(&builder, "($%d, $%d, $%d)", 3*i+1, 3*i+2, 3*i+3)
-			if i < newHistoryCount-1 {
-				builder.WriteString(", ")
-			}
-		}
-		query := builder.String()
+		const insertHistorySQL = "INSERT INTO History (InstanceID, SequenceNumber, EventPayload) VALUES "
+		nextSequenceNumber := int64(len(wi.State.OldEvents()))
+		instanceID := string(wi.InstanceID)
 
-		args := make([]any, 0, newHistoryCount*3)
-		nextSequenceNumber := len(wi.State.OldEvents())
-		for _, e := range wi.State.NewEvents() {
-			eventPayload, err := backend.MarshalHistoryEvent(e)
+		for start := 0; start < newHistoryCount; start += maxRowsPerInsert {
+			n := newHistoryCount - start
+			if n > maxRowsPerInsert {
+				n = maxRowsPerInsert
+			}
+
+			query := insertHistorySQL + multiRowPlaceholders(n, 3)
+			args := make([]any, 0, n*3)
+			for i := 0; i < n; i++ {
+				e := wi.State.NewEvents()[start+i]
+				eventPayload, err := backend.MarshalHistoryEvent(e)
+				if err != nil {
+					return err
+				}
+				args = append(args, instanceID, nextSequenceNumber+int64(i), eventPayload)
+			}
+
+			_, err = tx.Exec(ctx, query, args...)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to insert into the History table: %w", err)
 			}
-
-			args = append(args, string(wi.InstanceID), nextSequenceNumber, eventPayload)
-			nextSequenceNumber++
-		}
-
-		_, err = tx.Exec(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("failed to insert into the History table: %w", err)
+			nextSequenceNumber += int64(n)
 		}
 	}
 
 	// Save outbound activity tasks
-	newActivityCount := len(wi.State.PendingTasks())
+	pendingTasks := wi.State.PendingTasks()
+	newActivityCount := len(pendingTasks)
 	if newActivityCount > 0 {
-		builder := strings.Builder{}
-		builder.WriteString("INSERT INTO NewTasks (InstanceID, EventPayload) VALUES ")
-		for i := 0; i < newActivityCount; i++ {
-			fmt.Fprintf(&builder, "($%d, $%d)", 2*i+1, 2*i+2)
-			if i < newActivityCount-1 {
-				builder.WriteString(", ")
-			}
-		}
-		insertSql := builder.String()
+		const insertNewTasksSQL = "INSERT INTO NewTasks (InstanceID, EventPayload) VALUES "
+		instanceID := string(wi.InstanceID)
 
-		sqlInsertArgs := make([]any, 0, newActivityCount*2)
-		for _, e := range wi.State.PendingTasks() {
-			eventPayload, err := backend.MarshalHistoryEvent(e)
+		for start := 0; start < newActivityCount; start += maxRowsPerInsert {
+			n := newActivityCount - start
+			if n > maxRowsPerInsert {
+				n = maxRowsPerInsert
+			}
+
+			query := insertNewTasksSQL + multiRowPlaceholders(n, 2)
+			args := make([]any, 0, n*2)
+			for i := 0; i < n; i++ {
+				e := pendingTasks[start+i]
+				eventPayload, err := backend.MarshalHistoryEvent(e)
+				if err != nil {
+					return err
+				}
+				args = append(args, instanceID, eventPayload)
+			}
+
+			_, err = tx.Exec(ctx, query, args...)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to insert into the NewTasks table: %w", err)
 			}
-
-			sqlInsertArgs = append(sqlInsertArgs, string(wi.InstanceID), eventPayload)
-		}
-
-		_, err = tx.Exec(ctx, insertSql, sqlInsertArgs...)
-		if err != nil {
-			return fmt.Errorf("failed to insert into the NewTasks table: %w", err)
 		}
 	}
 
 	// Save outbound orchestrator events
-	newEventCount := len(wi.State.PendingTimers()) + len(wi.State.PendingMessages())
-	if newEventCount > 0 {
-		builder := strings.Builder{}
-		builder.WriteString("INSERT INTO NewEvents (InstanceID, EventPayload, VisibleTime) VALUES ")
-		for i := 0; i < newEventCount; i++ {
-			fmt.Fprintf(&builder, "($%d, $%d, $%d)", 3*i+1, 3*i+2, 3*i+3)
-			if i < newEventCount-1 {
-				builder.WriteString(", ")
+	pendingTimers := wi.State.PendingTimers()
+	pendingMessages := wi.State.PendingMessages()
+
+	// Create any sub-orchestration instances first, before batching the events.
+	for _, msg := range pendingMessages {
+		if es := msg.HistoryEvent.GetExecutionStarted(); es != nil {
+			if _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, backend.WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
+				OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED},
+				Action:          api.REUSE_ID_ACTION_TERMINATE,
+			})); err != nil {
+				if errors.Is(err, backend.ErrDuplicateEvent) {
+					be.logger.Warnf(
+						"%v: dropping sub-orchestration creation event because an instance with the target ID (%v) already exists.",
+						wi.InstanceID,
+						es.OrchestrationInstance.InstanceId)
+				} else {
+					return err
+				}
 			}
 		}
-		insertSql := builder.String()
+	}
 
-		sqlInsertArgs := make([]any, 0, newEventCount*3)
-		for _, e := range wi.State.PendingTimers() {
+	newEventCount := len(pendingTimers) + len(pendingMessages)
+	if newEventCount > 0 {
+		const insertNewEventsSQL = "INSERT INTO NewEvents (InstanceID, EventPayload, VisibleTime) VALUES "
+		instanceID := string(wi.InstanceID)
+
+		type newEvent struct {
+			instanceID string
+			payload    []byte
+			visible    any
+		}
+		events := make([]newEvent, 0, newEventCount)
+		for _, e := range pendingTimers {
 			eventPayload, err := backend.MarshalHistoryEvent(e)
 			if err != nil {
 				return err
 			}
-
 			visibileTime := e.GetTimerFired().GetFireAt().AsTime()
-			sqlInsertArgs = append(sqlInsertArgs, string(wi.InstanceID), eventPayload, visibileTime)
+			events = append(events, newEvent{instanceID, eventPayload, visibileTime})
 		}
-
-		for _, msg := range wi.State.PendingMessages() {
-			if es := msg.HistoryEvent.GetExecutionStarted(); es != nil {
-				// Need to insert a new row into the DB
-				if _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, backend.WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
-					OperationStatus: []protos.OrchestrationStatus{protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED},
-					Action:          api.REUSE_ID_ACTION_TERMINATE,
-				})); err != nil {
-					if errors.Is(err, backend.ErrDuplicateEvent) {
-						be.logger.Warnf(
-							"%v: dropping sub-orchestration creation event because an instance with the target ID (%v) already exists.",
-							wi.InstanceID,
-							es.OrchestrationInstance.InstanceId)
-					} else {
-						return err
-					}
-				}
-			}
-
+		for _, msg := range pendingMessages {
 			eventPayload, err := backend.MarshalHistoryEvent(msg.HistoryEvent)
 			if err != nil {
 				return err
 			}
-
-			sqlInsertArgs = append(sqlInsertArgs, msg.TargetInstanceID, eventPayload, nil)
+			events = append(events, newEvent{msg.TargetInstanceID, eventPayload, nil})
 		}
 
-		_, err = tx.Exec(ctx, insertSql, sqlInsertArgs...)
-		if err != nil {
-			return fmt.Errorf("failed to insert into the NewEvents table: %w", err)
+		for start := 0; start < newEventCount; start += maxRowsPerInsert {
+			n := newEventCount - start
+			if n > maxRowsPerInsert {
+				n = maxRowsPerInsert
+			}
+
+			query := insertNewEventsSQL + multiRowPlaceholders(n, 3)
+			args := make([]any, 0, n*3)
+			for i := 0; i < n; i++ {
+				ev := events[start+i]
+				args = append(args, ev.instanceID, ev.payload, ev.visible)
+			}
+
+			_, err = tx.Exec(ctx, query, args...)
+			if err != nil {
+				return fmt.Errorf("failed to insert into the NewEvents table: %w", err)
+			}
 		}
 	}
 
