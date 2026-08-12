@@ -852,6 +852,31 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	}
 	events.Close()
 
+	// Load history events within the same transaction to eliminate a separate round trip
+	historyRows, err := tx.Query(
+		ctx,
+		"SELECT EventPayload FROM History WHERE InstanceID = $1 ORDER BY SequenceNumber ASC",
+		instanceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query history events: %w", err)
+	}
+	defer historyRows.Close()
+
+	existingEvents := make([]*protos.HistoryEvent, 0, 50)
+	for historyRows.Next() {
+		var eventPayload []byte
+		if err := historyRows.Scan(&eventPayload); err != nil {
+			return nil, fmt.Errorf("failed to read history event: %w", err)
+		}
+		e, err := backend.UnmarshalHistoryEvent(eventPayload)
+		if err != nil {
+			return nil, err
+		}
+		existingEvents = append(existingEvents, e)
+	}
+	historyRows.Close()
+
 	if err = tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("failed to update orchestration work-item: %w", err)
 	}
@@ -874,6 +899,7 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	wi := &backend.OrchestrationWorkItem{
 		InstanceID: api.InstanceID(instanceID),
 		NewEvents:  newEvents,
+		State:      backend.NewOrchestrationRuntimeState(api.InstanceID(instanceID), existingEvents),
 		LockedBy:   be.workerName,
 		RetryCount: maxDequeueCount - 1,
 	}
