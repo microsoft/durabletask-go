@@ -284,81 +284,27 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		return fmt.Errorf("instance '%s' no longer exists or was locked by a different worker", string(wi.InstanceID))
 	}
 
-	// If continue-as-new, delete all existing history
-	if wi.State.ContinuedAsNew() {
-		if _, err := tx.Exec(ctx, "DELETE FROM History WHERE InstanceID = $1", string(wi.InstanceID)); err != nil {
-			return fmt.Errorf("failed to delete from History table: %w", err)
+	// Delete the exact set of inbound events acquired during dequeue.
+	if len(wi.NewEventSequenceNumbers) > 0 {
+		dbResult, err := tx.Exec(
+			ctx,
+			"DELETE FROM NewEvents WHERE InstanceID = $1 AND SequenceNumber = ANY($2::bigint[])",
+			string(wi.InstanceID),
+			wi.NewEventSequenceNumbers,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to delete from NewEvents table: %w", err)
+		}
+
+		rowsAffected := dbResult.RowsAffected()
+		if rowsAffected < int64(len(wi.NewEventSequenceNumbers)) {
+			return backend.ErrWorkItemLockLost
 		}
 	}
 
-	// Save new history events
-	newHistoryCount := len(wi.State.NewEvents())
-	if newHistoryCount > 0 {
-		const insertHistorySQL = "INSERT INTO History (InstanceID, SequenceNumber, EventPayload) VALUES "
-		nextSequenceNumber := int64(len(wi.State.OldEvents()))
-		instanceID := string(wi.InstanceID)
-
-		for start := 0; start < newHistoryCount; start += maxRowsPerInsert {
-			n := newHistoryCount - start
-			if n > maxRowsPerInsert {
-				n = maxRowsPerInsert
-			}
-
-			query := insertHistorySQL + multiRowPlaceholders(n, 3)
-			args := make([]any, 0, n*3)
-			for i := 0; i < n; i++ {
-				e := wi.State.NewEvents()[start+i]
-				eventPayload, err := backend.MarshalHistoryEvent(e)
-				if err != nil {
-					return err
-				}
-				args = append(args, instanceID, nextSequenceNumber+int64(i), eventPayload)
-			}
-
-			_, err = tx.Exec(ctx, query, args...)
-			if err != nil {
-				return fmt.Errorf("failed to insert into the History table: %w", err)
-			}
-			nextSequenceNumber += int64(n)
-		}
-	}
-
-	// Save outbound activity tasks
-	pendingTasks := wi.State.PendingTasks()
-	newActivityCount := len(pendingTasks)
-	if newActivityCount > 0 {
-		const insertNewTasksSQL = "INSERT INTO NewTasks (InstanceID, EventPayload) VALUES "
-		instanceID := string(wi.InstanceID)
-
-		for start := 0; start < newActivityCount; start += maxRowsPerInsert {
-			n := newActivityCount - start
-			if n > maxRowsPerInsert {
-				n = maxRowsPerInsert
-			}
-
-			query := insertNewTasksSQL + multiRowPlaceholders(n, 2)
-			args := make([]any, 0, n*2)
-			for i := 0; i < n; i++ {
-				e := pendingTasks[start+i]
-				eventPayload, err := backend.MarshalHistoryEvent(e)
-				if err != nil {
-					return err
-				}
-				args = append(args, instanceID, eventPayload)
-			}
-
-			_, err = tx.Exec(ctx, query, args...)
-			if err != nil {
-				return fmt.Errorf("failed to insert into the NewTasks table: %w", err)
-			}
-		}
-	}
-
-	// Save outbound orchestrator events
+	// Create any sub-orchestration instances first, before batching the outbound events.
 	pendingTimers := wi.State.PendingTimers()
 	pendingMessages := wi.State.PendingMessages()
-
-	// Create any sub-orchestration instances first, before batching the events.
 	for _, msg := range pendingMessages {
 		if es := msg.HistoryEvent.GetExecutionStarted(); es != nil {
 			if _, err := be.createOrchestrationInstanceInternal(ctx, msg.HistoryEvent, tx, backend.WithOrchestrationIdReusePolicy(&protos.OrchestrationIdReusePolicy{
@@ -377,6 +323,7 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		}
 	}
 
+	// Save outbound orchestrator events
 	newEventCount := len(pendingTimers) + len(pendingMessages)
 	if newEventCount > 0 {
 		const insertNewEventsSQL = "INSERT INTO NewEvents (InstanceID, EventPayload, VisibleTime) VALUES "
@@ -424,21 +371,73 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		}
 	}
 
-	// Delete the exact set of inbound events acquired during dequeue.
-	if len(wi.NewEventSequenceNumbers) > 0 {
-		dbResult, err := tx.Exec(
-			ctx,
-			"DELETE FROM NewEvents WHERE InstanceID = $1 AND SequenceNumber = ANY($2::bigint[])",
-			string(wi.InstanceID),
-			wi.NewEventSequenceNumbers,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to delete from NewEvents table: %w", err)
-		}
+	// Save outbound activity tasks
+	pendingTasks := wi.State.PendingTasks()
+	newActivityCount := len(pendingTasks)
+	if newActivityCount > 0 {
+		const insertNewTasksSQL = "INSERT INTO NewTasks (InstanceID, EventPayload) VALUES "
+		instanceID := string(wi.InstanceID)
 
-		rowsAffected := dbResult.RowsAffected()
-		if rowsAffected < int64(len(wi.NewEventSequenceNumbers)) {
-			return backend.ErrWorkItemLockLost
+		for start := 0; start < newActivityCount; start += maxRowsPerInsert {
+			n := newActivityCount - start
+			if n > maxRowsPerInsert {
+				n = maxRowsPerInsert
+			}
+
+			query := insertNewTasksSQL + multiRowPlaceholders(n, 2)
+			args := make([]any, 0, n*2)
+			for i := 0; i < n; i++ {
+				e := pendingTasks[start+i]
+				eventPayload, err := backend.MarshalHistoryEvent(e)
+				if err != nil {
+					return err
+				}
+				args = append(args, instanceID, eventPayload)
+			}
+
+			_, err = tx.Exec(ctx, query, args...)
+			if err != nil {
+				return fmt.Errorf("failed to insert into the NewTasks table: %w", err)
+			}
+		}
+	}
+
+	// If continue-as-new, delete all existing history before appending the new events.
+	if wi.State.ContinuedAsNew() {
+		if _, err := tx.Exec(ctx, "DELETE FROM History WHERE InstanceID = $1", string(wi.InstanceID)); err != nil {
+			return fmt.Errorf("failed to delete from History table: %w", err)
+		}
+	}
+
+	// Save new history events
+	newHistoryCount := len(wi.State.NewEvents())
+	if newHistoryCount > 0 {
+		const insertHistorySQL = "INSERT INTO History (InstanceID, SequenceNumber, EventPayload) VALUES "
+		nextSequenceNumber := int64(len(wi.State.OldEvents()))
+		instanceID := string(wi.InstanceID)
+
+		for start := 0; start < newHistoryCount; start += maxRowsPerInsert {
+			n := newHistoryCount - start
+			if n > maxRowsPerInsert {
+				n = maxRowsPerInsert
+			}
+
+			query := insertHistorySQL + multiRowPlaceholders(n, 3)
+			args := make([]any, 0, n*3)
+			for i := 0; i < n; i++ {
+				e := wi.State.NewEvents()[start+i]
+				eventPayload, err := backend.MarshalHistoryEvent(e)
+				if err != nil {
+					return err
+				}
+				args = append(args, instanceID, nextSequenceNumber+int64(i), eventPayload)
+			}
+
+			_, err = tx.Exec(ctx, query, args...)
+			if err != nil {
+				return fmt.Errorf("failed to insert into the History table: %w", err)
+			}
+			nextSequenceNumber += int64(n)
 		}
 	}
 
@@ -651,12 +650,7 @@ func (be *postgresBackend) cleanupOrchestrationStateInternal(ctx context.Context
 		}
 	}
 
-	_, err := tx.Exec(ctx, "DELETE FROM History WHERE InstanceID = $1", string(id))
-	if err != nil {
-		return fmt.Errorf("failed to delete from History table: %w", err)
-	}
-
-	_, err = tx.Exec(ctx, "DELETE FROM NewEvents WHERE InstanceID = $1", string(id))
+	_, err := tx.Exec(ctx, "DELETE FROM NewEvents WHERE InstanceID = $1", string(id))
 	if err != nil {
 		return fmt.Errorf("failed to delete from NewEvents table: %w", err)
 	}
@@ -664,6 +658,11 @@ func (be *postgresBackend) cleanupOrchestrationStateInternal(ctx context.Context
 	_, err = tx.Exec(ctx, "DELETE FROM NewTasks WHERE InstanceID = $1", string(id))
 	if err != nil {
 		return fmt.Errorf("failed to delete from NewTasks table: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, "DELETE FROM History WHERE InstanceID = $1", string(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete from History table: %w", err)
 	}
 	return nil
 }
