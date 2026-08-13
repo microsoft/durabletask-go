@@ -16,12 +16,13 @@ type WorkItem interface {
 }
 
 type OrchestrationWorkItem struct {
-	InstanceID api.InstanceID
-	NewEvents  []*HistoryEvent
-	LockedBy   string
-	RetryCount int32
-	State      *OrchestrationRuntimeState
-	Properties map[string]any
+	InstanceID            api.InstanceID
+	NewEvents             []*HistoryEvent
+	NewEventSequenceNumbers []int64
+	LockedBy              string
+	RetryCount            int32
+	State                 *OrchestrationRuntimeState
+	Properties            map[string]any
 }
 
 // String implements core.WorkItem and fmt.Stringer

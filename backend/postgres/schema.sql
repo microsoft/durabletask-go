@@ -21,12 +21,15 @@ CREATE TABLE IF NOT EXISTS Instances (
     CompletedTime TIMESTAMP NULL,
     LockedBy TEXT NULL,
     LockExpiration TIMESTAMP NULL,
+    DequeueCount INTEGER NOT NULL DEFAULT 0,
     Input TEXT NULL,
     Output TEXT NULL,
     CustomStatus TEXT NULL,
     FailureDetails BYTEA NULL,
     ParentInstanceID TEXT NULL
 );
+
+ALTER TABLE Instances ADD COLUMN IF NOT EXISTS DequeueCount INTEGER NOT NULL DEFAULT 0;
 
 -- Fillfactor: Reduce page splits for HOT updates (standardized to 70 to match NewEvents/NewTasks)
 ALTER TABLE Instances SET (fillfactor = 70);

@@ -155,40 +155,34 @@ func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi 
 		visibleTime = &t
 	}
 
+	// Verify the orchestration lease is still held before touching NewEvents.
 	dbResult, err := tx.Exec(
-		ctx,
-		"UPDATE NewEvents SET LockedBy = NULL, VisibleTime = $1 WHERE InstanceID = $2 AND LockedBy = $3",
-		visibleTime,
-		string(wi.InstanceID),
-		wi.LockedBy,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update NewEvents table: %w", err)
-	}
-
-	rowsAffected := dbResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed get rows affected by UPDATE NewEvents statement: %w", err)
-	} else if rowsAffected == 0 {
-		return backend.ErrWorkItemLockLost
-	}
-
-	dbResult, err = tx.Exec(
 		ctx,
 		"UPDATE Instances SET LockedBy = NULL, LockExpiration = NULL WHERE InstanceID = $1 AND LockedBy = $2",
 		string(wi.InstanceID),
 		wi.LockedBy,
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to update Instances table: %w", err)
 	}
 
-	rowsAffected = dbResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed get rows affected by UPDATE Instances statement: %w", err)
-	} else if rowsAffected == 0 {
+	rowsAffected := dbResult.RowsAffected()
+	if rowsAffected == 0 {
 		return backend.ErrWorkItemLockLost
+	}
+
+	// Delay reprocessing of the abandoned events, if requested.
+	if len(wi.NewEventSequenceNumbers) > 0 {
+		_, err = tx.Exec(
+			ctx,
+			"UPDATE NewEvents SET VisibleTime = $1 WHERE InstanceID = $2 AND SequenceNumber = ANY($3::bigint[])",
+			visibleTime,
+			string(wi.InstanceID),
+			wi.NewEventSequenceNumbers,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update NewEvents table: %w", err)
+		}
 	}
 
 	if err = tx.Commit(ctx); err != nil {
@@ -430,26 +424,22 @@ func (be *postgresBackend) CompleteOrchestrationWorkItem(ctx context.Context, wi
 		}
 	}
 
-	// Delete inbound events
-	dbResult, err := tx.Exec(
-		ctx,
-		"DELETE FROM NewEvents WHERE InstanceID = $1 AND LockedBy = $2",
-		string(wi.InstanceID),
-		wi.LockedBy,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to delete from NewEvents table: %w", err)
-	}
+	// Delete the exact set of inbound events acquired during dequeue.
+	if len(wi.NewEventSequenceNumbers) > 0 {
+		dbResult, err := tx.Exec(
+			ctx,
+			"DELETE FROM NewEvents WHERE InstanceID = $1 AND SequenceNumber = ANY($2::bigint[])",
+			string(wi.InstanceID),
+			wi.NewEventSequenceNumbers,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to delete from NewEvents table: %w", err)
+		}
 
-	rowsAffected := dbResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed get rows affected by delete statement: %w", err)
-	} else if rowsAffected == 0 {
-		return backend.ErrWorkItemLockLost
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to delete from the NewEvents table: %w", err)
+		rowsAffected := dbResult.RowsAffected()
+		if rowsAffected < int64(len(wi.NewEventSequenceNumbers)) {
+			return backend.ErrWorkItemLockLost
+		}
 	}
 
 	if err = tx.Commit(ctx); err != nil {
@@ -821,7 +811,7 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	// Place a lock on an orchestration instance that has new events that are ready to be executed.
 	row := tx.QueryRow(
 		ctx,
-		`UPDATE Instances SET LockedBy = $1, LockExpiration = $2
+		`UPDATE Instances SET LockedBy = $1, LockExpiration = $2, DequeueCount = DequeueCount + 1
 		WHERE SequenceNumber = (
 			SELECT SequenceNumber FROM Instances I
 			WHERE (I.LockExpiration IS NULL OR I.LockExpiration < $3) AND EXISTS (
@@ -831,7 +821,7 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 			ORDER BY I.InstanceID, I.SequenceNumber ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
-		) RETURNING InstanceID`,
+		) RETURNING InstanceID, DequeueCount`,
 		be.workerName,     // LockedBy for Instances table
 		newLockExpiration, // Updated LockExpiration for Instances table
 		now,               // LockExpiration for Instances table
@@ -839,7 +829,8 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	)
 
 	var instanceID string
-	if err := row.Scan(&instanceID); err != nil {
+	var dequeueCount int32
+	if err := row.Scan(&instanceID, &dequeueCount); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// No new events to process
 			return nil, backend.ErrNoWorkItems
@@ -848,18 +839,16 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 		return nil, fmt.Errorf("failed to scan the orchestration work-item: %w", err)
 	}
 
-	// TODO: Get all the unprocessed events associated with the locked instance
+	// Get all the unprocessed events associated with the locked instance.
+	// The orchestration instance lock is the lease; NewEvents rows are only read here
+	// and deleted by SequenceNumber on a successful completion.
 	events, err := tx.Query(
 		ctx,
-		`UPDATE NewEvents SET DequeueCount = DequeueCount + 1, LockedBy = $1 WHERE SequenceNumber IN (
-			SELECT SequenceNumber FROM NewEvents
-			WHERE InstanceID = $2 AND (VisibleTime IS NULL OR VisibleTime <= $3)
-			ORDER BY SequenceNumber
-			LIMIT 1000
-			FOR UPDATE SKIP LOCKED
-		)
-		RETURNING EventPayload, DequeueCount`,
-		be.workerName,
+		`SELECT SequenceNumber, EventPayload
+		FROM NewEvents
+		WHERE InstanceID = $1 AND (VisibleTime IS NULL OR VisibleTime <= $2)
+		ORDER BY SequenceNumber
+		LIMIT 1000`,
 		instanceID,
 		now,
 	)
@@ -869,20 +858,20 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	defer events.Close()
 
 	type rawEvent struct {
-		payload []byte
-		dequeue int32
+		sequenceNumber int64
+		payload      []byte
 	}
 
 	rawEvents := []rawEvent{}
 	for events.Next() {
+		var sequenceNumber int64
 		var eventPayload []byte
-		var dequeueCount int32
-		if err := events.Scan(&eventPayload, &dequeueCount); err != nil {
+		if err := events.Scan(&sequenceNumber, &eventPayload); err != nil {
 			return nil, fmt.Errorf("failed to read history event: %w", err)
 		}
 		rawEvents = append(rawEvents, rawEvent{
-			payload: eventPayload,
-			dequeue: dequeueCount,
+			sequenceNumber: sequenceNumber,
+			payload:      eventPayload,
 		})
 	}
 	events.Close()
@@ -916,12 +905,10 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 		return nil, fmt.Errorf("failed to update orchestration work-item: %w", err)
 	}
 
-	maxDequeueCount := int32(0)
+	sequenceNumbers := make([]int64, 0, len(rawEvents))
 	newEvents := make([]*protos.HistoryEvent, 0, len(rawEvents))
 	for _, e := range rawEvents {
-		if e.dequeue > maxDequeueCount {
-			maxDequeueCount = e.dequeue
-		}
+		sequenceNumbers = append(sequenceNumbers, e.sequenceNumber)
 
 		evt, err := backend.UnmarshalHistoryEvent(e.payload)
 		if err != nil {
@@ -932,11 +919,12 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	}
 
 	wi := &backend.OrchestrationWorkItem{
-		InstanceID: api.InstanceID(instanceID),
-		NewEvents:  newEvents,
-		State:      backend.NewOrchestrationRuntimeState(api.InstanceID(instanceID), existingEvents),
-		LockedBy:   be.workerName,
-		RetryCount: maxDequeueCount - 1,
+		InstanceID:              api.InstanceID(instanceID),
+		NewEvents:               newEvents,
+		NewEventSequenceNumbers: sequenceNumbers,
+		State:                   backend.NewOrchestrationRuntimeState(api.InstanceID(instanceID), existingEvents),
+		LockedBy:                be.workerName,
+		RetryCount:              dequeueCount - 1,
 	}
 
 	return wi, nil
