@@ -158,7 +158,7 @@ func (be *postgresBackend) AbandonOrchestrationWorkItem(ctx context.Context, wi 
 	// Verify the orchestration lease is still held before touching NewEvents.
 	dbResult, err := tx.Exec(
 		ctx,
-		"UPDATE Instances SET LockedBy = NULL, LockExpiration = NULL WHERE InstanceID = $1 AND LockedBy = $2",
+		"UPDATE Instances_Hot SET LockedBy = NULL, LockExpiration = NULL WHERE InstanceID = $1 AND LockedBy = $2",
 		string(wi.InstanceID),
 		wi.LockedBy,
 	)
@@ -533,7 +533,7 @@ func insertOrIgnoreInstanceTableInternal(ctx context.Context, tx pgx.Tx, e *back
 	}
 	res, err := tx.Exec(
 		ctx,
-		`INSERT INTO Instances (
+		`INSERT INTO Instances_Hot (
 			Name,
 			Version,
 			InstanceID,
@@ -810,9 +810,9 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 	// Place a lock on an orchestration instance that has new events that are ready to be executed.
 	row := tx.QueryRow(
 		ctx,
-		`UPDATE Instances SET LockedBy = $1, LockExpiration = $2, DequeueCount = DequeueCount + 1
+		`UPDATE Instances_Hot SET LockedBy = $1, LockExpiration = $2, DequeueCount = DequeueCount + 1
 		WHERE SequenceNumber = (
-			SELECT SequenceNumber FROM Instances I
+			SELECT SequenceNumber FROM Instances_Hot I
 			WHERE (I.LockExpiration IS NULL OR I.LockExpiration < $3) AND EXISTS (
 				SELECT 1 FROM NewEvents E
 				WHERE E.InstanceID = I.InstanceID AND (E.VisibleTime IS NULL OR E.VisibleTime < $4)
@@ -858,7 +858,7 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 
 	type rawEvent struct {
 		sequenceNumber int64
-		payload      []byte
+		payload        []byte
 	}
 
 	rawEvents := []rawEvent{}
@@ -870,7 +870,7 @@ func (be *postgresBackend) GetOrchestrationWorkItem(ctx context.Context) (*backe
 		}
 		rawEvents = append(rawEvents, rawEvent{
 			sequenceNumber: sequenceNumber,
-			payload:      eventPayload,
+			payload:        eventPayload,
 		})
 	}
 	events.Close()

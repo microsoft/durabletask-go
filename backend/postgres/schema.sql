@@ -11,7 +11,7 @@
 CREATE TABLE IF NOT EXISTS Instances (
     SequenceNumber BIGSERIAL,  -- Changed to BIGSERIAL for high scale
     
-    InstanceID TEXT PRIMARY KEY NOT NULL,
+    InstanceID TEXT /*PRIMARY KEY*/ NOT NULL,
     ExecutionID TEXT NOT NULL,
     Name TEXT NOT NULL, -- the type name of the orchestration or entity
     Version TEXT NULL, -- the version of the orchestration (optional)
@@ -27,15 +27,50 @@ CREATE TABLE IF NOT EXISTS Instances (
     CustomStatus TEXT NULL,
     FailureDetails BYTEA NULL,
     ParentInstanceID TEXT NULL
-);
+) PARTITION BY LIST (RuntimeStatus);
+
+-- Hot partition: instances that are still actionable and can be dequeued by the
+-- orchestration poll query. These rows see constant UPDATE churn (lock claim,
+-- abandon, status transitions) and leave the partition entirely once they reach a
+-- terminal status.
+CREATE TABLE IF NOT EXISTS Instances_Hot PARTITION OF Instances
+    FOR VALUES IN ('RUNNING', 'CONTINUED_AS_NEW', 'SUSPENDED', 'PENDING');
+
+-- Cold partition: terminal instances retained for history/metadata lookups.
+CREATE TABLE IF NOT EXISTS Instances_Cold PARTITION OF Instances
+    FOR VALUES IN ('COMPLETED', 'FAILED', 'CANCELED', 'TERMINATED');
+
+-- The table has no primary key, so these indexes are what keeps a single InstanceID
+-- from appearing more than once within a partition (e.g. as both 'PENDING' and
+-- 'RUNNING'). They also give the create path's ON CONFLICT DO NOTHING an arbiter to
+-- match against, which is how duplicate create requests are detected.
+-- NOTE: a unique index cannot span partitions, so a hot row and a cold row may still
+-- share an InstanceID. That case has to be prevented in application code.
+CREATE UNIQUE INDEX IF NOT EXISTS UX_Instances_Hot_InstanceID ON Instances_Hot(InstanceID);
+CREATE UNIQUE INDEX IF NOT EXISTS UX_Instances_Cold_InstanceID ON Instances_Cold(InstanceID);
+
+-- Storage parameters must be set on individual partitions; PostgreSQL rejects them
+-- on a partitioned parent table.
 
 -- Fillfactor: Reduce page splits for HOT updates (standardized to 70 to match NewEvents/NewTasks)
-ALTER TABLE Instances SET (fillfactor = 70);
+ALTER TABLE Instances_Hot SET (fillfactor = 70);
+
+-- Terminal rows are still UPDATEd (the poll claims a lock on them and the work item
+-- is then dropped as already-completed), but far less often than hot rows, so leave
+-- a smaller amount of free space per page.
+ALTER TABLE Instances_Cold SET (fillfactor = 90);
 
 -- Autovacuum tuning: LockedBy/LockExpiration/RuntimeStatus are indexed, so lock-claim,
 -- abandon, and completion updates are not HOT-eligible and leave dead tuples + stale
 -- planner stats on the exact table the poll query scans. Match NewEvents/NewTasks tuning.
-ALTER TABLE Instances SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_vacuum_threshold = 5000, autovacuum_analyze_scale_factor = 0.05, autovacuum_analyze_threshold = 2000);
+-- The hot partition additionally accumulates dead tuples from cross-partition row
+-- movement: an UPDATE that changes RuntimeStatus from a hot value to a cold one is
+-- executed as DELETE-from-hot + INSERT-into-cold.
+ALTER TABLE Instances_Hot SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_vacuum_threshold = 5000, autovacuum_analyze_scale_factor = 0.05, autovacuum_analyze_threshold = 2000);
+
+-- The cold partition grows by insert (row movement in) and only shrinks on purge,
+-- so it needs lighter vacuuming than the hot partition.
+ALTER TABLE Instances_Cold SET (autovacuum_vacuum_scale_factor = 0.1, autovacuum_vacuum_threshold = 1000, autovacuum_analyze_scale_factor = 0.1, autovacuum_analyze_threshold = 1000);
 
 -- Original indexes from base schema
 -- Removed IX_Instances_SequenceNumber (covered by partial index IX_Instances_SequenceNumber_WHERE_LockExpiration_IS_NULL)
@@ -49,8 +84,8 @@ CREATE INDEX IF NOT EXISTS IX_Instances_ParentInstanceID_InstanceID_SequenceNumb
 CREATE INDEX IF NOT EXISTS IX_Instances_LockExp_SeqNum_WHERE_LockExp_NULL ON Instances(LockExpiration, SequenceNumber)
 WHERE LockExpiration IS NULL;
 
-CREATE INDEX IF NOT EXISTS IX_Instances_RuntimeStatus_WHERE_RuntimeStatus_IN_PENDING_RUNNING ON Instances(RuntimeStatus)
-WHERE RuntimeStatus IN ('PENDING', 'RUNNING');
+CREATE INDEX IF NOT EXISTS IX_Instances_RuntimeStatus_WHERE_RuntimeStatus_IN_ACTIVE ON Instances(RuntimeStatus)
+WHERE RuntimeStatus IN ('RUNNING', 'CONTINUED_AS_NEW', 'SUSPENDED', 'PENDING');
 
 -- Full index for ORDER BY InstanceID, SequenceNumber (supports all rows)
 CREATE INDEX IF NOT EXISTS IX_Instances_InstanceID_SequenceNumber ON Instances(InstanceID, SequenceNumber);
@@ -67,8 +102,8 @@ CREATE INDEX IF NOT EXISTS IX_Instances_SequenceNumber_WHERE_LockExpiration_IS_N
 WHERE LockExpiration IS NULL;
 
 -- Index for purge operations (WHERE RuntimeStatus IN ('COMPLETED', 'FAILED', 'TERMINATED'))
-CREATE INDEX IF NOT EXISTS IX_Instances_RuntimeStatus_WHERE_IN_COMP_FAIL_TERM ON Instances(RuntimeStatus)
-WHERE RuntimeStatus IN ('COMPLETED', 'FAILED', 'TERMINATED');
+CREATE INDEX IF NOT EXISTS IX_Instances_RuntimeStatus_WHERE_IN_INACTIVE ON Instances(RuntimeStatus)
+WHERE RuntimeStatus IN ('COMPLETED', 'FAILED', 'CANCELED', 'TERMINATED');
 
 -- Index for reclaiming expired locks (WHERE LockExpiration < now, e.g. crashed/restarted workers)
 -- Complements IX_Instances_LockExp_ID_SeqNum_WHERE_LockExp_NULL, which only covers the NULL branch
