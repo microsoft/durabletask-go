@@ -1,8 +1,12 @@
 package task
 
 import (
+	"container/list"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -10,6 +14,133 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
+
+func TestSelectRejectsForeignCases(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		ready   bool
+		event   bool
+		whenAny bool
+	}{
+		{name: "pending-task"},
+		{name: "ready-task", ready: true},
+		{name: "empty-event", event: true},
+		{name: "buffered-event", event: true, ready: true},
+		{name: "when-any-pending", whenAny: true},
+		{name: "when-any-ready", whenAny: true, ready: true},
+	} {
+		for _, localReady := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/local-ready=%t", test.name, localReady), func(t *testing.T) {
+				// Matching instance IDs must not make distinct execution engines interchangeable.
+				foreign := newTestOrchestrationContext(NewTaskRegistry(), "instance", nil, nil)
+				foreignTask := newTaskInScope(foreign, foreign.scope)
+				channel := NewEventChannel[int](foreign, "value")
+				if test.ready {
+					if test.event {
+						queue := list.New()
+						queue.PushBack(&bufferedEvent{
+							event: helpers.NewEventRaisedEvent("value", wrapperspb.String("42")),
+							order: 0,
+						})
+						foreign.bufferedExternalEvents["VALUE"] = queue
+					} else {
+						foreignTask.complete(nil)
+					}
+				}
+				var owner *OrchestrationContext
+				var local *completableTask
+				invoked := false
+				registry := NewTaskRegistry()
+				if err := registry.AddOrchestratorN("select-owner", func(ctx *OrchestrationContext) (any, error) {
+					owner = ctx
+					local = newTaskInScope(ctx, ctx.scope)
+					if localReady {
+						local.complete(nil)
+					}
+					var recovered any
+					func() {
+						defer func() { recovered = recover() }()
+						if test.whenAny {
+							ctx.WhenAny(local, foreignTask)
+							invoked = true
+							return
+						}
+						candidate := OnTask(foreignTask, func(Task) { invoked = true })
+						if test.event {
+							candidate = OnEvent(channel, func(int) { invoked = true })
+						}
+						ctx.Select(OnTask(local, func(Task) { invoked = true }), candidate)
+					}()
+					return recovered == "Select case belongs to a different orchestration" && !invoked, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				response := executeOrchestrationTurn(t, registry, "instance", nil, []*protos.HistoryEvent{
+					helpers.NewOrchestratorStartedEvent(),
+					helpers.NewExecutionStartedEvent("select-owner", "instance", nil, nil, nil, nil),
+				})
+				if got := completionResult(t, response); got != "true" {
+					t.Fatalf("foreign selection was not rejected: %s", got)
+				}
+				if len(foreignTask.waiters) != 0 || len(foreign.eventWaiters) != 0 ||
+					len(local.waiters) != 0 || len(owner.scope.waiters) != 0 {
+					t.Fatal("invalid selection registered a waiter")
+				}
+				if test.event && test.ready {
+					if value, ok, err := channel.TryReceiveErr(); !ok || err != nil || value != 42 {
+						t.Fatalf("foreign event was not preserved: value=%d received=%t err=%v", value, ok, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSelectAllowsSameEngineChildScopes(t *testing.T) {
+	registry := NewTaskRegistry()
+	if err := registry.AddOrchestratorN("select-scopes", func(ctx *OrchestrationContext) (any, error) {
+		child, _ := ctx.WithCancel()
+		rootTask := newTaskInScope(ctx, ctx.scope)
+		childTask := newTaskInScope(child, child.scope)
+		rootTask.complete(nil)
+		childTask.complete(nil)
+		selected := 0
+		ctx.Select(OnTask(childTask, func(Task) { selected++ }))
+		child.Select(OnTask(rootTask, func(Task) { selected++ }))
+		child.Select(OnEvent(NewEventChannel[int](child, "value"), func(value int) { selected += value }))
+		return selected, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response := executeOrchestrationTurn(t, registry, "instance", nil, []*protos.HistoryEvent{
+		helpers.NewOrchestratorStartedEvent(),
+		helpers.NewExecutionStartedEvent("select-scopes", "instance", nil, nil, nil, nil),
+		helpers.NewEventRaisedEvent("value", wrapperspb.String("3")),
+	})
+	if got := completionResult(t, response); got != "5" {
+		t.Fatalf("same-engine selection = %s, want 5", got)
+	}
+}
+
+func TestEventChannelDecodeErrorNamesGenericType(t *testing.T) {
+	t.Run("interface", func(t *testing.T) { testEventDecodeType[any](t, "interface {}") })
+	t.Run("pointer", func(t *testing.T) { testEventDecodeType[*int](t, "*int") })
+	t.Run("slice", func(t *testing.T) { testEventDecodeType[[]int](t, "[]int") })
+	t.Run("map", func(t *testing.T) { testEventDecodeType[map[string]int](t, "map[string]int") })
+}
+
+func testEventDecodeType[T any](t *testing.T, want string) {
+	t.Helper()
+	ctx := newTestOrchestrationContext(NewTaskRegistry(), "instance", nil, nil)
+	queue := list.New()
+	queue.PushBack(&bufferedEvent{event: helpers.NewEventRaisedEvent("value", wrapperspb.String("{invalid"))})
+	ctx.bufferedExternalEvents["VALUE"] = queue
+	_, received, err := NewEventChannel[T](ctx, "value").TryReceiveErr()
+	var syntaxError *json.SyntaxError
+	if !received || err == nil || !strings.Contains(err.Error(), "as "+want+":") || !errors.As(err, &syntaxError) {
+		t.Fatalf("expected type %q and wrapped syntax error, received=%t err=%v", want, received, err)
+	}
+}
 
 func TestWhenAnyUsesHistoryOrder(t *testing.T) {
 	registry := NewTaskRegistry()

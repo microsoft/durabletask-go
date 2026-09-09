@@ -92,7 +92,7 @@ func (c *EventChannel[T]) TryReceiveErr() (T, bool, error) {
 	}
 	raw := []byte(buffered.event.GetEventRaised().GetInput().GetValue())
 	if err := unmarshalData(c.ctx.converter, raw, &value); err != nil {
-		return value, true, fmt.Errorf("failed to decode event %q as %s: %w", c.name, reflect.TypeOf(value), err)
+		return value, true, fmt.Errorf("failed to decode event %q as %s: %w", c.name, reflect.TypeFor[T](), err)
 	}
 	return value, true, nil
 }
@@ -112,6 +112,10 @@ func OnEvent[T any](channel *EventChannel[T], handler func(T)) SelectCase {
 		panic("event Select case requires a channel")
 	}
 	return &eventSelectCase[T]{channel: channel, handler: handler}
+}
+
+func (c *eventSelectCase[T]) owner() *OrchestrationContext {
+	return c.channel.ctx
 }
 
 func (c *eventSelectCase[T]) ready() (bool, uint64) {

@@ -66,18 +66,26 @@ func (c *checker) report(
 }
 
 // checkFunction walks one reachable function and reports every replay hazard it
-// contains, including hazards inside nested function literals.
+// contains. Nested function literals are skipped here: reach records only the
+// literals whose bodies are proven to execute and walks each one separately, so
+// descending into a literal here would double-check ones that run and audit
+// ones that never do. Enclosing function nodes tracked by the package index
+// prime the ancestor stack so a fix generated inside a nested literal can still
+// see the surrounding orchestration context binding.
 func (c *checker) checkFunction(node ast.Node) {
 	body := funcBody(node)
 	if body == nil {
 		return
 	}
 	file := c.index.fileOf[node]
-	stack := []ast.Node{node}
+	stack := c.index.enclosingFunctionStack(node)
 	ast.Inspect(body, func(current ast.Node) bool {
 		if current == nil {
 			stack = stack[:len(stack)-1]
 			return true
+		}
+		if _, ok := current.(*ast.FuncLit); ok {
+			return false
 		}
 		stack = append(stack, current)
 		c.inspect(current, stack, file)

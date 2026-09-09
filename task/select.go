@@ -4,6 +4,7 @@ import "fmt"
 
 // SelectCase is a durable selection case created by OnTask or OnEvent.
 type SelectCase interface {
+	owner() *OrchestrationContext
 	ready() (bool, uint64)
 	subscribe(*coroutine)
 	unsubscribe(*coroutine)
@@ -23,6 +24,10 @@ func OnTask(task Task, handler func(Task)) SelectCase {
 		panic(fmt.Sprintf("task type %T cannot be used in a durable Select", task))
 	}
 	return &taskSelectCase{task: task, state: state, handler: handler}
+}
+
+func (c *taskSelectCase) owner() *OrchestrationContext {
+	return c.state.orchestrationCtx.engineContext()
 }
 
 func (c *taskSelectCase) ready() (bool, uint64) {
@@ -83,6 +88,7 @@ func (ctx *OrchestrationContext) WhenAll(tasks ...Task) error {
 }
 
 // Select waits until one case is ready and invokes its handler.
+// All cases must belong to the same orchestration, including its child scopes.
 func (ctx *OrchestrationContext) Select(cases ...SelectCase) {
 	ctx.selectCase(cases)
 }
@@ -91,7 +97,8 @@ func (ctx *OrchestrationContext) selectCase(cases []SelectCase) SelectCase {
 	if len(cases) == 0 {
 		panic("Select requires at least one case")
 	}
-	scheduler := ctx.engineContext().scheduler
+	engine := ctx.engineContext()
+	scheduler := engine.scheduler
 	if scheduler == nil {
 		panic("Select called outside orchestrator execution")
 	}
@@ -100,6 +107,11 @@ func (ctx *OrchestrationContext) selectCase(cases []SelectCase) SelectCase {
 	for {
 		if current.scope.isCanceled() || ctx.scope.isCanceled() {
 			panic(ErrTaskCanceled)
+		}
+		for _, candidate := range cases {
+			if candidate.owner() != engine {
+				panic("Select case belongs to a different orchestration")
+			}
 		}
 		var selected SelectCase
 		var selectedOrder uint64

@@ -3,9 +3,14 @@
 //
 // The analyzer starts from every proven registration in the package under
 // analysis, follows the call graph through same-package named functions,
-// methods, resolvable function variables, and nested function literals, and then
-// reports only constructs whose nondeterminism is provable from that syntax and
-// type information alone.
+// methods, resolvable function variables, and the nested function literals
+// whose bodies are proven to execute -- through a direct call whose callee
+// resolves to the literal, a call through a single-assignment variable, a raw go or
+// defer call, or the callback argument of an explicitly modeled invoker such
+// as (*task.OrchestrationContext).Go. It then reports only constructs whose
+// nondeterminism is provable from that syntax and type information alone.
+// Literals passed to unmodeled helpers, or assigned and never invoked, are not
+// followed: their bodies never contribute a diagnostic.
 //
 // It reports:
 //
@@ -71,9 +76,6 @@ func run(pass *analysis.Pass) (any, error) {
 		reported: make(map[reportKey]bool),
 	}
 	for _, node := range reach.order {
-		if reach.lexicallyCovered(index, node) {
-			continue
-		}
 		check.checkFunction(node)
 	}
 	check.reportClockDiagnostics()

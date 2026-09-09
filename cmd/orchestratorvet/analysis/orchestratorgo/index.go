@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -33,8 +34,8 @@ type packageIndex struct {
 	// enclosingFunc maps every function literal to the nearest function
 	// declaration or literal that lexically contains it, and is absent for a
 	// literal written outside any function, such as a package-level variable
-	// initializer. Walking a function body already visits the literals nested
-	// in it, so this is what lets the checker walk each one exactly once.
+	// initializer. The checker uses this chain to recover captured context
+	// bindings when it walks a reachable literal separately.
 	enclosingFunc map[ast.Node]ast.Node
 
 	// registrationCandidates holds, in source order, every call whose selector
@@ -300,6 +301,17 @@ func (index *packageIndex) singleValue(object types.Object) ast.Expr {
 		return nil
 	}
 	return values[0]
+}
+
+// enclosingFunctionStack preserves captured context bindings when a reached
+// literal is checked separately from its enclosing functions.
+func (index *packageIndex) enclosingFunctionStack(node ast.Node) []ast.Node {
+	var stack []ast.Node
+	for current := node; current != nil; current = index.enclosingFunc[current] {
+		stack = append(stack, current)
+	}
+	slices.Reverse(stack)
+	return stack
 }
 
 // resolveFunction returns the function declaration or literal that expression

@@ -8,7 +8,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -51,22 +53,20 @@ func run() error {
 		return fmt.Errorf("failed to wait for orchestration to start: %w", err)
 	}
 
-	// Prompt the user for their name and send that to the orchestrator
-	go func() {
-		fmt.Println("Enter your first name: ")
-		var nameInput string
-		if _, err := fmt.Scanln(&nameInput); err != nil {
-			log.Printf("Failed to read input: %v", err)
-			return
-		}
-		if err := app.Client.RaiseEvent(ctx, id, "Name", api.WithEventPayload(nameInput)); err != nil {
-			log.Printf("Failed to raise event: %v", err)
-		}
-	}()
+	// Keep stdin asynchronous, but interrupt the completion wait on input or RPC failure.
+	waitCtx, cancelWait := context.WithCancelCause(ctx)
+	defer cancelWait(nil)
+	fmt.Println("Enter your first name: ")
+	go readAndRaiseEvent(waitCtx, cancelWait, os.Stdin, func(ctx context.Context, name string) error {
+		return app.Client.RaiseEvent(ctx, id, "Name", api.WithEventPayload(name))
+	})
 
 	// After the orchestration receives the event, it should complete on its own
-	metadata, err := app.Client.WaitForOrchestrationCompletion(ctx, id)
+	metadata, err := app.Client.WaitForOrchestrationCompletion(waitCtx, id)
 	if err != nil {
+		if cause := context.Cause(waitCtx); cause != nil {
+			err = cause
+		}
 		return fmt.Errorf("failed to wait for orchestration to complete: %w", err)
 	}
 	if metadata.FailureDetails != nil {
@@ -75,6 +75,22 @@ func run() error {
 		log.Println("orchestration completed:", metadata.SerializedOutput)
 	}
 	return nil
+}
+
+func readAndRaiseEvent(
+	ctx context.Context,
+	cancel context.CancelCauseFunc,
+	input io.Reader,
+	raise func(context.Context, string) error,
+) {
+	var name string
+	if _, err := fmt.Fscanln(input, &name); err != nil {
+		cancel(fmt.Errorf("failed to read input: %w", err))
+		return
+	}
+	if err := raise(ctx, name); err != nil {
+		cancel(fmt.Errorf("failed to raise event: %w", err))
+	}
 }
 
 // ExternalEventOrchestrator is an orchestrator function that blocks for 30 seconds or

@@ -23,7 +23,7 @@ import (
 var fixPackages = []string{
 	"fixes", "fixesimport", "fixesstandalone", "fixesstandalonealias",
 	"fixesbatch", "fixesbatchstandalone", "fixesbatchalias", "fixespartial", "fixesinline",
-	"fixbindings",
+	"fixbindings", "fixesunusedliteral",
 }
 
 // stubPackageRoot is the fixture tree holding the stand-in dependencies the

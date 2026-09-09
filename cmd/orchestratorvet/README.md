@@ -40,10 +40,16 @@ the package under analysis passes it to one of
 
 From each of those roots it follows the whole-package call graph through
 same-package named functions, methods, function variables whose target can be
-proven, and nested function literals. Recursion terminates because each function
-is visited once, and a helper reached from several orchestrators is reported
-once. Activity bodies, entity bodies, and any function not reachable from a
-registered orchestrator are never reported.
+proven, and the nested function literals whose bodies are proven to execute --
+through a direct call, a call through a single-assignment function variable,
+a raw `go` or `defer` call,
+or the callback argument of an explicitly modeled invoker such as
+`(*task.OrchestrationContext).Go`. A literal passed to any other helper, or
+assigned and never invoked, is not followed: its body never contributes a
+diagnostic, and helpers reached only through it are not reported. Recursion
+terminates because each function is visited once, and a helper reached from
+several orchestrators is reported once. Activity bodies, entity bodies, and any
+function not reachable from a registered orchestrator are never reported.
 
 ## Checks
 
