@@ -68,6 +68,73 @@ func TestScheduleStateUsesDotNetCompatibleJSON(t *testing.T) {
 	require.Equal(t, `"1.02:03:04.5000000"`, string(span))
 }
 
+func TestScheduleConfigurationJSONShape(t *testing.T) {
+	tests := []struct {
+		name   string
+		config scheduleConfiguration
+		want   string
+	}{
+		{
+			name: "zero values",
+			want: `{"OrchestrationName":"","ScheduleId":"","StartAt":null,"EndAt":null,"Interval":"00:00:00","StartImmediatelyIfLate":false}`,
+		},
+		{
+			name: "all fields",
+			config: scheduleConfiguration{
+				OrchestrationName:       "Backup",
+				ScheduleID:              "daily",
+				OrchestrationInput:      `{"count":1}`,
+				OrchestrationInstanceID: "backup-instance",
+				OrchestrationVersion:    "1.0",
+				StartAt:                 time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC),
+				EndAt:                   time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC),
+				Interval:                dotNetSpan(26*time.Hour + 500*time.Millisecond),
+				StartImmediatelyIfLate:  true,
+				Tags:                    map[string]string{"team": "storage"},
+				ContextFields:           api.ContextFields{"tenant": "one"},
+				RetryPolicy: &scheduleRetryPolicy{
+					MaxAttempts:          3,
+					InitialRetryInterval: dotNetSpan(1500 * time.Millisecond),
+					BackoffCoefficient:   2,
+					MaxRetryInterval:     dotNetSpan(2 * time.Minute),
+					RetryTimeout:         dotNetSpan(time.Hour),
+				},
+			},
+			want: `{
+				"OrchestrationName":"Backup",
+				"ScheduleId":"daily",
+				"OrchestrationInput":"{\"count\":1}",
+				"OrchestrationInstanceId":"backup-instance",
+				"OrchestrationVersion":"1.0",
+				"StartAt":"2026-09-01T12:00:00Z",
+				"EndAt":"2026-09-02T12:00:00Z",
+				"Interval":"1.02:00:00.5000000",
+				"StartImmediatelyIfLate":true,
+				"Tags":{"team":"storage"},
+				"ContextFields":{"tenant":"one"},
+				"RetryPolicy":{
+					"MaxAttempts":3,
+					"InitialRetryInterval":"00:00:01.5000000",
+					"BackoffCoefficient":2,
+					"MaxRetryInterval":"00:02:00",
+					"RetryTimeout":"01:00:00"
+				}
+			}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload, err := json.Marshal(test.config)
+			require.NoError(t, err)
+			require.JSONEq(t, test.want, string(payload))
+
+			var decoded scheduleConfiguration
+			require.NoError(t, json.Unmarshal(payload, &decoded))
+			require.Equal(t, test.config, decoded)
+		})
+	}
+}
+
 func TestScheduleOptionsUseDotNetCompatibleWireJSON(t *testing.T) {
 	payload, err := json.Marshal(ScheduleCreationOptions{
 		ScheduleID:        "daily",

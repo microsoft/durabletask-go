@@ -47,21 +47,6 @@ var registrationShapes = map[string]registrationShape{
 	"AddActivityNVersion":     {kind: activityKind, nameIndex: 0, handlerIndex: 2, versionIndex: 1, arity: 3},
 }
 
-// registration is a single proven call to a task.TaskRegistry Add* method.
-type registration struct {
-	// name is the registered task name when it can be proven statically.
-	name string
-	// nameKnown reports whether name was proven rather than guessed.
-	nameKnown bool
-	// version is the registered version when it is a string literal.
-	version string
-	// versionKnown reports whether the registration's version was proven. A
-	// version computed at runtime leaves it false, which keeps the registration
-	// out of duplicate detection: two calls with different computed versions
-	// are not a conflict.
-	versionKnown bool
-}
-
 // registrySet is the whole-package view of task.TaskRegistry registrations.
 type registrySet struct {
 	// names holds the lowercased proven names per namespace.
@@ -145,30 +130,24 @@ func collectRegistrations(pass *analysis.Pass, index *packageIndex) *registrySet
 		// name to the registry and cannot conflict with another registration.
 		version, versionKnown, versionRejected := registrationVersion(pass, call, shape)
 		name, nameKnown, nameRejected := registrationName(pass, call, shape, handlerNode)
-		entry := registration{
-			name:         name,
-			nameKnown:    nameKnown,
-			version:      version,
-			versionKnown: versionKnown,
-		}
 		rejected := versionRejected || nameRejected
 
-		if entry.nameKnown {
+		if nameKnown {
 			// A rejected call registers nothing, but its name is still recorded
 			// so the unresolved-name check does not pile a second diagnostic
 			// onto a call site whose registration was already reported here.
-			set.names[shape.kind][strings.ToLower(entry.name)] = struct{}{}
+			set.names[shape.kind][strings.ToLower(name)] = struct{}{}
 			// A registration whose version is computed at runtime may land on
 			// any key, so it neither proves nor disproves a conflict.
 			scope := index.registrationScopes[call]
 			if scope != nil && isRegistryConstructor(pass, index.singleValue(receiver)) &&
-				!index.unstableRegistries[receiver] && entry.versionKnown && !rejected {
+				!index.unstableRegistries[receiver] && versionKnown && !rejected {
 				key := duplicateKey{
 					registry: receiver,
 					scope:    scope,
 					kind:     shape.kind,
-					name:     strings.ToLower(entry.name),
-					version:  strings.ToLower(entry.version),
+					name:     strings.ToLower(name),
+					version:  strings.ToLower(version),
 				}
 				if duplicates[key] {
 					pass.Reportf(
@@ -176,7 +155,7 @@ func collectRegistrations(pass *analysis.Pass, index *packageIndex) *registrySet
 						"%s %q is registered more than once on the same task.TaskRegistry; "+
 							"the duplicate registration returns an error",
 						shape.kind,
-						entry.name,
+						name,
 					)
 				}
 				duplicates[key] = true
@@ -186,7 +165,7 @@ func collectRegistrations(pass *analysis.Pass, index *packageIndex) *registrySet
 		}
 
 		if handlerObj != nil && shape.kind == orchestratorKind {
-			set.orchestratorObjects[handlerObj] = entry.name
+			set.orchestratorObjects[handlerObj] = name
 		}
 
 		if shape.kind == orchestratorKind && handlerNode != nil && !seenRoots[handlerNode] {

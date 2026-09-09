@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/failure"
+	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestTaskFailedErrorConversionPreservesInnerFailure(t *testing.T) {
@@ -95,6 +98,28 @@ func TestJoinedErrorsUseOneCauseAndAdditionalProperties(t *testing.T) {
 	additional := wire.GetProperties()["go.additionalErrors"].GetListValue()
 	if additional == nil || len(additional.Values) != 1 {
 		t.Fatalf("additional errors = %#v", additional)
+	}
+}
+
+func TestFailurePropertiesRoundTripNilAndNestedValues(t *testing.T) {
+	want := map[string]any{
+		"nil":    nil,
+		"nested": map[string]any{"values": []any{nil, "a", true, float64(4)}},
+	}
+	nested, err := structpb.NewValue(want["nested"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := &protos.TaskFailureDetails{
+		Properties: map[string]*structpb.Value{"nil": nil, "nested": nested},
+	}
+	decoded := failure.FromProto(wire)
+	if !reflect.DeepEqual(decoded.Properties, want) {
+		t.Fatalf("decoded properties = %#v, want %#v", decoded.Properties, want)
+	}
+	roundTrip := failure.FromProto(failure.ToProto(decoded))
+	if !reflect.DeepEqual(roundTrip.Properties, want) {
+		t.Fatalf("round-trip properties = %#v, want %#v", roundTrip.Properties, want)
 	}
 }
 

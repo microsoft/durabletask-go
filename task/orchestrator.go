@@ -532,15 +532,15 @@ func (ctx *OrchestrationContext) processEvent(e *protos.HistoryEvent) error {
 	} else if ts := e.GetTaskScheduled(); ts != nil {
 		err = ctx.onTaskScheduled(e.EventId, ts)
 	} else if tc := e.GetTaskCompleted(); tc != nil {
-		err = ctx.onTaskCompleted(tc)
+		err = ctx.onTaskCompleted(tc.TaskScheduledId, tc.Result)
 	} else if tf := e.GetTaskFailed(); tf != nil {
-		err = ctx.onTaskFailed(tf)
+		err = ctx.onTaskFailed(tf.TaskScheduledId, tf.FailureDetails)
 	} else if ts := e.GetSubOrchestrationInstanceCreated(); ts != nil {
 		err = ctx.onSubOrchestrationScheduled(e.EventId, ts)
 	} else if sc := e.GetSubOrchestrationInstanceCompleted(); sc != nil {
-		err = ctx.onSubOrchestrationCompleted(sc)
+		err = ctx.onTaskCompleted(sc.TaskScheduledId, sc.Result)
 	} else if sf := e.GetSubOrchestrationInstanceFailed(); sf != nil {
-		err = ctx.onSubOrchestrationFailed(sf)
+		err = ctx.onTaskFailed(sf.TaskScheduledId, sf.FailureDetails)
 	} else if tc := e.GetTimerCreated(); tc != nil {
 		err = ctx.onTimerCreated(e)
 	} else if tf := e.GetTimerFired(); tf != nil {
@@ -1263,8 +1263,7 @@ func (ctx *OrchestrationContext) onTaskScheduled(taskID int32, ts *protos.TaskSc
 	return nil
 }
 
-func (ctx *OrchestrationContext) onTaskCompleted(tc *protos.TaskCompletedEvent) error {
-	taskID := tc.TaskScheduledId
+func (ctx *OrchestrationContext) onTaskCompleted(taskID int32, result *wrapperspb.StringValue) error {
 	task, ok := ctx.pendingTasks[taskID]
 	if !ok {
 		// TODO: This could be a duplicate event or it could be a non-deterministic orchestration.
@@ -1274,16 +1273,15 @@ func (ctx *OrchestrationContext) onTaskCompleted(tc *protos.TaskCompletedEvent) 
 	}
 	delete(ctx.pendingTasks, taskID)
 
-	if tc.Result != nil {
-		task.complete([]byte(tc.Result.Value))
+	if result != nil {
+		task.complete([]byte(result.Value))
 	} else {
 		task.complete(nil)
 	}
 	return nil
 }
 
-func (ctx *OrchestrationContext) onTaskFailed(tf *protos.TaskFailedEvent) error {
-	taskID := tf.TaskScheduledId
+func (ctx *OrchestrationContext) onTaskFailed(taskID int32, details *protos.TaskFailureDetails) error {
 	task, ok := ctx.pendingTasks[taskID]
 	if !ok {
 		// TODO: This could be a duplicate event or it could be a non-deterministic orchestration.
@@ -1294,7 +1292,7 @@ func (ctx *OrchestrationContext) onTaskFailed(tf *protos.TaskFailedEvent) error 
 	delete(ctx.pendingTasks, taskID)
 
 	// completing a task will resume the corresponding Await() call
-	task.fail(tf.FailureDetails)
+	task.fail(details)
 	return nil
 }
 
@@ -1328,42 +1326,6 @@ func versionsMatchReplayHistory(
 	return historical == nil &&
 		legacyDefault != "" &&
 		strings.EqualFold(scheduled.GetValue(), legacyDefault)
-}
-
-func (ctx *OrchestrationContext) onSubOrchestrationCompleted(soc *protos.SubOrchestrationInstanceCompletedEvent) error {
-	taskID := soc.TaskScheduledId
-	task, ok := ctx.pendingTasks[taskID]
-	if !ok {
-		// TODO: This could be a duplicate event or it could be a non-deterministic orchestration.
-		//       Duplicate events should be handled gracefully with a warning. Otherwise, the
-		//       orchestration should probably fail with an error.
-		return nil
-	}
-	delete(ctx.pendingTasks, taskID)
-
-	// completing a task will resume the corresponding Await() call
-	if soc.Result != nil {
-		task.complete([]byte(soc.Result.Value))
-	} else {
-		task.complete(nil)
-	}
-	return nil
-}
-
-func (ctx *OrchestrationContext) onSubOrchestrationFailed(sof *protos.SubOrchestrationInstanceFailedEvent) error {
-	taskID := sof.TaskScheduledId
-	task, ok := ctx.pendingTasks[taskID]
-	if !ok {
-		// TODO: This could be a duplicate event or it could be a non-deterministic orchestration.
-		//       Duplicate events should be handled gracefully with a warning. Otherwise, the
-		//       orchestration should probably fail with an error.
-		return nil
-	}
-	delete(ctx.pendingTasks, taskID)
-
-	// completing a task will resume the corresponding Await() call
-	task.fail(sof.FailureDetails)
-	return nil
 }
 
 func (ctx *OrchestrationContext) onTimerCreated(e *protos.HistoryEvent) error {

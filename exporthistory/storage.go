@@ -348,27 +348,15 @@ func gzipContent(content []byte) ([]byte, error) {
 
 // validBlobContainerName mirrors the Azure Blob container naming rules.
 func validBlobContainerName(name string) bool {
-	if len(name) < 3 || len(name) > 63 {
+	if len(name) < 3 || len(name) > 63 || name[0] == '-' || name[len(name)-1] == '-' {
 		return false
 	}
-	if strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") {
-		return false
-	}
-	previousDash := false
 	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			previousDash = false
-		case r == '-':
-			if previousDash {
-				return false
-			}
-			previousDash = true
-		default:
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
 			return false
 		}
 	}
-	return true
+	return !strings.Contains(name, "--")
 }
 
 // validateBlobPrefix rejects prefixes that would escape the destination or

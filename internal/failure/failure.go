@@ -62,7 +62,7 @@ func fromProto(details *protos.TaskFailureDetails, depth int, budget *propertyBu
 				truncated = true
 				break
 			}
-			result.Properties[key] = valueFromProto(details.GetProperties()[key])
+			result.Properties[key] = details.GetProperties()[key].AsInterface()
 			budget.count++
 			budget.bytes += size
 		}
@@ -284,7 +284,7 @@ func failureDetailsProperty(details *protos.TaskFailureDetails, depth int) map[s
 	if len(details.GetProperties()) > 0 {
 		properties := make(map[string]any, len(details.GetProperties()))
 		for key, value := range details.GetProperties() {
-			properties[key] = valueFromProto(value)
+			properties[key] = value.AsInterface()
 		}
 		result["properties"] = properties
 	}
@@ -359,30 +359,6 @@ func valueToProto(value any, depth int) *structpb.Value {
 		return structpb.NewListValue(&structpb.ListValue{Values: values})
 	default:
 		return structpb.NewStringValue(fmt.Sprint(value))
-	}
-}
-
-func valueFromProto(value *structpb.Value) any {
-	if value == nil {
-		return nil
-	}
-	switch typed := value.Kind.(type) {
-	case *structpb.Value_StringValue:
-		return typed.StringValue
-	case *structpb.Value_StructValue:
-		result := make(map[string]any, len(typed.StructValue.Fields))
-		for key, field := range typed.StructValue.Fields {
-			result[key] = valueFromProto(field)
-		}
-		return result
-	case *structpb.Value_ListValue:
-		result := make([]any, len(typed.ListValue.Values))
-		for i, item := range typed.ListValue.Values {
-			result[i] = valueFromProto(item)
-		}
-		return result
-	default:
-		return value.AsInterface()
 	}
 }
 

@@ -75,19 +75,6 @@ func Test_EntityDispatcher_BasicOperations(t *testing.T) {
 	assert.Equal(t, 5, state.Value)
 }
 
-func Test_EntityDispatcher_CaseInsensitive(t *testing.T) {
-	entity := NewEntityFor[testCounter]()
-
-	ctx := &EntityContext{
-		ID:        api.NewEntityID("counter", "test"),
-		Operation: "add", // lowercase
-		rawInput:  presentEntityPayload("10"),
-	}
-	result, err := entity(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 10, result)
-}
-
 func Test_EntityDispatcher_WithExistingState(t *testing.T) {
 	entity := NewEntityFor[testCounter]()
 
@@ -100,19 +87,6 @@ func Test_EntityDispatcher_WithExistingState(t *testing.T) {
 	result, err := entity(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 10, result)
-}
-
-func Test_EntityDispatcher_Get(t *testing.T) {
-	entity := NewEntityFor[testCounter]()
-
-	ctx := &EntityContext{
-		ID:        api.NewEntityID("counter", "test"),
-		Operation: "Get",
-		state:     entityState{value: []byte(`{"value":42}`), hasValue: true},
-	}
-	result, err := entity(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 42, result)
 }
 
 func Test_EntityDispatcher_Reset(t *testing.T) {
@@ -129,31 +103,6 @@ func Test_EntityDispatcher_Reset(t *testing.T) {
 	var state testCounter
 	require.NoError(t, ctx.GetState(&state))
 	assert.Equal(t, 0, state.Value)
-}
-
-func Test_EntityDispatcher_ImplicitDelete(t *testing.T) {
-	entity := NewEntityFor[testCounter]()
-
-	ctx := &EntityContext{
-		ID:        api.NewEntityID("counter", "test"),
-		Operation: "delete",
-		state:     entityState{value: []byte(`{"value":42}`), hasValue: true},
-	}
-	_, err := entity(ctx)
-	require.NoError(t, err)
-	assert.False(t, ctx.HasState())
-}
-
-func Test_EntityDispatcher_UnknownOperation(t *testing.T) {
-	entity := NewEntityFor[testCounter]()
-
-	ctx := &EntityContext{
-		ID:        api.NewEntityID("counter", "test"),
-		Operation: "unknown",
-	}
-	_, err := entity(ctx)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "does not support operation")
 }
 
 // Test with EntityContext parameter

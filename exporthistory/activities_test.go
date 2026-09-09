@@ -355,14 +355,18 @@ func TestExportInstanceHistoryActivity(t *testing.T) {
 	t.Run("collects permanent per-instance failures without retrying", func(t *testing.T) {
 		source := newFakeSource()
 		source.addInstance("running", api.RUNTIME_STATUS_RUNNING, 1)
+		source.metadata["nil-metadata"] = nil
+		source.metadataErr["wrapped-missing"] = fmt.Errorf("lookup: %w", api.ErrInstanceNotFound)
 		runtime := newTestRuntime(source, newMemoryStore())
 
 		tests := []struct {
 			instanceID string
 			message    string
 		}{
-			{"missing", "not found"},
-			{"running", "not in a completed state"},
+			{"missing", "instance missing not found"},
+			{"nil-metadata", "instance nil-metadata not found"},
+			{"wrapped-missing", "instance wrapped-missing not found"},
+			{"running", "instance running is not in a completed state"},
 		}
 		for _, test := range tests {
 			result, err := runtime.exportInstanceHistoryActivity(newActivityContext(t, ExportRequest{
@@ -374,7 +378,7 @@ func TestExportInstanceHistoryActivity(t *testing.T) {
 			exported := result.(ExportResult)
 			assert.False(t, exported.Success, test.instanceID)
 			assert.Equal(t, test.instanceID, exported.InstanceID)
-			assert.Contains(t, exported.Error, test.message)
+			assert.Equal(t, test.message, exported.Error)
 		}
 	})
 
@@ -399,12 +403,13 @@ func TestExportInstanceHistoryActivity(t *testing.T) {
 			{"store-error", "upload rejected"},
 		}
 		for _, test := range tests {
-			_, err := runtime.exportInstanceHistoryActivity(newActivityContext(t, ExportRequest{
+			result, err := runtime.exportInstanceHistoryActivity(newActivityContext(t, ExportRequest{
 				InstanceID:  test.instanceID,
 				Destination: destination,
 				Format:      DefaultExportFormat(),
 			}))
 			require.Error(t, err, test.instanceID)
+			assert.Nil(t, result, test.instanceID)
 			assert.Contains(t, err.Error(), test.message)
 		}
 	})
@@ -501,32 +506,6 @@ func TestBlobObjectName(t *testing.T) {
 		strings.TrimSuffix(name, ".jsonl.gz"),
 		strings.TrimSuffix(jsonName, ".json"),
 		"the digest must not depend on the format")
-}
-
-// TestBatchRetryBackoff pins the delays the whole-page retry ladder actually
-// schedules. Only attempts 1 and 2 create a timer, because the third and final
-// attempt fails the page instead of waiting again.
-func TestBatchRetryBackoff(t *testing.T) {
-	assert.Equal(t, minBatchRetryBackoff, batchRetryBackoff(1))
-	assert.Equal(t, 2*time.Minute, batchRetryBackoff(2))
-	// The reachable schedule ends here: maxBatchRetryAttempts is 3, and the
-	// final attempt returns the collected failures without a backoff.
-	assert.Equal(t, 3, maxBatchRetryAttempts)
-}
-
-// TestProcessBatchWithRetryHoldsTheCursorWhenNoAttemptRuns covers the defensive
-// exit from the retry loop: a batch that was never attempted must be reported as
-// failed so the caller keeps the cursor on the page instead of committing a
-// checkpoint that skips it.
-func TestProcessBatchWithRetryHoldsTheCursorWhenNoAttemptRuns(t *testing.T) {
-	for _, attempts := range []int{0, -1} {
-		result, err := processBatchWithRetry(
-			&task.OrchestrationContext{}, "job-1", []string{"i1", "i2"}, ExportJobConfiguration{}, attempts)
-		require.NoError(t, err)
-		assert.Zero(t, result.exportedCount)
-		require.Len(t, result.failures, 1)
-		assert.Contains(t, result.failures[0].Reason, "never attempted")
-	}
 }
 
 func TestExportActivityRetryPolicy(t *testing.T) {

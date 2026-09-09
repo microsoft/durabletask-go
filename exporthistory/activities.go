@@ -94,18 +94,6 @@ func (r *exportRuntime) listTerminalInstancesActivity(ctx task.ActivityContext) 
 	return result, nil
 }
 
-// permanentExportError marks a per-instance condition that retrying cannot fix,
-// such as an instance that does not exist or has not reached a terminal state.
-// Transient failures are returned as activity errors instead, so the activity's
-// retry policy can recover before the instance is recorded as failed.
-type permanentExportError struct{ message string }
-
-func (e *permanentExportError) Error() string { return e.message }
-
-func permanentExportFailure(format string, args ...any) error {
-	return &permanentExportError{message: fmt.Sprintf(format, args...)}
-}
-
 // exportInstanceHistoryActivity exports one instance's history to the
 // destination.
 //
@@ -140,10 +128,6 @@ func (r *exportRuntime) exportInstanceHistoryActivity(ctx task.ActivityContext) 
 
 	result, err := r.exportInstance(ctx.Context(), input)
 	if err != nil {
-		var permanent *permanentExportError
-		if errors.As(err, &permanent) {
-			return ExportResult{InstanceID: input.InstanceID, Success: false, Error: permanent.Error()}, nil
-		}
 		return nil, err
 	}
 	return result, nil
@@ -154,16 +138,18 @@ func (r *exportRuntime) exportInstance(ctx context.Context, input ExportRequest)
 	metadata, err := r.source.FetchOrchestrationMetadata(ctx, instanceID)
 	if err != nil {
 		if errors.Is(err, api.ErrInstanceNotFound) {
-			return ExportResult{}, permanentExportFailure("instance %s not found", input.InstanceID)
+			return ExportResult{InstanceID: input.InstanceID, Error: fmt.Sprintf("instance %s not found", input.InstanceID)}, nil
 		}
 		return ExportResult{}, fmt.Errorf("failed to read instance %s metadata: %w", input.InstanceID, err)
 	}
 	if metadata == nil {
-		return ExportResult{}, permanentExportFailure("instance %s not found", input.InstanceID)
+		return ExportResult{InstanceID: input.InstanceID, Error: fmt.Sprintf("instance %s not found", input.InstanceID)}, nil
 	}
 	if !isTerminalStatus(metadata.RuntimeStatus) {
-		return ExportResult{}, permanentExportFailure(
-			"instance %s is not in a completed state", input.InstanceID)
+		return ExportResult{
+			InstanceID: input.InstanceID,
+			Error:      fmt.Sprintf("instance %s is not in a completed state", input.InstanceID),
+		}, nil
 	}
 	if metadata.ExecutionID == "" {
 		return ExportResult{}, fmt.Errorf("instance %s metadata is missing an execution ID", input.InstanceID)

@@ -186,7 +186,7 @@ func runExportJobOrchestration(ctx *task.OrchestrationContext, input ExportJobRu
 				continue
 			}
 		} else {
-			batch, err := processBatchWithRetry(ctx, jobID, page.InstanceIDs, config, maxBatchRetryAttempts)
+			batch, err := processBatchWithRetry(ctx, jobID, page.InstanceIDs, config)
 			if err != nil {
 				return nil, err
 			}
@@ -249,10 +249,10 @@ func processBatchWithRetry(
 	jobID string,
 	instanceIDs []string,
 	config ExportJobConfiguration,
-	maxAttempts int,
 ) (batchExportResult, error) {
 	logger := ctx.Logger()
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	backoff := minBatchRetryBackoff
+	for attempt := 1; ; attempt++ {
 		results, err := exportBatch(ctx, instanceIDs, config)
 		if err != nil {
 			return batchExportResult{}, err
@@ -273,7 +273,7 @@ func processBatchWithRetry(
 		}
 		logger.Warn("export batch failed",
 			"jobId", jobID, "attempt", attempt, "failures", len(failed), "instances", len(instanceIDs))
-		if attempt == maxAttempts {
+		if attempt == maxBatchRetryAttempts {
 			failures := make([]ExportFailure, 0, len(failed))
 			for _, result := range failed {
 				reason := result.Error
@@ -289,31 +289,11 @@ func processBatchWithRetry(
 			}
 			return batchExportResult{exportedCount: succeeded, failures: failures}, nil
 		}
-		if err := ctx.CreateTimer(batchRetryBackoff(attempt)).Await(nil); err != nil {
+		if err := ctx.CreateTimer(backoff).Await(nil); err != nil {
 			return batchExportResult{}, err
 		}
-	}
-	// Reached only when maxAttempts is not positive, which means the page was
-	// never attempted. Reporting it as failed keeps the cursor on the page
-	// instead of committing a checkpoint that would silently skip it.
-	return batchExportResult{
-		failures: []ExportFailure{{
-			InstanceID:  strings.Join(instanceIDs, ","),
-			Reason:      fmt.Sprintf("the export batch was never attempted: %d retry attempts configured", maxAttempts),
-			LastAttempt: ctx.CurrentTimeUtc,
-		}},
-	}, nil
-}
-
-// batchRetryBackoff is the delay before retry number attempt+1, doubling from
-// [minBatchRetryBackoff]. Only attempts 1 and 2 schedule a retry, because the
-// final attempt fails the page, so the reachable schedule is 1 then 2 minutes.
-func batchRetryBackoff(attempt int) time.Duration {
-	backoff := minBatchRetryBackoff
-	for i := 1; i < attempt; i++ {
 		backoff *= 2
 	}
-	return backoff
 }
 
 // exportBatch fans out per-instance exports in deterministic windows bounded by

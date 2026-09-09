@@ -313,74 +313,52 @@ func normalizeAdditionallyAllowedTenants(tenants []string) []string {
 }
 
 func newAzureIdentityCredential(spec credentialSpec) (azcore.TokenCredential, error) {
+	var credential azcore.TokenCredential
+	var err error
 	switch spec.authentication {
 	case AuthenticationDefaultAzure:
-		credential, err := azidentity.NewDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{
+		credential, err = azidentity.NewDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{
 			TenantID:                   spec.tenantID,
 			AdditionallyAllowedTenants: spec.additionallyAllowedTenants,
 		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create DefaultAzureCredential: %w", err)
-		}
-		return credential, nil
 	case AuthenticationManagedIdentity:
 		credentialOptions := &azidentity.ManagedIdentityCredentialOptions{}
 		if spec.clientID != "" {
 			credentialOptions.ID = azidentity.ClientID(spec.clientID)
 		}
-		credential, err := azidentity.NewManagedIdentityCredential(credentialOptions)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create ManagedIdentityCredential: %w", err)
-		}
-		return credential, nil
+		credential, err = azidentity.NewManagedIdentityCredential(credentialOptions)
 	case AuthenticationWorkloadIdentity:
-		credential, err := azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
+		credential, err = azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
 			ClientID:                   spec.clientID,
 			TenantID:                   spec.tenantID,
 			TokenFilePath:              spec.tokenFilePath,
 			AdditionallyAllowedTenants: spec.additionallyAllowedTenants,
 		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create WorkloadIdentityCredential: %w", err)
-		}
-		return credential, nil
 	case AuthenticationEnvironment:
-		credential, err := azidentity.NewEnvironmentCredential(nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create EnvironmentCredential: %w", err)
-		}
-		return credential, nil
+		credential, err = azidentity.NewEnvironmentCredential(nil)
 	case AuthenticationAzureCLI:
-		credential, err := azidentity.NewAzureCLICredential(&azidentity.AzureCLICredentialOptions{
+		credential, err = azidentity.NewAzureCLICredential(&azidentity.AzureCLICredentialOptions{
 			TenantID:                   spec.tenantID,
 			AdditionallyAllowedTenants: spec.additionallyAllowedTenants,
 		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create AzureCLICredential: %w", err)
-		}
-		return credential, nil
 	case AuthenticationAzurePowerShell:
-		credential, err := azidentity.NewAzurePowerShellCredential(&azidentity.AzurePowerShellCredentialOptions{
+		credential, err = azidentity.NewAzurePowerShellCredential(&azidentity.AzurePowerShellCredentialOptions{
 			TenantID:                   spec.tenantID,
 			AdditionallyAllowedTenants: spec.additionallyAllowedTenants,
 		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create AzurePowerShellCredential: %w", err)
-		}
-		return credential, nil
 	case AuthenticationInteractiveBrowser:
-		credential, err := azidentity.NewInteractiveBrowserCredential(&azidentity.InteractiveBrowserCredentialOptions{
+		credential, err = azidentity.NewInteractiveBrowserCredential(&azidentity.InteractiveBrowserCredentialOptions{
 			ClientID:                   spec.clientID,
 			TenantID:                   spec.tenantID,
 			AdditionallyAllowedTenants: spec.additionallyAllowedTenants,
 		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create InteractiveBrowserCredential: %w", err)
-		}
-		return credential, nil
 	default:
 		return nil, fmt.Errorf("unsupported DTS authentication type %q", spec.authentication)
 	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create %sCredential: %w", spec.authentication, err)
+	}
+	return credential, nil
 }
 
 func resolveCredential(options *Options, factory credentialFactory) (azcore.TokenCredential, error) {

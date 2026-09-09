@@ -55,10 +55,6 @@ func startEmulatorClientAndWorker(
 ) (*durabletaskscheduler.Client, *durabletaskclient.TaskHubGrpcWorker, *durabletaskscheduler.Options) {
 	t.Helper()
 	options := emulatorOptions(t)
-	logger := api.DefaultLogger()
-
-	managementClient, err := durabletaskscheduler.NewClient(context.Background(), options, logger)
-	require.NoError(t, err)
 	workerOptions := []durabletaskclient.TaskHubGrpcWorkerOption{
 		durabletaskclient.WithMaxConcurrentOrchestrationWorkItems(4),
 		durabletaskclient.WithMaxConcurrentActivityWorkItems(8),
@@ -66,6 +62,21 @@ func startEmulatorClientAndWorker(
 		durabletaskclient.WithWorkerSilentDisconnectTimeout(15 * time.Second),
 	}
 	workerOptions = append(workerOptions, additionalWorkerOptions...)
+	managementClient, worker := startEmulatorWithOptions(t, options, registry, workerOptions...)
+	return managementClient, worker, options
+}
+
+// startEmulatorWithOptions adds no defaults to the caller's worker options.
+func startEmulatorWithOptions(
+	t *testing.T,
+	options *durabletaskscheduler.Options,
+	registry *task.TaskRegistry,
+	workerOptions ...durabletaskclient.TaskHubGrpcWorkerOption,
+) (*durabletaskscheduler.Client, *durabletaskclient.TaskHubGrpcWorker) {
+	t.Helper()
+	logger := api.DefaultLogger()
+	managementClient, err := durabletaskscheduler.NewClient(context.Background(), options, logger)
+	require.NoError(t, err)
 	worker, err := durabletaskscheduler.NewWorker(options, registry, logger, workerOptions...)
 	require.NoError(t, err)
 	require.NoError(t, worker.Start(context.Background()))
@@ -76,7 +87,7 @@ func startEmulatorClientAndWorker(
 		require.NoError(t, worker.Shutdown(shutdownCtx))
 		require.NoError(t, managementClient.Close())
 	})
-	return managementClient, worker, options
+	return managementClient, worker
 }
 
 type dtsPayload struct {
@@ -147,23 +158,12 @@ func TestDTSEmulatorCustomConverterAndVersionMigration(t *testing.T) {
 		return input, nil
 	}))
 
-	logger := api.DefaultLogger()
-	managementClient, err := durabletaskscheduler.NewClient(context.Background(), options, logger)
-	require.NoError(t, err)
-	worker, err := durabletaskscheduler.NewWorker(
+	managementClient, _ := startEmulatorWithOptions(
+		t,
 		options,
 		registry,
-		logger,
 		durabletaskclient.WithAutoWorkItemFilters(),
 	)
-	require.NoError(t, err)
-	require.NoError(t, worker.Start(context.Background()))
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, worker.Shutdown(shutdownCtx))
-		require.NoError(t, managementClient.Close())
-	})
 
 	testCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -537,27 +537,16 @@ func TestDTSEmulatorScheduledFilteredLargePayloadWorker(t *testing.T) {
 		return output, nil
 	}))
 
-	logger := api.DefaultLogger()
-	managementClient, err := durabletaskscheduler.NewClient(context.Background(), options, logger)
-	require.NoError(t, err)
-	worker, err := durabletaskscheduler.NewWorker(
+	managementClient, _ := startEmulatorWithOptions(
+		t,
 		options,
 		registry,
-		logger,
 		durabletaskclient.WithScheduledTaskCapability(true),
 		durabletaskclient.WithWorkItemFilters(&durabletaskclient.WorkItemFilters{
 			Orchestrations: []durabletaskclient.WorkItemFilter{{Name: "DTSLargePayload"}},
 			Activities:     []durabletaskclient.WorkItemFilter{{Name: "DTSLargePayloadEcho"}},
 		}),
 	)
-	require.NoError(t, err)
-	require.NoError(t, worker.Start(context.Background()))
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, worker.Shutdown(shutdownCtx))
-		require.NoError(t, managementClient.Close())
-	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1116,18 +1105,7 @@ func TestDTSEmulatorLongTimerSplitting(t *testing.T) {
 	}))
 	options := emulatorOptions(t)
 	options.MaximumTimerInterval = maximumInterval
-	logger := api.DefaultLogger()
-	managementClient, err := durabletaskscheduler.NewClient(context.Background(), options, logger)
-	require.NoError(t, err)
-	worker, err := durabletaskscheduler.NewWorker(options, registry, logger)
-	require.NoError(t, err)
-	require.NoError(t, worker.Start(context.Background()))
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, worker.Shutdown(shutdownCtx))
-		require.NoError(t, managementClient.Close())
-	})
+	managementClient, _ := startEmulatorWithOptions(t, options, registry)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -1201,18 +1179,7 @@ func TestDTSEmulatorCompletionRespectsConfiguredSendLimit(t *testing.T) {
 
 	options := emulatorOptions(t)
 	options.MaxSendMessageSize = 64 * 1024
-	logger := api.DefaultLogger()
-	managementClient, err := durabletaskscheduler.NewClient(context.Background(), options, logger)
-	require.NoError(t, err)
-	worker, err := durabletaskscheduler.NewWorker(options, registry, logger)
-	require.NoError(t, err)
-	require.NoError(t, worker.Start(context.Background()))
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, worker.Shutdown(shutdownCtx))
-		require.NoError(t, managementClient.Close())
-	})
+	managementClient, _ := startEmulatorWithOptions(t, options, registry)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1440,24 +1407,13 @@ func TestDTSEmulatorScheduledTasksAndHistory(t *testing.T) {
 		registry,
 		options.Versioning.DefaultVersion,
 	))
-	logger := api.DefaultLogger()
-	managementClient, err := durabletaskscheduler.NewClient(context.Background(), options, logger)
-	require.NoError(t, err)
-	worker, err := durabletaskscheduler.NewWorker(
+	managementClient, _ := startEmulatorWithOptions(
+		t,
 		options,
 		registry,
-		logger,
 		durabletaskscheduler.WithScheduledTasks(),
 		durabletaskclient.WithAutoWorkItemFilters(),
 	)
-	require.NoError(t, err)
-	require.NoError(t, worker.Start(context.Background()))
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, worker.Shutdown(shutdownCtx))
-		require.NoError(t, managementClient.Close())
-	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -1597,23 +1553,12 @@ func TestDTSEmulatorAzuriteBlobV2RoundTrip(t *testing.T) {
 		}
 		return firstResult, nil
 	}))
-	logger := api.DefaultLogger()
-	managementClient, err := durabletaskscheduler.NewClient(context.Background(), options, logger)
-	require.NoError(t, err)
-	worker, err := durabletaskscheduler.NewWorker(
+	managementClient, _ := startEmulatorWithOptions(
+		t,
 		options,
 		registry,
-		logger,
 		durabletaskclient.WithAutoWorkItemFilters(),
 	)
-	require.NoError(t, err)
-	require.NoError(t, worker.Start(context.Background()))
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, worker.Shutdown(shutdownCtx))
-		require.NoError(t, managementClient.Close())
-	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()

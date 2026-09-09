@@ -548,33 +548,15 @@ type scheduleConfiguration struct {
 }
 
 func (c scheduleConfiguration) MarshalJSON() ([]byte, error) {
-	type configJSON struct {
-		OrchestrationName       string               `json:"OrchestrationName"`
-		ScheduleID              string               `json:"ScheduleId"`
-		OrchestrationInput      string               `json:"OrchestrationInput,omitempty"`
-		OrchestrationInstanceID string               `json:"OrchestrationInstanceId,omitempty"`
-		OrchestrationVersion    string               `json:"OrchestrationVersion,omitempty"`
-		StartAt                 *time.Time           `json:"StartAt"`
-		EndAt                   *time.Time           `json:"EndAt"`
-		Interval                dotNetSpan           `json:"Interval"`
-		StartImmediatelyIfLate  bool                 `json:"StartImmediatelyIfLate"`
-		Tags                    map[string]string    `json:"Tags,omitempty"`
-		ContextFields           api.ContextFields    `json:"ContextFields,omitempty"`
-		RetryPolicy             *scheduleRetryPolicy `json:"RetryPolicy,omitempty"`
-	}
-	return json.Marshal(configJSON{
-		OrchestrationName:       c.OrchestrationName,
-		ScheduleID:              c.ScheduleID,
-		OrchestrationInput:      c.OrchestrationInput,
-		OrchestrationInstanceID: c.OrchestrationInstanceID,
-		OrchestrationVersion:    c.OrchestrationVersion,
-		StartAt:                 optionalTime(c.StartAt),
-		EndAt:                   optionalTime(c.EndAt),
-		Interval:                c.Interval,
-		StartImmediatelyIfLate:  c.StartImmediatelyIfLate,
-		Tags:                    c.Tags,
-		ContextFields:           c.ContextFields,
-		RetryPolicy:             c.RetryPolicy,
+	type configJSON scheduleConfiguration
+	return json.Marshal(struct {
+		configJSON
+		StartAt *time.Time `json:"StartAt"`
+		EndAt   *time.Time `json:"EndAt"`
+	}{
+		configJSON: configJSON(c),
+		StartAt:    optionalTime(c.StartAt),
+		EndAt:      optionalTime(c.EndAt),
 	})
 }
 
@@ -1100,14 +1082,14 @@ func applyScheduleUpdate(ctx *task.EntityContext, config *scheduleConfiguration,
 		changed, resetNext = true, true
 	}
 	if options.Tags != nil && !maps.Equal(options.Tags, config.Tags) {
-		if err := validateScheduleTags(options.Tags); err != nil {
+		if err := validateScheduleKeys("tag", options.Tags); err != nil {
 			return false, false, err
 		}
 		config.Tags = cloneStrings(options.Tags)
 		changed = true
 	}
 	if options.ContextFields != nil && !maps.Equal(options.ContextFields, config.ContextFields) {
-		if err := validateScheduleContextFields(options.ContextFields); err != nil {
+		if err := validateScheduleKeys("context field", options.ContextFields); err != nil {
 			return false, false, err
 		}
 		config.ContextFields = api.ContextFields(cloneStrings(options.ContextFields))
@@ -1186,10 +1168,10 @@ func validateCreation(options ScheduleCreationOptions) error {
 			return &ScheduleValidationError{Message: err.Error()}
 		}
 	}
-	if err := validateScheduleTags(options.Tags); err != nil {
+	if err := validateScheduleKeys("tag", options.Tags); err != nil {
 		return err
 	}
-	if err := validateScheduleContextFields(options.ContextFields); err != nil {
+	if err := validateScheduleKeys("context field", options.ContextFields); err != nil {
 		return err
 	}
 	if _, err := scheduleRetryPolicyFromPublic(options.RetryPolicy); err != nil {
@@ -1244,36 +1226,16 @@ func newExecutionToken() string {
 	return strings.ReplaceAll(uuid.NewString(), "-", "")
 }
 
-func validateScheduleTags(tags map[string]string) error {
-	for key := range tags {
+// validateScheduleKeys rejects empty keys and reserved wire prefixes.
+func validateScheduleKeys(kind string, values map[string]string) error {
+	for key := range values {
 		if key == "" {
-			return &ScheduleValidationError{Message: "tag key cannot be empty"}
+			return &ScheduleValidationError{Message: kind + " key cannot be empty"}
 		}
-		if err := checkUnreservedScheduleKey("tag", key); err != nil {
-			return err
+		if strings.HasPrefix(key, api.ReservedContextFieldPrefix) ||
+			strings.HasPrefix(key, tagcodec.UserTagPrefix) {
+			return &ScheduleValidationError{Message: fmt.Sprintf("%s %q uses a reserved prefix", kind, key)}
 		}
-	}
-	return nil
-}
-
-func validateScheduleContextFields(fields api.ContextFields) error {
-	for key := range fields {
-		if key == "" {
-			return &ScheduleValidationError{Message: "context field key cannot be empty"}
-		}
-		if err := checkUnreservedScheduleKey("context field", key); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// checkUnreservedScheduleKey rejects keys that collide with the reserved
-// prefixes used to carry orchestration context on the wire.
-func checkUnreservedScheduleKey(kind, key string) error {
-	if strings.HasPrefix(key, api.ReservedContextFieldPrefix) ||
-		strings.HasPrefix(key, tagcodec.UserTagPrefix) {
-		return &ScheduleValidationError{Message: fmt.Sprintf("%s %q uses a reserved prefix", kind, key)}
 	}
 	return nil
 }

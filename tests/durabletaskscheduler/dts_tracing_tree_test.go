@@ -325,18 +325,7 @@ func TestDTSEmulatorTracingTreeVersionMigration(t *testing.T) {
 		return input + "+v2", nil
 	}))
 
-	logger := api.DefaultLogger()
-	managementClient, err := durabletaskscheduler.NewClient(context.Background(), options, logger)
-	require.NoError(t, err)
-	worker, err := durabletaskscheduler.NewWorker(options, registry, logger)
-	require.NoError(t, err)
-	require.NoError(t, worker.Start(context.Background()))
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, worker.Shutdown(shutdownCtx))
-		require.NoError(t, managementClient.Close())
-	})
+	managementClient, _ := startEmulatorWithOptions(t, options, registry)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -407,24 +396,13 @@ func TestDTSEmulatorTracingTreeScheduledTask(t *testing.T) {
 	}))
 	require.NoError(t, durabletaskscheduler.RegisterScheduledTasksWithDefaultVersion(registry, "1.0"))
 
-	logger := api.DefaultLogger()
-	managementClient, err := durabletaskscheduler.NewClient(context.Background(), options, logger)
-	require.NoError(t, err)
-	worker, err := durabletaskscheduler.NewWorker(
+	managementClient, _ := startEmulatorWithOptions(
+		t,
 		options,
 		registry,
-		logger,
 		durabletaskscheduler.WithScheduledTasks(),
 		durabletaskclient.WithAutoWorkItemFilters(),
 	)
-	require.NoError(t, err)
-	require.NoError(t, worker.Start(context.Background()))
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, worker.Shutdown(shutdownCtx))
-		require.NoError(t, managementClient.Close())
-	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
