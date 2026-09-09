@@ -1,0 +1,17 @@
+[
+  {
+    "token": "blob:v2:https://myaccount.blob.core.windows.net/mycontainer/abc123def456",
+    "container": "mycontainer",
+    "name": "abc123def456"
+  },
+  {
+    "token": "blob:v2:http://127.0.0.1:10000/devstoreaccount1/mycontainer/abc123def456",
+    "container": "mycontainer",
+    "name": "abc123def456"
+  },
+  {
+    "token": "blob:v1:mycontainer:abc123def456",
+    "container": "mycontainer",
+    "name": "abc123def456"
+  }
+]

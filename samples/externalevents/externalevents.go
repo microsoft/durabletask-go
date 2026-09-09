@@ -1,3 +1,8 @@
+// Command externalevents demonstrates raising an external event into a running
+// orchestration that is blocked on WaitForSingleEvent.
+//
+//	export DTS_CONNECTION_STRING="Endpoint=http://localhost:8080;TaskHub=default;Authentication=None"
+//	go run ./samples/externalevents
 package main
 
 import (
@@ -7,38 +12,43 @@ import (
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/backend"
-	"github.com/microsoft/durabletask-go/backend/sqlite"
+	"github.com/microsoft/durabletask-go/samples/internal/dtssample"
 	"github.com/microsoft/durabletask-go/task"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	// Create a new task registry and add the orchestrator and activities
 	r := task.NewTaskRegistry()
-	if err := r.AddOrchestrator(ExternalEventOrchestrator); err != nil {
-		log.Fatalf("Failed to register orchestrator: %v", err)
+	if err := r.AddOrchestratorN("ExternalEventOrchestrator", ExternalEventOrchestrator); err != nil {
+		return fmt.Errorf("failed to register orchestrator: %w", err)
 	}
 
-	// Init the client
-	ctx := context.Background()
-	client, worker, err := Init(ctx, r)
+	// Connect a client and worker to the Durable Task Scheduler task hub
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	app, err := dtssample.Start(ctx, r)
 	if err != nil {
-		log.Fatalf("Failed to initialize the client: %v", err)
+		return err
 	}
 	defer func() {
-		if err := worker.Shutdown(ctx); err != nil {
-			log.Printf("Failed to shutdown worker: %v", err)
+		if err := app.Shutdown(); err != nil {
+			log.Printf("Failed to shut down: %v", err)
 		}
 	}()
 
 	// Start a new orchestration
-	id, err := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestrator")
+	id, err := app.Client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestrator")
 	if err != nil {
-		log.Fatalf("Failed to schedule new orchestration: %v", err) //nolint:gocritic // Fatalf in sample main() is acceptable
+		return fmt.Errorf("failed to schedule new orchestration: %w", err)
 	}
-	_, err = client.WaitForOrchestrationStart(ctx, id)
-	if err != nil {
-		log.Fatalf("Failed to wait for orchestration to start: %v", err)
+	if _, err := app.Client.WaitForOrchestrationStart(ctx, id); err != nil {
+		return fmt.Errorf("failed to wait for orchestration to start: %w", err)
 	}
 
 	// Prompt the user for their name and send that to the orchestrator
@@ -46,49 +56,25 @@ func main() {
 		fmt.Println("Enter your first name: ")
 		var nameInput string
 		if _, err := fmt.Scanln(&nameInput); err != nil {
-			log.Fatalf("Failed to read input: %v", err)
+			log.Printf("Failed to read input: %v", err)
+			return
 		}
-		if err = client.RaiseEvent(ctx, id, "Name", api.WithEventPayload(nameInput)); err != nil {
-			log.Fatalf("Failed to raise event: %v", err)
+		if err := app.Client.RaiseEvent(ctx, id, "Name", api.WithEventPayload(nameInput)); err != nil {
+			log.Printf("Failed to raise event: %v", err)
 		}
 	}()
 
 	// After the orchestration receives the event, it should complete on its own
-	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	metadata, err := app.Client.WaitForOrchestrationCompletion(ctx, id)
 	if err != nil {
-		log.Fatalf("Failed to wait for orchestration to complete: %v", err)
+		return fmt.Errorf("failed to wait for orchestration to complete: %w", err)
 	}
 	if metadata.FailureDetails != nil {
 		log.Println("orchestration failed:", metadata.FailureDetails.ErrorMessage)
 	} else {
 		log.Println("orchestration completed:", metadata.SerializedOutput)
 	}
-}
-
-// Init creates and initializes an in-memory client and worker pair with default configuration.
-func Init(ctx context.Context, r *task.TaskRegistry) (backend.TaskHubClient, backend.TaskHubWorker, error) {
-	logger := backend.DefaultLogger()
-
-	// Create an executor
-	executor := task.NewTaskExecutor(r)
-
-	// Create a new backend
-	// Use the in-memory sqlite provider by specifying ""
-	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions(""), logger)
-	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
-	activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
-	taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
-
-	// Start the worker
-	err := taskHubWorker.Start(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Get the client to the backend
-	taskHubClient := backend.NewTaskHubClient(be)
-
-	return taskHubClient, taskHubWorker, nil
+	return nil
 }
 
 // ExternalEventOrchestrator is an orchestrator function that blocks for 30 seconds or

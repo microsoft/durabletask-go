@@ -1,102 +1,89 @@
+// Command parallel demonstrates fan-out/fan-in: an orchestration starts a
+// dynamic number of activities at once and then awaits all of them.
+//
+//	export DTS_CONNECTION_STRING="Endpoint=http://localhost:8080;TaskHub=default;Authentication=None"
+//	go run ./samples/parallel
 package main
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/microsoft/durabletask-go/backend"
-	"github.com/microsoft/durabletask-go/backend/sqlite"
+	"github.com/microsoft/durabletask-go/samples/internal/dtssample"
 	"github.com/microsoft/durabletask-go/task"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	// Create a new task registry and add the orchestrator and activities
 	r := task.NewTaskRegistry()
-	if err := r.AddOrchestrator(UpdateDevicesOrchestrator); err != nil {
-		log.Fatalf("Failed to register orchestrator: %v", err)
+	if err := r.AddOrchestratorN("UpdateDevicesOrchestrator", UpdateDevicesOrchestrator); err != nil {
+		return fmt.Errorf("failed to register orchestrator: %w", err)
 	}
-	if err := r.AddActivity(GetDevicesToUpdate); err != nil {
-		log.Fatalf("Failed to register activity: %v", err)
+	if err := r.AddActivityN("GetDevicesToUpdate", GetDevicesToUpdate); err != nil {
+		return fmt.Errorf("failed to register activity: %w", err)
 	}
-	if err := r.AddActivity(UpdateDevice); err != nil {
-		log.Fatalf("Failed to register activity: %v", err)
+	if err := r.AddActivityN("UpdateDevice", UpdateDevice); err != nil {
+		return fmt.Errorf("failed to register activity: %w", err)
 	}
 
-	// Init the client
-	ctx := context.Background()
-	client, worker, err := Init(ctx, r)
+	// Connect a client and worker to the Durable Task Scheduler task hub
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	app, err := dtssample.Start(ctx, r)
 	if err != nil {
-		log.Fatalf("Failed to initialize the client: %v", err)
+		return err
 	}
 	defer func() {
-		if err := worker.Shutdown(ctx); err != nil {
-			log.Printf("Failed to shutdown worker: %v", err)
+		if err := app.Shutdown(); err != nil {
+			log.Printf("Failed to shut down: %v", err)
 		}
 	}()
 
 	// Start a new orchestration
-	id, err := client.ScheduleNewOrchestration(ctx, UpdateDevicesOrchestrator)
+	id, err := app.Client.ScheduleNewOrchestration(ctx, "UpdateDevicesOrchestrator")
 	if err != nil {
-		log.Fatalf("Failed to schedule new orchestration: %v", err) //nolint:gocritic // Fatalf in sample main() is acceptable
+		return fmt.Errorf("failed to schedule new orchestration: %w", err)
 	}
 
 	// Wait for the orchestration to complete
-	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
+	metadata, err := app.Client.WaitForOrchestrationCompletion(ctx, id)
 	if err != nil {
-		log.Fatalf("Failed to wait for orchestration to complete: %v", err)
+		return fmt.Errorf("failed to wait for orchestration to complete: %w", err)
 	}
 
 	// Print the results
 	metadataEnc, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
-		log.Fatalf("Failed to encode result to JSON: %v", err)
+		return fmt.Errorf("failed to encode result to JSON: %w", err)
 	}
 	log.Printf("Orchestration completed: %v", string(metadataEnc))
-}
-
-// Init creates and initializes an in-memory client and worker pair with default configuration.
-func Init(ctx context.Context, r *task.TaskRegistry) (backend.TaskHubClient, backend.TaskHubWorker, error) {
-	logger := backend.DefaultLogger()
-
-	// Create an executor
-	executor := task.NewTaskExecutor(r)
-
-	// Create a new backend
-	// Use the in-memory sqlite provider by specifying ""
-	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions(""), logger)
-	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
-	activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
-	taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
-
-	// Start the worker
-	err := taskHubWorker.Start(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Get the client to the backend
-	taskHubClient := backend.NewTaskHubClient(be)
-
-	return taskHubClient, taskHubWorker, nil
+	return nil
 }
 
 // UpdateDevicesOrchestrator is an orchestrator that runs activities in parallel
 func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	// Get a dynamic list of devices to perform updates on
 	var devices []string
-	if err := ctx.CallActivity(GetDevicesToUpdate).Await(&devices); err != nil {
+	if err := ctx.CallActivity("GetDevicesToUpdate").Await(&devices); err != nil {
 		return nil, err
 	}
 
 	// Start a dynamic number of tasks in parallel, not waiting for any to complete (yet)
 	tasks := make([]task.Task, len(devices))
 	for i, id := range devices {
-		tasks[i] = ctx.CallActivity(UpdateDevice, task.WithActivityInput(id))
+		tasks[i] = ctx.CallActivity("UpdateDevice", task.WithActivityInput(id))
 	}
 
 	// Now that all are started, wait for them to complete and then return the success rate

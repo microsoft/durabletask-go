@@ -1,102 +1,184 @@
-# Durable Task Framework for Go
+# Durable Task SDK for Go
 
 [![Build](https://github.com/microsoft/durabletask-go/actions/workflows/pr-validation.yml/badge.svg)](https://github.com/microsoft/durabletask-go/actions/workflows/pr-validation.yml)
 
-The Durable Task Framework is a lightweight, embeddable engine for writing durable, fault-tolerant business logic (*orchestrations*) as ordinary code. The engine itself is written in Go and intended to be embedded into other Go-based processes. It exposes a gRPC endpoint to support writing durable flows in any language. There are currently SDKs that consume this gRPC endpoint for [.NET](https://github.com/microsoft/durabletask-dotnet) and [Java](https://github.com/microsoft/durabletask-java), with more to come. It's also possible to write orchestrations directly in Go and run them in the local process.
+This SDK lets you write reliable business logic in Go. You write the logic as normal Go code. The SDK calls this logic an *orchestration*.
 
-This project is largely a Go clone of the [.NET-based Durable Task Framework](https://github.com/Azure/durabletask), which is used by various cloud service teams at Microsoft for building reliable control planes and managing infrastructure. It also takes inspiration from the [Go Workflows](https://github.com/cschleiden/go-workflows) project, which itself is a Go project that borrows heavily from both the Durable Task Framework and [Temporal](https://github.com/temporalio/temporal). The main difference is that the Durable Task engine is designed to be used in sidecar architectures.
+You write the orchestrations, activities, and entities. [Azure Durable Task Scheduler](https://learn.microsoft.com/azure/azure-functions/durable/durable-task-scheduler/durable-task-scheduler) (DTS) keeps the durable state. DTS also dispatches the work and recovers the work after a failure.
 
-The Durable Task engine is also intended to be used as the basis for the [Dapr embedded workflow engine](https://github.com/dapr/dapr/issues/4576).
+DTS is the only supported runtime. This SDK does not include a storage backend.
 
-> This project is a work-in-progress and should not be used for production workloads. The public API surface is also not yet stable. The project itself is also in the very early stages and is missing some of the basics, such as contribution guidelines, etc.
+The SDK gives you two connections:
 
-## Storage providers
+- A **management client** starts orchestrations and reads their state.
+- A **worker** runs your registered orchestrators, activities, and entities.
 
-This project includes a [sqlite](https://sqlite.org/) storage provider for persisting app state to disk.
+## Features
+
+The features are in three groups. Group 1 has the most important features. Start with group 1.
+
+### Group 1: Basic features
+
+You need these features for almost all applications.
+
+| Feature | Description |
+| --- | --- |
+| Orchestrations | Write a workflow as a Go function. DTS saves the progress after each step. |
+| Activities | Call a function that does work with side effects, for example an HTTP request. |
+| Retries and failure handling | Retry a failed task with a policy. Read the cause from typed errors. |
+| Orchestration management | Start, query, wait for, terminate, suspend, resume, and purge an orchestration. |
+
+### Group 2: Common patterns
+
+Most applications use one or more of these patterns.
+
+| Feature | Description |
+| --- | --- |
+| Fan-out and fan-in | Start many activities in parallel. Then wait for all of the results. |
+| Durable timers | Wait for a time period. The timer stays correct after a restart. |
+| External events | Stop the orchestration until an external system sends an event. |
+| Sub-orchestrations | Call one orchestration from a different orchestration. |
+| Durable entities | Keep addressable state. An entity does its operations one at a time. |
+
+### Group 3: Advanced features
+
+Use these features for large systems or for special conditions.
+
+| Feature | Description |
+| --- | --- |
+| Task versions | Register more than one implementation under the same logical name. |
+| Data converters | Replace the default JSON serialization of your payloads. |
+| Large payloads | Keep large payloads in Azure Blob Storage and send a reference token. |
+| Tags and trace context | Attach user tags to actions. Send the caller trace context to DTS. |
+| Distributed tracing | Emit OpenTelemetry spans from your process. DTS emits the durable spans. |
+| Replay-hazard analysis | Find nondeterministic orchestrator code with `cmd/orchestratorvet`. |
+| History export (preview) | Copy terminal orchestration histories to Azure Blob Storage. |
+
+## Quick start
+
+This project needs Go 1.25 or later.
+
+1. Start the [DTS emulator](https://learn.microsoft.com/azure/azure-functions/durable/durable-task-scheduler/quickstart-durable-task-scheduler). Use any OCI runtime:
+
+   ```bash
+   docker run -d -p 8080:8080 -p 8082:8082 \
+     -e DTS_TASK_HUB_NAMES=default \
+     mcr.microsoft.com/dts/dts-emulator:latest
+   ```
+
+   The dashboard runs on port `8082`.
+
+2. Set the connection string:
+
+   ```bash
+   export DTS_CONNECTION_STRING="Endpoint=http://localhost:8080;TaskHub=default;Authentication=None"
+   ```
+
+3. Run a sample:
+
+   ```bash
+   go run ./samples/durabletaskscheduler
+   ```
+
+## Connection to DTS
+
+The [`durabletaskscheduler`](./durabletaskscheduler) package is the integration surface. The package validates your connection string and supplies Azure token credentials. It also owns the management connection and the worker connection separately. The worker stream recovers after a network failure.
 
 ```go
-// Persists state to a file named test.sqlite3. Use "" for in-memory storage.
-options := sqlite.NewSqliteOptions("test.sqlite3")
-be := sqlite.NewSqliteBackend(options, backend.DefaultLogger())
+options, err := durabletaskscheduler.NewOptionsFromConnectionString(
+    os.Getenv("DTS_CONNECTION_STRING"))
+if err != nil {
+    return err
+}
+
+registry := task.NewTaskRegistry()
+if err := registry.AddOrchestratorN("ActivitySequence", ActivitySequence); err != nil {
+    return err
+}
+if err := registry.AddActivityN("SayHello", SayHello); err != nil {
+    return err
+}
+
+logger := api.DefaultLogger()
+
+// The management client schedules orchestrations and reads their state.
+client, err := durabletaskscheduler.NewClient(ctx, options, logger)
+if err != nil {
+    return err
+}
+defer client.Close()
+
+// The worker executes the registered orchestrators and activities.
+worker, err := durabletaskscheduler.NewWorker(
+    options, registry, logger, durabletaskclient.WithAutoWorkItemFilters())
+if err != nil {
+    return err
+}
+if err := worker.Start(ctx); err != nil {
+    return err
+}
+defer worker.Shutdown(ctx)
+
+id, err := client.ScheduleNewOrchestration(ctx, "ActivitySequence")
+if err != nil {
+    return err
+}
+metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 ```
 
-Additional storage providers can be created by extending the `Backend` interface.
+In this example, `durabletaskclient` is the import alias for the [`client`](./client) package.
 
-## Creating the standalone gRPC sidecar
+Management clients also read the orchestration history and the recurring interval schedules. These APIs do not expose the generated protobuf messages.
 
-See the `main.go` file for an example of how to create a standalone gRPC sidecar that embeds the Durable Task engine. In short, you must create an `Backend` (for storage), an `Executor` (for executing user code), and host them as a `TaskHubWorker`.
+For more information, read the [DTS transport guide and feature matrix](./durabletaskscheduler/README.md).
 
-The following code creates a `TaskHub` worker with sqlite `Backend` and a gRPC `Executor` implementations.
+## Samples
 
-```go
-// Use the default logger or provide your own
-logger := backend.DefaultLogger()
+Each sample connects to the task hub in `DTS_CONNECTION_STRING`. Set that variable first. Then run `go run ./samples/<name>`.
 
-// Configure the sqlite backend that will store the runtime state
-sqliteOptions := sqlite.NewSqliteOptions(sqliteFilePath)
-be := sqlite.NewSqliteBackend(sqliteOptions, logger)
+| Sample | Description |
+| --- | --- |
+| [durabletaskscheduler](./samples/durabletaskscheduler) | Connect to DTS and call activities in sequence. |
+| [parallel](./samples/parallel) | Run activities in parallel. |
+| [externalevents](./samples/externalevents) | Wait for an event from an external system. |
+| [retries](./samples/retries) | Retry an activity after a failure. |
+| [entity](./samples/entity) | Use durable entities. |
+| [exporthistory](./samples/exporthistory) | Export orchestration histories to Azure Blob Storage. |
+| [distributedtracing](./samples/distributedtracing) | Send trace data to an OpenTelemetry collector. |
 
-// Create a gRPC server that the language SDKs will connect to
-grpcServer := grpc.NewServer()
-executor := backend.NewGrpcExecutor(grpcServer, be, logger)
+Two samples need more steps:
 
-// Construct and start the task hub worker object, which polls the backend for new work
-orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
-activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
-taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
-taskHubWorker.Start(context.Background())
+- `distributedtracing` is a separate Go module. Run it with `cd samples/distributedtracing && go run .`.
+- `exporthistory` also needs `EXPORT_STORAGE_CONNECTION_STRING`. It accepts the optional variable `EXPORT_CONTAINER`.
 
-// Start listening.
-lis, _ := net.Listen("tcp", "localhost:4001")
-fmt.Printf("server listening at %v\n", lis.Addr())
-grpcServer.Serve(lis)
-```
+Most samples use the shared helper [`samples/internal/dtssample`](./samples/internal/dtssample). The helper reads `DTS_CONNECTION_STRING`, opens the client, and starts the worker. The `exporthistory` sample does not use the helper. That sample needs the client before it registers the export system tasks.
 
-Note that the Durable Task gRPC service implementation is designed to serve one client at a time, just like with any sidecar architecture. Scale out is achieved by adding new pod replicas that contain both the app process and the sidecar (connected to a common database).
+## Orchestrations in Go
 
-### Language SDKs for gRPC
+### Pattern 1: Activity sequence
 
-The Durable Task Framework for Go currently supports writing orchestrations in the following languages:
-
-| Language/Stack | Package | Project Home | Samples |
-| - | - | - | - |
-| .NET | [![NuGet](https://img.shields.io/nuget/v/Microsoft.DurableTask.Client.svg?style=flat)](https://www.nuget.org/packages/Microsoft.DurableTask.Client/) | [GitHub](https://github.com/microsoft/durabletask-dotnet) | [Samples](https://github.com/microsoft/durabletask-dotnet/tree/main/samples) |
-| Java | [![Maven Central](https://img.shields.io/maven-central/v/com.microsoft/durabletask-client?label=durabletask-client)](https://search.maven.org/artifact/com.microsoft/durabletask-client) | [GitHub](https://github.com/microsoft/durabletask-java) | [Samples](https://github.com/microsoft/durabletask-java/tree/main/samples/src/main/java/io/durabletask/samples) |
-| Python | [![PyPI version](https://badge.fury.io/py/durabletask.svg)](https://badge.fury.io/py/durabletask) | [GitHub](https://github.com/microsoft/durabletask-python) | [Samples](https://github.com/microsoft/durabletask-python/tree/main/examples) |
-
-More language SDKs are planned to be added in the future. In particular, SDKs for Python and JavaScript/TypeScript. Anyone can theoretically create an SDK using a language that supports gRPC. However, there is not yet a guide for how to do this, so developers would need to reference existing SDK code as a reference. Starting with the Java implementation is recommended. The gRPC API is defined [here](https://github.com/microsoft/durabletask-protobuf).
-
-## Embedded orchestrations
-
-It's also possible to create orchestrations in Go and run them in the local process. The full set of Durable Task features is not yet available as part of the Go SDK, but will be added over time.
-
-> You can find code samples in the [samples](./samples/) directory.  
-> To run them, get into the folder of each sample and run `go run .`
-
-### Activity sequence example
-
-Activity sequences like the following are the simplest and most common pattern used in the Durable Task Framework.
+An activity sequence is the most simple pattern. The orchestrator calls the activities one after the other.
 
 ```go
-// ActivitySequenceOrchestrator makes three activity calls in sequence and results the results
-// as an array.
+// ActivitySequenceOrchestrator makes three activity calls in sequence.
+// It returns the results as an array.
 func ActivitySequenceOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	var helloTokyo string
-	if err := ctx.CallActivity(SayHelloActivity, task.WithActivityInput("Tokyo")).Await(&helloTokyo); err != nil {
+	if err := ctx.CallActivity("SayHello", task.WithActivityInput("Tokyo")).Await(&helloTokyo); err != nil {
 		return nil, err
 	}
 	var helloLondon string
-	if err := ctx.CallActivity(SayHelloActivity, task.WithActivityInput("London")).Await(&helloLondon); err != nil {
+	if err := ctx.CallActivity("SayHello", task.WithActivityInput("London")).Await(&helloLondon); err != nil {
 		return nil, err
 	}
 	var helloSeattle string
-	if err := ctx.CallActivity(SayHelloActivity, task.WithActivityInput("Seattle")).Await(&helloSeattle); err != nil {
+	if err := ctx.CallActivity("SayHello", task.WithActivityInput("Seattle")).Await(&helloSeattle); err != nil {
 		return nil, err
 	}
 	return []string{helloTokyo, helloLondon, helloSeattle}, nil
 }
 
-// SayHelloActivity can be called by an orchestrator function and will return a friendly greeting.
+// SayHelloActivity returns a greeting. An orchestrator function can call it.
 func SayHelloActivity(ctx task.ActivityContext) (any, error) {
 	var input string
 	if err := ctx.GetInput(&input); err != nil {
@@ -106,28 +188,28 @@ func SayHelloActivity(ctx task.ActivityContext) (any, error) {
 }
 ```
 
-You can find the full sample [here](./samples/sequence).
+Full sample: [samples/durabletaskscheduler](./samples/durabletaskscheduler).
 
-### Fan-out / fan-in execution example
+### Pattern 2: Fan-out and fan-in
 
-The next most common pattern is "fan-out / fan-in" where multiple activities are run in parallel, as shown in the snippet below (note that the `GetDevicesToUpdate` and `UpdateDevice` activity definitions are left out of the snippet below for brevity):
+In this pattern, the orchestrator starts many activities in parallel. Then it waits for all of the results. This example does not show the `GetDevicesToUpdate` and `UpdateDevice` activities.
 
 ```go
-// UpdateDevicesOrchestrator is an orchestrator that runs activities in parallel
+// UpdateDevicesOrchestrator runs activities in parallel.
 func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
-	// Get a dynamic list of devices to perform updates on
+	// Get a dynamic list of devices to update.
 	var devices []string
-	if err := ctx.CallActivity(GetDevicesToUpdate).Await(&devices); err != nil {
+	if err := ctx.CallActivity("GetDevicesToUpdate").Await(&devices); err != nil {
 		return nil, err
 	}
 
-	// Start a dynamic number of tasks in parallel, not waiting for any to complete (yet)
+	// Start a dynamic number of tasks in parallel. Do not wait for the results now.
 	tasks := make([]task.Task, len(devices))
 	for i, id := range devices {
-		tasks[i] = ctx.CallActivity(UpdateDevice, task.WithActivityInput(id))
+		tasks[i] = ctx.CallActivity("UpdateDevice", task.WithActivityInput(id))
 	}
 
-	// Now that all are started, wait for them to complete and then return the success rate
+	// All tasks are started. Wait for the results and calculate the success rate.
 	successCount := 0
 	for _, task := range tasks {
 		var succeeded bool
@@ -140,19 +222,20 @@ func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 }
 ```
 
-The full sample can be found [here](./samples/parallel).
+Full sample: [samples/parallel](./samples/parallel).
 
-### External orchestration inputs (events) example
+### Pattern 3: External events
 
-Sometimes orchestrations need asynchronous input from external systems. For example, an approval workflow may require a manual approval signal from an authorized user. Or perhaps an orchestration pauses and waits for a command from an operator. The `WaitForSingleEvent` method can be used in an orchestrator function to pause execution and wait for such inputs. You an even specify a timeout value indicating how long to wait for the input before resuming execution (use `-1` to indicate infinite timeout).
+An orchestration can wait for input from an external system. For example, an approval workflow waits for a signal from a user. Use the `WaitForSingleEvent` method to stop the orchestration until the event comes.
+
+Set a timeout value to limit the wait time. Use `-1` for an infinite timeout.
 
 ```go
-// ExternalEventOrchestrator is an orchestrator function that blocks for 30 seconds or
-// until a "Name" event is sent to it.
+// ExternalEventOrchestrator waits 30 seconds for a "Name" event.
 func ExternalEventOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	var nameInput string
 	if err := ctx.WaitForSingleEvent("Name", 30*time.Second).Await(&nameInput); err != nil {
-		// Timeout expired
+		// The timeout expired.
 		return nil, err
 	}
 
@@ -160,39 +243,75 @@ func ExternalEventOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 }
 ```
 
-Sending an event to a waiting orchestration can be done using the `RaiseEvent` method of the task hub client. These events are durably buffered in the orchestration state and are consumed as soon as the target orchestration calls `WaitForSingleEvent` with a matching event name. The following code shows how to use the `RaiseEvent` method to send an event with a payload to a running orchestration. See [Managing local orchestrations](#managing-local-orchestrations) for more information on how to interact with local orchestrations in Go.
+Use the `RaiseEvent` method of the client to send an event.
 
 ```go
-id, _ := client.ScheduleNewOrchestration(ctx, ExternalEventOrchestrator)
+id, _ := client.ScheduleNewOrchestration(ctx, "ExternalEventOrchestrator")
 
-// Prompt the user for their name and send that to the orchestrator
+// Ask the user for a name and send the name to the orchestrator.
 go func() {
 	fmt.Println("Enter your first name: ")
 	var nameInput string
 	fmt.Scanln(&nameInput)
-	
+
 	client.RaiseEvent(ctx, id, "Name", api.WithEventPayload(nameInput))
 }()
 ```
 
-The full sample can be found [here](./samples/externalevents).
+DTS keeps each event in the orchestration state. The orchestration reads the event when it calls `WaitForSingleEvent` with the same event name.
 
-### Managing local orchestrations
+Two rules control the order:
 
-The following code snippet provides an example of how you can configure and run orchestrations. The `TaskRegistry` type allows you to register orchestrator and activity functions, and the `TaskHubClient` allows you to start, query, terminate, suspend, resume, and wait for orchestrations to complete.
+- If more than one live wait uses the same event name, the newest wait gets the next event. This rule is last in, first out. It agrees with the Durable Task .NET replay contract.
+- If an event arrives before any wait, DTS keeps the event. The orchestration then reads these events in arrival order. This rule is first in, first out.
 
-The code snippet below demonstrates how to register and start a new instance of the `ActivitySequenceOrchestrator` orchestrator and wait for it to complete. The initialization of the client and worker are left out for brevity.
+Full sample: [samples/externalevents](./samples/externalevents).
+
+### Pattern 4: Retries and failure handling
+
+An activity or a sub-orchestration that fails returns a `*task.TaskFailedError`. An entity call that fails returns a `*task.EntityOperationFailedError`. Both errors contain an `api.FailureDetails` value. This value holds the error type, the message, the stack trace, the inner failure, the non-retriable marker, and the custom properties.
+
+```go
+err := ctx.CallActivity("ChargeCard").Await(nil)
+var failed *task.TaskFailedError
+if errors.As(err, &failed) {
+	fmt.Printf("%s failed: %s\n", failed.TaskName, failed.FailureDetails)
+}
+```
+
+Attach a retry policy to call a failed task again:
+
+```go
+policy := &task.RetryPolicy{
+	MaxAttempts:          3,
+	InitialRetryInterval: time.Second,
+	Handle: func(retry task.RetryContext) bool {
+		return !retry.LastFailure.IsCausedBy(api.ErrorTypeActivityTaskNotFound)
+	},
+}
+```
+
+Obey these rules when you write a retry handler:
+
+- The handler runs again during replay. Do not do I/O in the handler. Do not read the wall clock in the handler.
+- The retry options copy the policy when you make the option. Validation does not change your policy value.
+- If the next backoff goes past `RetryTimeout`, the SDK stops the retries. The SDK makes this decision from the failure event, so the result is stable across replay and redelivery.
+- Some failures are non-retriable and skip your handler. Missing activity registrations, missing entity registrations, and version mismatches are non-retriable.
+
+`OrchestrationContext.Context()` is separate from the host context of the worker. It holds only the persisted orchestration identity and context fields. It never holds host values, deadlines, or cancellation. Use durable timers and task cancellation scopes to control the orchestration. Use `ctx.Logger()` for replay-safe logging. Use the activity context for host cancellation and for outbound I/O.
+
+Full sample: [samples/retries](./samples/retries).
+
+### Orchestration management
+
+Use a `TaskRegistry` to register your orchestrator, activity, and entity functions. Then use the client from `durabletaskscheduler.NewClient` to control the orchestrations.
 
 ```go
 r := task.NewTaskRegistry()
-r.AddOrchestrator(ActivitySequenceOrchestrator)
-r.AddActivity(SayHelloActivity)
+r.AddOrchestratorN("ActivitySequence", ActivitySequenceOrchestrator)
+r.AddActivityN("SayHello", SayHelloActivity)
 
-ctx := context.Background()
-client, worker := Init(ctx, r)
-defer worker.Shutdown(ctx)
-
-id, err := client.ScheduleNewOrchestration(ctx, ActivitySequenceOrchestrator)
+id, err := client.ScheduleNewOrchestration(ctx, "ActivitySequence")
 if err != nil {
   panic(err)
 }
@@ -205,24 +324,145 @@ if err != nil {
 fmt.Printf("orchestration completed: %v\n", metadata)
 ```
 
-Each sample linked above has a full implementation you can use as a reference.
+This example does not show the client and worker setup. Read [Connection to DTS](#connection-to-dts) for that code.
 
-## Distributed tracing support
+The client also does these operations, if the connected service supplies them:
 
-The Durable Task Framework for Go supports publishing distributed traces to any configured [Open Telemetry](https://opentelemetry.io/)-compatible exporter. Simply use [`otel.SetTracerProvider(tp)`](https://pkg.go.dev/go.opentelemetry.io/otel#SetTracerProvider) to register a global `TracerProvider` as part of your application startup and the task hub worker will automatically use it to emit OLTP trace spans.
+- Query the instances with a limit. List the instance IDs.
+- Restart and rewind an orchestration.
+- Purge in a batch or with a filter.
+- Terminate an orchestration immediately.
+- Read the tags and the worker capabilities.
 
-The following example code shows how you can configure distributed trace collection with [Zipkin](https://zipkin.io/), a popular open source distributed tracing system. The example assumes Zipkin is running locally, as shown in the code.
+To read a long history, use `StreamOrchestrationHistory`. This method reads the history one part at a time. If you buffer the history instead, the SDK applies a validated event cap.
+
+## Durable entities
+
+A durable entity is an addressable object that holds state. An entity does its operations one at a time.
 
 ```go
-func ConfigureZipkinTracing() (*trace.TracerProvider, error) {
-	// Inspired by this sample: https://github.com/open-telemetry/opentelemetry-go/blob/main/example/zipkin/main.go
-	exp, err := zipkin.New("http://localhost:9411/api/v2/spans")
+type Counter struct {
+	task.EntityObjectBase[CounterState]
+}
+
+type CounterState struct {
+	Value int `json:"value"`
+}
+
+func (counter *Counter) Add(amount int) {
+	counter.State().Value += amount
+}
+
+func (counter *Counter) Get() int {
+	return counter.State().Value
+}
+
+counterFactory := task.NewEntityObjectFactory[CounterState, *Counter](
+	func(task.EntityFactoryContext) (*Counter, error) {
+		return new(Counter), nil
+	},
+)
+registry.AddEntityFactoryN("counter", counterFactory)
+counter := api.NewEntityID("counter", "orders")
+
+client.SignalEntity(ctx, counter, "Add", api.WithSignalInput(1))
+
+registry.AddOrchestratorN("read-counter", func(ctx *task.OrchestrationContext) (any, error) {
+	var value int
+	err := ctx.CallEntity(counter, "Get").Await(&value)
+	return value, err
+})
+```
+
+The SDK supports raw entity functions, state-struct dispatch, and persistent entity objects with separate durable state. Entity factories run once per operation batch, may run concurrently across batches, and can capture dependencies. A factory can return batch cleanup, and an entity object can implement `task.EntityBatchCloser`. Shared functions registered with `AddEntityN` must be thread-safe. Entity IDs use the compact JSON form `"@name@key"`. Reflected operations can use `task.OptionalEntityInput[T]` when input is optional.
+
+The SDK also supports scheduled signals, orchestration calls, entity-to-entity signals, queries, cleanup, and ordered critical sections across more than one entity.
+
+Entity names and operation names are matched case-insensitively using the same invariant rule as the .NET SDK, so a name resolves to the same entity in both SDKs.
+
+The DTS worker accepts the legacy `EntityBatchRequest` work item and the current `EntityRequestV2` work item.
+
+Full sample: [samples/entity](./samples/entity).
+
+## Task versions
+
+An orchestrator or an activity can have more than one implementation under the same logical name. The registry identity contains the name and the version. The registry ignores letter case.
+
+```go
+registry.AddOrchestratorNVersion("orders", "v1", ordersV1)
+registry.AddOrchestratorNVersion("orders", "v2", ordersV2)
+registry.AddActivityNVersion("charge", "v2", chargeV2)
+```
+
+Dispatch obeys these rules:
+
+- An exact match of the name and the version has priority.
+- A versioned request uses an unversioned registration only if the logical name has no versioned registrations.
+- An activity uses the version of its parent orchestration. To select a different version, supply `task.WithActivityVersion`. To request the unversioned activity, supply `""`.
+- A sub-orchestration uses `VersioningOptions.DefaultVersion`. You can override this value.
+- `task.WithContinueAsNewVersion` moves the next execution to a different version. This change happens at a deterministic ContinueAsNew boundary. To go back to an unversioned registration, use `task.UnversionedTaskVersion`.
+
+Set `durabletaskscheduler.Options.Versioning` to configure the management client and the worker together. The reject and fail strategies for a version mismatch stay available for rolling deployments.
+
+## Data converters
+
+`api.DataConverter` controls how the SDK serializes your payloads. The default converter is `api.JSONDataConverter`. It keeps the existing `encoding/json` wire format.
+
+Set `durabletaskscheduler.Options.DataConverter` one time. The SDK gives the converter to the management client and to the worker.
+
+The converter applies to the typed payloads. These payloads include the orchestration, activity, entity, event, status, management, metadata, and ContinueAsNew values.
+
+The converter does not apply to these values:
+
+- The `WithRaw*` options.
+- The serialized metadata fields.
+- The failure metadata.
+- The large-payload reference descriptors.
+
+The SDK does not save the identity of the converter. A new converter must continue to decode the payloads from your earlier deployments.
+
+## Tags, trace context, and turn limits
+
+Use `api.WithTags`, `task.WithActivityTags`, and `task.WithSubOrchestrationTags` to attach user tags. An activity and a sub-orchestration inherit the tags of the parent orchestration. A tag on the action has priority over an inherited tag. The completion actions carry the current tags, so ContinueAsNew keeps them.
+
+The client sends the sampled caller trace context when it schedules an orchestration or signals an entity. The worker adds separate action trace contexts for the service-owned activity and sub-orchestration spans. The worker does not emit duplicate local Durable Task spans. A legacy entity operation request also sends its operation trace context to the entity actions. The current DTS V2 entity request does not carry that source field.
+
+Use `task.OrchestrationOptions.MaxEventsPerTurn` to limit the new events in one turn. If the worker uses only part of a batch, it sets `numEventsProcessed`. DTS then keeps the remaining events for the next replay. This count obeys the DTS work-item rules. The orchestration control markers do not count against the limit.
+
+To control instance-ID reuse, configure `api.OrchestrationIDReusePolicy.DedupeStatuses`:
+
+| Value | Result |
+| --- | --- |
+| A status in the list | The new start is rejected. |
+| A status that is not in the list | DTS can terminate the instance and replace it. |
+| A nil slice | The service default applies. |
+| An empty non-nil slice | Replacement is permitted for every reusable status. |
+
+## Large payloads
+
+To externalize large payloads, set `durabletaskscheduler.Options.LargePayloads` to an `*api.LargePayloadOptions` value. This value holds an `api.LargePayloadStore` that saves the bytes. It also holds an `api.LargePayloadResolver` that reads the bytes back. The SDK applies the option to the management client and to the worker.
+
+The [`payload`](./payload) package includes Azure Blob Storage support. It emits the same self-describing `blob:v2` tokens as the .NET SDK.
+
+## Distributed tracing
+
+The SDK sends the W3C trace context of a sampled caller when it schedules an orchestration. DTS owns the spans for the orchestrations, activities, timers, and sub-orchestrations. Your application code can use standard [OpenTelemetry](https://opentelemetry.io/) instrumentation. Use it for caller spans, custom activity spans, and outbound dependencies.
+
+This example sends the traces of your process to an [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) over OTLP/HTTP. Configure the DTS telemetry separately for the service-owned spans.
+
+```go
+func ConfigureOTLPTracing(ctx context.Context) (*trace.TracerProvider, error) {
+	exp, err := otlptracehttp.New(
+		ctx,
+		otlptracehttp.WithEndpoint("localhost:4318"),
+		otlptracehttp.WithInsecure(),
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	// NOTE: The simple span processor is not recommended for production.
-	//       Instead, the batch span processor should be used for production.
+	// NOTE: Do not use the simple span processor in production.
+	//       Use the batch span processor in production.
 	processor := trace.NewSimpleSpanProcessor(exp)
 	// processor := trace.NewBatchSpanProcessor(exp)
 
@@ -239,133 +479,172 @@ func ConfigureZipkinTracing() (*trace.TracerProvider, error) {
 }
 ```
 
-You can find this code in the [distributedtracing](./samples/distributedtracing) sample. The following is a screenshot showing the trace for the sample's orchestration, which calls an activity, creates a 2-second durable timer, and uses another activity to make an HTTP request to bing.com:
+The [distributed tracing sample](./samples/distributedtracing) starts a caller span before `ScheduleNewOrchestration`. DTS then joins its service-side spans to the same trace. The sample also instruments an HTTP request from an activity.
 
-![image](https://user-images.githubusercontent.com/2704139/205171291-8d12d6fe-5d4f-40c7-9a48-2586a4c4af49.png)
+## History export (preview)
 
-Note that each orchestration is represented as a single span with activities, timers, and sub-orchestrations as child spans. The generated spans contain a variety of attributes that include information such as orchestration instance IDs, task names, task IDs, etc.
+> [!WARNING]
+> This package is a preview. The exported API can change without a major version. The saved shape of the `ExportJob` entity state and the names of the system tasks can also change. Extended sessions are not supported.
 
-## Cloning this repository
+The [`exporthistory`](./exporthistory) package copies terminal orchestration histories to Azure Blob Storage. The output format is gzip-compressed JSONL.
 
-Clone the repository as you normally would:
+The package uses a durable entity for the job state. It also uses an operation orchestrator, an export orchestrator, and two activities. One activity lists the instances. The other activity exports them.
+
+```go
+store, err := exporthistory.NewAzureBlobHistoryStore(exporthistory.AzureBlobHistoryStoreOptions{
+    ConnectionString: storageConnectionString,
+    ContainerName:    "history-exports",
+})
+err = exporthistory.Register(registry, exporthistory.WorkerOptions{
+    Source: taskHubClient, // supplies ListInstanceIDs and orchestration history
+    Store:  store,
+})
+worker, err := durabletaskscheduler.NewWorker(options, registry, logger,
+    durabletaskclient.WithAutoWorkItemFilters(),
+    exporthistory.WithExportHistory(),
+)
+
+exportClient, err := exporthistory.NewClient(taskHubClient, exporthistory.ClientOptions{
+    ContainerName: "history-exports",
+})
+job, err := exportClient.CreateJob(ctx, exporthistory.JobCreationOptions{
+    Mode:              exporthistory.ExportModeBatch,
+    CompletedTimeFrom: from,
+    CompletedTimeTo:   to,
+})
+description, err := job.Describe(ctx)
+```
+
+The package supports batch jobs and continuous jobs. It also supports durable checkpoints, terminal-status filters, and a per-batch instance limit. It collects the failures. It returns typed errors for validation, not-found, and invalid-transition conditions.
+
+Each successful `Create` reserves a new generation-specific orchestration ID, exposed as `description.OrchestratorInstanceID`. Only the current generation can change job state, though older work can briefly remain in flight. Recreation retains previous generations' orchestration histories. `Delete` captures the ID of the generation it removes and cleans only that ID, so concurrent recreation is safe. Legacy export jobs and mixed .NET/older Go export-history workers are not supported.
+
+Each exported object is an opaque gzip file. The name ends with `.jsonl.gz`. The content type is `application/gzip`. The object has no `Content-Encoding` header. Every reader therefore gets the bytes that the object name promises.
+
+For more information, read the [export history guide](./exporthistory/README.md). See also the [sample](./samples/exporthistory).
+
+## Development
+
+### Clone the repository
 
 ```bash
 git clone https://github.com/microsoft/durabletask-go
 ```
 
-The protocol buffer definitions used to generate the gRPC bindings are vendored under [`vendored/durabletask-protobuf/protos`](./vendored/durabletask-protobuf/protos). See [`vendored/durabletask-protobuf/README.md`](./vendored/durabletask-protobuf/README.md) for details on how to refresh them from the upstream [microsoft/durabletask-protobuf](https://github.com/microsoft/durabletask-protobuf) repository.
+The protocol buffer definitions are in [`vendored/durabletask-protobuf/protos`](./vendored/durabletask-protobuf/protos). To get a new version from the upstream [microsoft/durabletask-protobuf](https://github.com/microsoft/durabletask-protobuf) repository, read [`vendored/durabletask-protobuf/README.md`](./vendored/durabletask-protobuf/README.md).
 
-## Building the project
+### Build the project
 
-This project requires go v1.19.x or greater. You can build a standalone executable by simply running `go build` at the project root.
-
-### Generating protobuf
-
-Use the following command to regenerate the protobuf bindings from the vendored proto file. Use this whenever updating the proto file under [`vendored/durabletask-protobuf/protos`](./vendored/durabletask-protobuf/protos).
+This project needs Go 1.25 or later. This project is a library. To build all of the packages, run this command in the project root:
 
 ```bash
-# NOTE: assumes the .proto file defines: option go_package = "/internal/protos"
+go build ./...
+```
+
+### Generate the protobuf code
+
+Run this command after you change the `.proto` file:
+
+```bash
+# NOTE: The .proto file must define: option go_package = "/internal/protos"
 protoc --go_out=. --go-grpc_out=. -I vendored/durabletask-protobuf/protos orchestrator_service.proto
 ```
 
-### Generating mocks for testing
+### Run the tests
 
-Test mocks were generated using [mockery](https://github.com/vektra/mockery). Use the following command at the project root to regenerate the mocks.
+The package tests are beside the code that they exercise. The `./tests` directory holds [black box tests](https://en.wikipedia.org/wiki/Black-box_testing). These tests find accidental changes to the public API. The `./tests` directory holds deterministic runtime tests that use hand-built histories. The `./tests/durabletaskscheduler` directory holds the end-to-end tests for a live scheduler.
 
-```bash
-mockery --dir ./backend --name="^Backend|^Executor|^TaskWorker" --output ./tests/mocks --with-expecter
-```
-
-## Running tests
-
-All automated tests are under `./tests`. A separate test package hierarchy was chosen intentionally to prioritize [black box testing](https://en.wikipedia.org/wiki/Black-box_testing). This strategy also makes it easier to catch accidental breaking API changes.
-
-Run tests with the following command.
+Run the full suite with these commands:
 
 ```bash
-go test ./tests/... -coverpkg ./api,./task,./client,./backend/...,./internal/helpers
+go test ./... -count=1 -coverpkg=./api,./task,./client,./durabletaskscheduler,./exporthistory,./payload,./internal/contextprop,./internal/failure,./internal/grpcerrors,./internal/helpers,./internal/historyconv,./internal/largepayload,./internal/tagcodec
+(cd cmd/orchestratorvet && go test ./...)
+(cd samples/distributedtracing && go test ./...)
 ```
 
-## Running integration tests
+The DTS tests and the Azurite tests skip themselves if their environment variables are empty. Read [Run the services locally](#run-the-services-locally) for these variables. PR validation runs the full suite against both services. It then runs the suite again with the race detector on the most recent supported Go version.
 
-You can run pre-built container images to run full integration tests against the durable task host over gRPC.
+### Test doubles
 
-### .NET Durable Task client SDK tests
+This repository has no generated mock package. DTS is the only supported runtime, so the useful fakes are the generated gRPC surfaces. The tests use small hand-written fakes:
 
-Use the following docker command to run tests against a running worker.
+- The client tests embed `protos.UnimplementedTaskHubSidecarServiceServer`. They serve it over [`bufconn`](https://pkg.go.dev/google.golang.org/grpc/test/bufconn). Other client tests embed `protos.TaskHubSidecarServiceClient` and override only the RPCs under test. `TaskHubSidecarService` is the generated name of the DTS gRPC service. The name does not imply a sidecar deployment.
+- The worker tests and the executor tests implement `task.Executor` and `task.EntityExecutor`.
+- The orchestration tests supply hand-built histories to `task.NewTaskExecutor`.
+
+### Check the orchestrators for replay hazards
+
+DTS replays your orchestrator code from the history on each turn. Your orchestrator must therefore be deterministic and free of side effects.
+
+`cmd/orchestratorvet` is a driver for the `orchestratorgo` analyzer. The driver is compatible with [`go vet`](https://pkg.go.dev/cmd/vet). The analyzer examines the orchestrators that a package registers with `task.TaskRegistry`.
 
 ```bash
-docker run -e GRPC_HOST="host.docker.internal" cgillum/durabletask-dotnet-tester:0.5.0-beta
+cd cmd/orchestratorvet
+go build -o ../../bin/orchestratorvet .
+cd ../..
+go vet -vettool=$PWD/bin/orchestratorvet ./...
 ```
 
-Note that the test assumes the gRPC server can be reached over `localhost` on port `4001` on the host machine. These values can be overridden with the following environment variables:
+The analyzer starts at each `AddOrchestrator`, `AddOrchestratorN`, `AddOrchestratorVersion`, and `AddOrchestratorNVersion` call that it can resolve. It then follows the call graph. The graph includes named functions and methods in the same package. It also includes resolvable function variables and nested function literals.
 
-* `GRPC_HOST`: Use this to change from the default `127.0.0.1` to some other value, for example `host.docker.internal`.
-* `GRPC_PORT`: Set this environment variable to change the default port from `4001` to something else.
+The analyzer reports these hazards:
 
-If successful, you should see output that looks like the following:
+- Wall-clock reads and host timers.
+- Nondeterministic identifier sources and random sources.
+- Unsafe parallelism and synchronization.
+- Direct filesystem, network, process, and environment I/O.
+- Replay-unsafe logging.
+- Unbounded loops that it proves do not make progress.
+- Task names that a complete registration set proves are missing.
+- Registration forms that `task.TaskRegistry` rejects or that give an unstable name.
 
-```
-Test run for /root/out/bin/Debug/Microsoft.DurableTask.Tests/net6.0/Microsoft.DurableTask.Tests.dll (.NETCoreApp,Version=v6.0)
-Microsoft (R) Test Execution Command Line Tool Version 17.3.1 (x64)
-Copyright (c) Microsoft Corporation.  All rights reserved.
+The analyzer supplies an `analysis.SuggestedFix` for `time.Now()` and for `go func() { ... }()`. The fixes change them to `ctx.CurrentTimeUtc` and `ctx.Go`. Both `gopls` and `go vet -fix` can apply these fixes. The other diagnostics have no fix, because no single rewrite is always correct.
 
-Starting test execution, please wait...
-A total of 1 test files matched the specified pattern.
-[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.4.3+1b45f5407b (64-bit .NET 6.0.10)
-[xUnit.net 00:00:00.82]   Discovering: Microsoft.DurableTask.Tests
-[xUnit.net 00:00:00.90]   Discovered:  Microsoft.DurableTask.Tests
-[xUnit.net 00:00:00.90]   Starting:    Microsoft.DurableTask.Tests
-  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.ExternalEvents(eventCount: 100) [6 s]
-  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.ExternalEvents(eventCount: 1) [309 ms]
-  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.LongTimer [8 s]
-  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.SubOrchestration [1 s]
-  ...
-  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.ActivityFanOut [914 ms]
-[xUnit.net 00:01:01.04]   Finished:    Microsoft.DurableTask.Tests
-  Passed Microsoft.DurableTask.Tests.OrchestrationPatterns.SingleActivity_Async [365 ms]
+The analyzer reports only the hazards that it proves. It stays silent for all other code. You can therefore enable it on an existing codebase without many diagnostics.
 
-Test Run Successful.
-Total tests: 33
-     Passed: 33
- Total time: 1.0290 Minutes
-```
+The analyzer ignores the files that end in `_test.go`. Tests frequently register invalid or nondeterministic orchestrators on purpose. To include these files, use the `-orchestratorgo.test-files` flag.
 
-## Running locally
+The analyzer does not examine activity bodies or entity bodies. It also ignores code that no registered orchestrator reaches.
 
-You can run the engine locally by pressing `F5` in [Visual Studio Code](https://code.visualstudio.com/) (the recommended editor). You can also simply run `go run main.go` to start a local Durable Task gRPC server that listens on port 4001.
+For the full list of checks, the suggested fixes, the false-positive guards, and the limitations, read [`cmd/orchestratorvet/README.md`](cmd/orchestratorvet/README.md).
+
+### Run the services locally
+
+The DTS emulator supplies a local task hub. Use it for development and for the end-to-end tests. The blob payload tests and the history-export tests need Azurite. Start both services with any OCI runtime:
 
 ```bash
-go run main.go --port 4001 --db ./test.sqlite3
+docker run -d -p 8080:8080 -p 8082:8082 \
+  -e DTS_TASK_HUB_NAMES=default \
+  mcr.microsoft.com/dts/dts-emulator:latest
+docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite:3.37.0
 ```
 
-The following is the expected output:
+The end-to-end tests read these environment variables. The tests skip themselves if the variables are empty.
 
+| Variable | Description |
+| --- | --- |
+| `DTS_CONNECTION_STRING` | A full connection string. This variable has priority over the two variables below. |
+| `DTS_EMULATOR_ENDPOINT` | The gRPC endpoint of the emulator, for example `http://127.0.0.1:8080`. |
+| `DTS_TASK_HUB` | The task hub name for `DTS_EMULATOR_ENDPOINT`. The default value is `default`. |
+| `AZURITE_CONNECTION_STRING` | An Azure Storage connection string for the blob payload tests and the history-export tests. |
+
+For `AZURITE_CONNECTION_STRING`, use the development credentials from the [Azurite documentation](https://learn.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key).
+
+```bash
+DTS_EMULATOR_ENDPOINT="http://127.0.0.1:8080" \
+DTS_TASK_HUB="default" \
+AZURITE_CONNECTION_STRING="DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=<azurite-account-key>;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;" \
+go test ./... -count=1
 ```
-2022/09/14 17:26:50 backend started: sqlite::./test.sqlite3
-2022/09/14 17:26:50 server listening at 127.0.0.1:4001
-2022/09/14 17:26:50 orchestration-processor: waiting for new work items...
-2022/09/14 17:26:50 activity-processor: waiting for new work items...
-```
 
-At this point you can use one of the [language SDKs](#language-sdks) mentioned earlier in a separate process to implement and execute durable orchestrations. Those SDKs will connect to port `4001` by default to interact with the Durable Task engine.
+## Contributions
 
-## Contributing
+This project accepts contributions and suggestions. Most contributions need a Contributor License Agreement (CLA). The CLA declares that you have the right to give us the rights to your contribution. For more information, go to <https://cla.opensource.microsoft.com>.
 
-This project welcomes contributions and suggestions.  Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
+When you send a pull request, a CLA bot examines the pull request. The bot tells you if you must supply a CLA. Obey the instructions from the bot. You supply the CLA one time only for all repositories that use our CLA.
 
-When you submit a pull request, a CLA bot will automatically determine whether you need to provide
-a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
-provided by the bot. You will only need to do this once across all repos using our CLA.
-
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+This project uses the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information, read the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/). You can also send questions to [opencode@microsoft.com](mailto:opencode@microsoft.com).
 
 ## Trademarks
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to and must follow [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general).
-Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
-Any use of third-party trademarks or logos are subject to those third-party's policies.
+This project can contain trademarks or logos for projects, products, or services. You must obey [Microsoft's Trademark and Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general) when you use Microsoft trademarks or logos. Do not use Microsoft trademarks or logos in a changed version of this project if the use causes confusion. Do not imply Microsoft sponsorship. Third-party trademarks and logos obey the policies of those third parties.

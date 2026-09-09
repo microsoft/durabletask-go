@@ -1,0 +1,18 @@
+// Inline imports intentionally exercise edit boundaries before formatting.
+package fixesinline
+
+import ( /* Keep this inline comment. */
+	"github.com/microsoft/durabletask-go/task"
+)
+
+// Keep the grouped import comment.
+
+func clocks(ctx *task.OrchestrationContext) (any, error) {
+	_ = ctx.CurrentTimeUtc         // want `time\.Now is not deterministic in an orchestrator`
+	return ctx.CurrentTimeUtc, nil // want `time\.Now is not deterministic in an orchestrator`
+}
+
+func register() {
+	registry := task.NewTaskRegistry()
+	_ = registry.AddOrchestrator(clocks)
+}

@@ -15,55 +15,61 @@ on:
 
 env:
   # Configure protoc and go grpc plugin
-  PROTOC_VERSION: "25.x"
-  PROTOC_GEN_GO: "v1.30"
-  PROTOC_GEN_GO_GRPC: "v1.3"
+  PROTOC_VERSION: "36.x"
+  PROTOC_GEN_GO: "v1.36.12"
+  PROTOC_GEN_GO_GRPC: "v1.6.2"
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   # This workflow contains a single job called "build"
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
+      fail-fast: false
       matrix:
-        go-version: [ '1.24.x', '1.23.x' ]
+        include:
+          - go-version: '1.25.x'
+            test-kind: coverage
+            test-command: >-
+              go test ./... -count=1 -timeout=20m
+              -coverpkg=./api,./task,./client,./durabletaskscheduler,./exporthistory,./payload,./internal/contextprop,./internal/failure,./internal/grpcerrors,./internal/helpers,./internal/historyconv,./internal/largepayload,./internal/tagcodec
+          - go-version: '1.27.x'
+            test-kind: race
+            test-command: go test -race ./... -count=1 -timeout=30m
 
-    # Boot up a local, clean postgres instance for the postgres tests
+    # Boot up the local Durable Task Scheduler emulator and Azurite, which back
+    # the end-to-end and blob storage tests.
     services:
-      # Label used to access the service container
-      postgres:
-        # Docker Hub image
-        image: postgres:16
+      dts:
+        image: mcr.microsoft.com/dts/dts-emulator:latest@sha256:361323065a608d605f9d3ae56b854eb11f1c47fcc16845a37f948f03ca9c5fac
         env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-          POSTGRES_DB: postgres
-        # Set health checks to wait until postgres has started
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          DTS_TASK_HUB_NAMES: default
         ports:
-          # Maps tcp port 5432 on service container to the host
-          - 5432:5432
-        
+          - 8080:8080
+          - 8082:8082
+
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.37.0
+        ports:
+          - 10000:10000
+
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           
       - name: Setup Go environment
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go-version }}
           
-      - name: Install dependencies
-        run: go get .
+      - name: Download module dependencies
+        run: go mod download
       
       - name: Install Protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        uses: arduino/setup-protoc@f4d5893b897028ff5739576ea0409746887fa536 # v3.0.0
         with:
           version: ${{ env.PROTOC_VERSION }}
 
@@ -78,10 +84,45 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
+      - name: Build and test orchestratorvet
+        run: |
+          cd cmd/orchestratorvet
+          go mod download
+          go test ./...
+          go build -o "$RUNNER_TEMP/orchestratorvet" .
 
-      - name: Run integration tests
+      - name: Check orchestrators for replay hazards
+        run: |
+          go vet -vettool="$RUNNER_TEMP/orchestratorvet" ./...
+
+      - name: Build distributed tracing sample module
+        working-directory: samples/distributedtracing
+        run: |
+          go mod download
+          go test ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
+        with:
+          version: v2.13.2
+
+      - name: Wait for service emulators
+        run: |
+          curl --fail --retry 30 --retry-delay 1 --retry-all-errors http://127.0.0.1:8082/
+          timeout 60 bash -c 'until </dev/tcp/127.0.0.1/8080; do sleep 1; done'
+          timeout 60 bash -c 'until </dev/tcp/127.0.0.1/10000; do sleep 1; done'
+
+      # The race run also executes every test on the latest Go version, so only
+      # the minimum supported Go version needs a separate non-race execution.
+      #
+      # AZURITE_CONNECTION_STRING is supplied by the repository variable of the
+      # same name so no account key is stored in the repository. The Azurite
+      # tests skip themselves when it is unset. Populate it with Azurite's
+      # well-known development credentials:
+      # https://learn.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key
+      - name: Run full repository ${{ matrix.test-kind }} tests
         env:
-          POSTGRES_ENABLED: "true"
-        run: go test ./tests/... -coverpkg ./api,./task,./client,./backend/...,./internal/helpers
+          DTS_EMULATOR_ENDPOINT: "http://127.0.0.1:8080"
+          DTS_TASK_HUB: "default"
+          AZURITE_CONNECTION_STRING: ${{ vars.AZURITE_CONNECTION_STRING }}
+        run: ${{ matrix.test-command }}
