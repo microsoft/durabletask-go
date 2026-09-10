@@ -134,9 +134,8 @@ batch/filter `PurgeInstances`. Queries
 can filter locally by exact tag key/value pairs when the current wire contract
 does not carry tag filters.
 
-Provision and delete task hubs through the Azure control plane or Azure CLI,
-not SDK RPCs. The SDK does not expose task-hub lifecycle or
-skip-graceful-termination operations. Use `TerminateOrchestration` for normal
+The SDK does not expose skip-graceful-termination operations.
+Use `TerminateOrchestration` for normal
 orchestration termination.
 
 `GetOrchestrationHistory` returns API-owned history records with validated event

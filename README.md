@@ -335,9 +335,7 @@ The client also does these operations, if the connected service supplies them:
 - Terminate an orchestration.
 - Read the tags and the worker capabilities.
 
-Provision and delete task hubs through the Azure control plane or Azure CLI.
-The SDK does not expose task-hub lifecycle or skip-graceful-termination
-operations.
+The SDK does not expose skip-graceful-termination operations.
 
 `RewindInstance(ctx, id, api.WithRewindReason("dependency repaired"))` only
 enqueues recovery. Observe a **new execution ID** and its final status separately;
