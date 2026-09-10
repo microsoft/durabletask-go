@@ -131,7 +131,10 @@ func verifyFilteredPurge(ctx context.Context, client *durabletaskscheduler.Clien
 	}
 	for _, id := range ids {
 		if _, err := client.FetchOrchestrationMetadata(ctx, id); !errors.Is(err, api.ErrInstanceNotFound) {
-			return fmt.Errorf("purged instance %s remains readable or lookup failed: %v", id, err)
+			if err != nil {
+				return fmt.Errorf("read purged instance %s: %w", id, err)
+			}
+			return fmt.Errorf("purged instance %s remains readable", id)
 		}
 	}
 	return nil

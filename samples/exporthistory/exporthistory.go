@@ -314,7 +314,10 @@ func runScenario(
 		return scenarioResult{}, fmt.Errorf("delete job %s: %w", jobID, err)
 	}
 	if _, err := exportClient.GetJob(ctx, jobID); !errors.Is(err, exporthistory.ErrJobNotFound) {
-		return scenarioResult{}, fmt.Errorf("expected deleted job %s to be missing, got %v", jobID, err)
+		if err != nil {
+			return scenarioResult{}, fmt.Errorf("read deleted job %s: %w", jobID, err)
+		}
+		return scenarioResult{}, fmt.Errorf("deleted job %s remains readable", jobID)
 	}
 	deleteJob = false
 	return result, nil
@@ -504,7 +507,7 @@ func waitForDownloadedHistories(
 		lastErr = err
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("downloaded histories under %s never matched sources: %w; last error: %v", prefix, ctx.Err(), lastErr)
+			return nil, fmt.Errorf("downloaded histories under %s never matched sources: %w; last error: %w", prefix, ctx.Err(), lastErr)
 		case <-time.After(time.Second):
 		}
 	}
