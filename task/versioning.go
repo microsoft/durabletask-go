@@ -2,11 +2,10 @@ package task
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/helpers"
 )
 
 // VersionMatchStrategy determines which task versions a worker accepts.
@@ -102,7 +101,7 @@ func (o *VersioningOptions) check(taskVersion string) error {
 	if o.MatchStrategy == VersionMatchNone {
 		return nil
 	}
-	comparison := compareVersions(taskVersion, o.Version)
+	comparison := helpers.CompareTaskVersions(taskVersion, o.Version)
 	switch o.MatchStrategy {
 	case VersionMatchStrict:
 		if comparison == 0 {
@@ -148,57 +147,4 @@ func (*versionConfigurationError) NonRetriable() bool {
 
 func (*versionConfigurationError) Is(target error) bool {
 	return target == api.ErrVersionMismatch
-}
-
-func compareVersions(left, right string) int {
-	left = strings.TrimSpace(left)
-	right = strings.TrimSpace(right)
-	switch {
-	case left == "" && right == "":
-		return 0
-	case left == "":
-		return -1
-	case right == "":
-		return 1
-	}
-
-	leftParts, leftOK := numericVersion(left)
-	rightParts, rightOK := numericVersion(right)
-	if leftOK && rightOK {
-		maxParts := max(len(leftParts), len(rightParts))
-		for i := 0; i < maxParts; i++ {
-			leftValue := -1
-			if i < len(leftParts) {
-				leftValue = leftParts[i]
-			}
-			rightValue := -1
-			if i < len(rightParts) {
-				rightValue = rightParts[i]
-			}
-			if leftValue < rightValue {
-				return -1
-			}
-			if leftValue > rightValue {
-				return 1
-			}
-		}
-		return 0
-	}
-	return strings.Compare(strings.ToLower(left), strings.ToLower(right))
-}
-
-func numericVersion(version string) ([]int, bool) {
-	parts := strings.Split(version, ".")
-	if len(parts) < 2 || len(parts) > 4 {
-		return nil, false
-	}
-	values := make([]int, len(parts))
-	for i, part := range parts {
-		value, err := strconv.Atoi(part)
-		if err != nil || value < 0 {
-			return nil, false
-		}
-		values[i] = value
-	}
-	return values, true
 }

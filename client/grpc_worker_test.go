@@ -722,7 +722,7 @@ func TestWorkItemFiltersFromRegistryMatchVersionedFallbackRules(t *testing.T) {
 	}, nil, nil)
 	require.Equal(t, []string{"v3"}, strict.Orchestrations[0].Versions)
 	require.Equal(t, []string{"v3"}, strict.Activities[0].Versions)
-	require.Error(t, validateStrictAutoFilters(registry.Snapshot(), &task.VersioningOptions{
+	require.Error(t, validateAutoFilters(registry.Snapshot(), &task.VersioningOptions{
 		Version:       "v3",
 		MatchStrategy: task.VersionMatchStrict,
 	}))
@@ -783,7 +783,7 @@ func TestStrictAutoFiltersValidateNamedRegistrationsWithWildcard(t *testing.T) {
 	require.NoError(t, registry.AddOrchestratorN("*", func(*task.OrchestrationContext) (any, error) {
 		return nil, nil
 	}))
-	require.Error(t, validateStrictAutoFilters(registry.Snapshot(), &task.VersioningOptions{
+	require.Error(t, validateAutoFilters(registry.Snapshot(), &task.VersioningOptions{
 		Version:       "v2",
 		MatchStrategy: task.VersionMatchStrict,
 	}))

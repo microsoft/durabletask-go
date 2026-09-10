@@ -26,7 +26,7 @@ func TestCompareVersionsMatchesDurableTaskRules(t *testing.T) {
 		{"preview-b", "preview-a", 1},
 	}
 	for _, test := range tests {
-		got := compareVersions(test.left, test.right)
+		got := helpers.CompareTaskVersions(test.left, test.right)
 		if got < 0 {
 			got = -1
 		} else if got > 0 {

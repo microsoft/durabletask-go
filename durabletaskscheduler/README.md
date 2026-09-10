@@ -209,8 +209,14 @@ opaque version strings, but DTS applications should use numeric versions such as
 Use `client.WithAutoWorkItemFilters()` to derive filters from the registry, or
 `client.WithWorkItemFilters` for an explicit override. Local enforcement is a
 fallback for services that ignore the filter request. `CurrentOrOlder` ranges
-cannot be represented by the protocol filter and are therefore enforced by the
-worker. Service-side
+cannot be represented by the protocol filter, so automatic filters advertise
+only registered versions at or below the worker version, including an explicit
+empty version for unversioned registrations. An unversioned-only handler also
+advertises the current worker version and a compatible configured default version,
+which it can resolve through fallback.
+Register every older version that the worker should receive; unversioned
+fallback does not advertise an open range.
+Wildcard handlers require explicit filters with this strategy. Service-side
 filters can leave a task pending indefinitely when no worker advertises it,
 whereas unfiltered delivery produces a deterministic task-not-found failure.
 Auto-generated filters reject task kinds with no registrations and validate

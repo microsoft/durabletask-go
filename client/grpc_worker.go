@@ -606,7 +606,7 @@ func newTaskHubGrpcWorker(
 		}
 	}
 	if options.autoWorkItemFilters && !options.workItemFiltersConfigured {
-		if err := validateStrictAutoFilters(snapshot, options.versioning); err != nil {
+		if err := validateAutoFilters(snapshot, options.versioning); err != nil {
 			return nil, err
 		}
 		options.workItemFilters = workItemFiltersFromRegistry(
@@ -666,21 +666,35 @@ func workItemFiltersFromRegistry(
 		snapshot.Orchestrators, versioning, allowedUnversionedOrchestrators)
 	activities := taskRegistrationsToFilters(
 		snapshot.Activities, versioning, allowedUnversionedActivities)
+	// Nil denotes a wildcard registration; an empty non-nil list admits no work.
 	return &WorkItemFilters{
 		Orchestrations:          orchestrations,
 		Activities:              activities,
 		Entities:                entities,
-		RejectAllOrchestrations: len(snapshot.Orchestrators) == 0,
-		RejectAllActivities:     len(snapshot.Activities) == 0,
+		RejectAllOrchestrations: orchestrations != nil && len(orchestrations) == 0,
+		RejectAllActivities:     activities != nil && len(activities) == 0,
 		RejectAllEntities:       len(snapshot.Entities) == 0,
 	}
 }
 
-func validateStrictAutoFilters(
+func validateAutoFilters(
 	snapshot task.TaskRegistrySnapshot,
 	versioning *task.VersioningOptions,
 ) error {
-	if versioning == nil || versioning.MatchStrategy != task.VersionMatchStrict {
+	if versioning == nil {
+		return nil
+	}
+	if versioning.MatchStrategy == task.VersionMatchCurrentOrOlder {
+		for _, registrations := range [][]task.TaskRegistration{snapshot.Orchestrators, snapshot.Activities} {
+			for _, registration := range registrations {
+				if registration.Name == "*" {
+					return fmt.Errorf("automatic current-or-older filters require named registrations; configure explicit work-item filters for wildcard handlers")
+				}
+			}
+		}
+		return nil
+	}
+	if versioning.MatchStrategy != task.VersionMatchStrict {
 		return nil
 	}
 	if err := validateStrictRegistrations("orchestrator", snapshot.Orchestrators, versioning.Version); err != nil {
@@ -791,6 +805,7 @@ func taskRegistrationsToFilters(
 		group.versions[strings.ToLower(registration.Version)] = registration.Version
 	}
 	filters := make([]WorkItemFilter, 0, len(groups))
+	currentOrOlder := versioning != nil && versioning.MatchStrategy == task.VersionMatchCurrentOrOlder
 	for _, group := range groups {
 		if versioning != nil && versioning.MatchStrategy == task.VersionMatchStrict {
 			if _, allowed := allowedUnversioned[strings.ToLower(group.name)]; allowed {
@@ -815,15 +830,26 @@ func taskRegistrationsToFilters(
 		versions := make([]string, 0, len(group.versions))
 		_, hasUnversioned := group.versions[""]
 		for normalized, version := range group.versions {
-			if normalized != "" {
+			if normalized != "" && (!currentOrOlder || helpers.CompareTaskVersions(version, versioning.Version) <= 0) {
 				versions = append(versions, version)
+			}
+		}
+		if currentOrOlder && hasUnversioned && len(group.versions) == 1 {
+			for _, version := range []string{versioning.Version, versioning.DefaultVersion} {
+				if version != "" && helpers.CompareTaskVersions(version, versioning.Version) <= 0 &&
+					!slices.ContainsFunc(versions, func(existing string) bool { return strings.EqualFold(existing, version) }) {
+					versions = append(versions, version)
+				}
 			}
 		}
 		slices.SortFunc(versions, func(left, right string) int {
 			return strings.Compare(strings.ToLower(left), strings.ToLower(right))
 		})
-		if hasUnversioned && len(versions) > 0 {
+		if hasUnversioned && (len(versions) > 0 || currentOrOlder) {
 			versions = append([]string{""}, versions...)
+		}
+		if currentOrOlder && len(versions) == 0 {
+			continue
 		}
 		filters = append(filters, WorkItemFilter{Name: group.name, Versions: versions})
 	}
