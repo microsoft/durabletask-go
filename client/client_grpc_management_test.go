@@ -20,6 +20,14 @@ type managementServer struct {
 	protos.UnimplementedTaskHubSidecarServiceServer
 
 	queryErr error
+	rewind   func(context.Context, *protos.RewindInstanceRequest) (*protos.RewindInstanceResponse, error)
+}
+
+func (s *managementServer) RewindInstance(ctx context.Context, req *protos.RewindInstanceRequest) (*protos.RewindInstanceResponse, error) {
+	if s.rewind == nil {
+		return nil, status.Error(codes.Unimplemented, "rewind is not implemented")
+	}
+	return s.rewind(ctx, req)
 }
 
 func (s *managementServer) QueryInstances(

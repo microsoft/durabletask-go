@@ -129,13 +129,13 @@ configurations is replay-breaking for affected in-flight orchestrations.
 ### Advanced management
 
 `TaskHubGrpcClient` exposes bounded `QueryInstances` and `ListInstanceIDs`
-operations with opaque continuation tokens, plus `RestartInstance` and
+operations with opaque continuation tokens, plus `RestartInstance`, `RewindInstance`, and
 batch/filter `PurgeInstances`. Queries
 can filter locally by exact tag key/value pairs when the current wire contract
 does not carry tag filters.
 
 Provision and delete task hubs through the Azure control plane or Azure CLI,
-not SDK RPCs. The SDK does not expose task-hub lifecycle, rewind, or
+not SDK RPCs. The SDK does not expose task-hub lifecycle or
 skip-graceful-termination operations. Use `TerminateOrchestration` for normal
 orchestration termination.
 
@@ -150,6 +150,39 @@ The current DTS emulator supports query, restart, and batch purge, but has known
 service limitations: filtered purge can complete without deleting matches, and
 `ListInstanceIds` can omit matching IDs. The emulator integration tests record
 these limitations explicitly.
+
+### Rewind
+
+`RewindInstance(ctx, id, api.WithRewindReason("dependency repaired"))` enqueues
+recovery of a **failed** orchestration. It rejects empty IDs and entity IDs.
+Missing instances, invalid states, unsupported services, and cancellation retain
+the existing `errors.Is` categories (`api.ErrInstanceNotFound`,
+`api.ErrInvalidState`, `api.ErrFeatureNotSupported`, and context errors).
+Cancellation stops enqueueing, not recovery that the service already accepted.
+
+Recovery is a two-step worker/service operation. Before executing user code, the
+worker sends `RewindOrchestrationAction.NewHistory`: failed activity schedules and
+results, failed child results, and terminal completion records are removed.
+Successful history and failed child creation records are retained. The start
+record receives a new execution ID; a rewound child's parent execution ID is
+updated. DTS persists this history, recursively rewinds failed children, and
+wakes the leaf for ordinary replay. Successful activities are replayed from their
+results rather than executed again.
+
+This follows the standalone Python SDK's
+[`_build_rewind_result`](https://github.com/microsoft/durabletask-python/blob/a6c18f24a230332d143d05e8798fbfdd951d868c/durabletask/worker.py#L2346-L2447),
+not the incomplete standalone .NET worker implementation. An accepted RPC alone
+does not prove recovery. Poll for a changed execution ID and successful final
+status/output; `WaitForOrchestrationCompletion` can initially return the old
+failed execution. The [runnable sample](../samples/rewind) demonstrates this and
+cleans up only its own instance.
+
+**Limitations:** the pinned Python algorithm retains timer events between
+activity retry attempts. Rewinding an activity that used a retry policy can
+therefore produce a replay nondeterminism error; that case is not supported.
+Rewind does not repair unchanged failing application code. Replacement history
+uses the normal large-payload handling and orchestration response-size bound;
+oversized responses fail explicitly rather than being silently truncated.
 
 ### Worker routing and capabilities
 
@@ -307,6 +340,7 @@ cancels them only if the shutdown context expires.
 | Schedule, bounded query/list, and wait for orchestrations | Supported |
 | Tags on schedule, metadata, query, sub-orchestration, continue-as-new, and restart | Supported; distinct from immutable context fields |
 | Restart and batch/filter purge | Supported; see emulator limitations above |
+| Rewind API and failed activity/child recovery | Supported with a rewind-capable DTS service; enqueue-only API, Python-aligned worker history replacement; see [limitations](#rewind) |
 | Raise events, suspend/resume, terminate, and single-instance purge | Supported |
 | Orchestration and activity execution | Supported |
 | Bounded orchestration/activity/entity concurrency | Supported |
