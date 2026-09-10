@@ -2,9 +2,11 @@ package exporthistory
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"strings"
@@ -13,10 +15,12 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/streaming"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 )
 
 // ExportObject is one serialized orchestration history ready to be persisted.
@@ -26,7 +30,7 @@ type ExportObject struct {
 	// Name is the full object path inside the container, prefix included.
 	Name string
 	// Content is the object body, already compressed when the format requires it.
-	Content []byte
+	Content io.Reader
 	// ContentType is the MIME type of Content. A compressed format reports the
 	// compressed type, such as application/gzip, rather than declaring the
 	// compression as a separate content coding, so a reader always receives the
@@ -45,6 +49,10 @@ type ExportObject struct {
 // Implementations must be safe for concurrent use and should treat a repeated
 // write of the same object name as an overwrite, since an activity retry can
 // re-export an instance whose object already exists.
+// Write must consume Content synchronously, respect ctx, and publish only after
+// a clean EOF. A read error must abort the write, leaving an existing object
+// unchanged. Content is single-use; retrying an export opens a fresh history
+// stream rather than replaying this reader.
 type Store interface {
 	Write(ctx context.Context, object ExportObject) error
 }
@@ -84,7 +92,7 @@ type AzureBlobHistoryStore struct {
 	// Narrow hooks stand in for the two *azblob.Client calls whose ordering and
 	// retry behavior matter. Both are nil in production.
 	createContainerHook func(ctx context.Context, container string) error
-	uploadBlobHook      func(ctx context.Context, container, name string, body []byte, options *azblob.UploadBufferOptions) error
+	uploadBlobHook      func(ctx context.Context, container, name string, body io.Reader, options *blockblob.CommitBlockListOptions) error
 	waitHook            func(ctx context.Context, d time.Duration) error
 }
 
@@ -105,6 +113,9 @@ const (
 	containerBeingDeletedAttempts       = 9
 	containerBeingDeletedInitialBackoff = 250 * time.Millisecond
 	containerBeingDeletedMaxBackoff     = 8 * time.Second
+	// Bound resident upload buffers independently of the history size and of
+	// future Azure SDK defaults. Each concurrent export owns this budget.
+	historyUploadBlockSize = 1024 * 1024
 )
 
 // NewAzureBlobHistoryStore constructs a production Azure Blob Storage export store.
@@ -195,13 +206,20 @@ func (s *AzureBlobHistoryStore) Write(ctx context.Context, object ExportObject) 
 	}
 	metadata := make(map[string]*string, len(object.Metadata))
 	for key, value := range object.Metadata {
+		// Azure metadata travels in HTTP headers, which cannot contain arbitrary
+		// Unicode identifiers. The suffixed keys explicitly identify unpadded
+		// RFC 4648 base64url, including for identifiers that were already ASCII.
+		if strings.EqualFold(key, "instanceId") || strings.EqualFold(key, "executionId") {
+			key += "Base64"
+			value = base64.RawURLEncoding.EncodeToString([]byte(value))
+		}
 		metadata[key] = to.Ptr(value)
 	}
 	headers := &blob.HTTPHeaders{}
 	if object.ContentType != "" {
 		headers.BlobContentType = to.Ptr(object.ContentType)
 	}
-	options := &azblob.UploadBufferOptions{HTTPHeaders: headers, Metadata: metadata}
+	options := &blockblob.CommitBlockListOptions{HTTPHeaders: headers, Metadata: metadata}
 	if err := s.uploadBlob(ctx, object.Container, object.Name, object.Content, options); err != nil {
 		// A container deleted between initialization and upload must not wedge
 		// the store: forget the exact initialization this write relied on so the
@@ -305,14 +323,73 @@ func (s *AzureBlobHistoryStore) uploadBlob(
 	ctx context.Context,
 	container string,
 	name string,
-	body []byte,
-	options *azblob.UploadBufferOptions,
+	body io.Reader,
+	options *blockblob.CommitBlockListOptions,
 ) error {
 	if s.uploadBlobHook != nil {
 		return s.uploadBlobHook(ctx, container, name, body, options)
 	}
-	_, err := s.client.UploadBuffer(ctx, container, name, body, options)
+	if body == nil {
+		body = strings.NewReader("")
+	}
+	client := s.client.ServiceClient().NewContainerClient(container).NewBlockBlobClient(name)
+	buffer := make([]byte, historyUploadBlockSize)
+	blockIDs := make([]string, 0)
+	prefix := newCompactUUID()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, err := readHistoryBlock(ctx, body, buffer)
+		if err != nil && err != io.EOF { //nolint:errorlint // Only exact EOF authorizes committing; wrapped EOF is a source failure.
+			return err
+		}
+		if n > 0 {
+			if len(blockIDs) == 50000 {
+				return errors.New("export exceeds Azure's 50000-block limit")
+			}
+			blockID := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s-%08d", prefix, len(blockIDs))))
+			// Stage synchronously so a failed upload returns immediately even
+			// if the producer is blocked receiving the next history chunk.
+			// SDK retries rewind this one block, never the consumed history.
+			_, stageErr := client.StageBlock(ctx, blockID, streaming.NopCloser(bytes.NewReader(buffer[:n])), nil)
+			if stageErr != nil {
+				return stageErr
+			}
+			blockIDs = append(blockIDs, blockID)
+		}
+		if err != nil {
+			break
+		}
+	}
+	_, err := client.CommitBlockList(ctx, blockIDs, options)
 	return err
+}
+
+// Unlike io.ReadFull, preserve a reader's error even when it accompanies a full
+// block. Only an actual EOF authorizes committing; ErrUnexpectedEOF from a
+// truncated source must never be confused with a clean partial final block.
+func readHistoryBlock(ctx context.Context, reader io.Reader, block []byte) (int, error) {
+	size, emptyReads := 0, 0
+	for size < len(block) {
+		if err := ctx.Err(); err != nil {
+			return size, err
+		}
+		n, err := reader.Read(block[size:])
+		size += n
+		if err != nil {
+			return size, err
+		}
+		if n > 0 {
+			emptyReads = 0
+		} else {
+			emptyReads++
+			if emptyReads == 100 {
+				return size, io.ErrNoProgress
+			}
+		}
+	}
+	return size, nil
 }
 
 func (s *AzureBlobHistoryStore) waitForRetry(ctx context.Context, d time.Duration) error {
@@ -327,23 +404,6 @@ func (s *AzureBlobHistoryStore) waitForRetry(ctx context.Context, d time.Duratio
 	case <-timer.C:
 		return nil
 	}
-}
-
-// gzipContent compresses content with the deterministic settings the JSONL
-// export format expects.
-func gzipContent(content []byte) ([]byte, error) {
-	var buffer bytes.Buffer
-	writer, err := gzip.NewWriterLevel(&buffer, gzip.BestCompression)
-	if err != nil {
-		return nil, fmt.Errorf("create gzip writer: %w", err)
-	}
-	if _, err := writer.Write(content); err != nil {
-		return nil, fmt.Errorf("compress export content: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("finish export compression: %w", err)
-	}
-	return buffer.Bytes(), nil
 }
 
 // validBlobContainerName mirrors the Azure Blob container naming rules.

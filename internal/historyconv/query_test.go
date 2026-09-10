@@ -1,12 +1,40 @@
 package historyconv
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStreamValidatedDoesNotLoseHandlerErrors(t *testing.T) {
+	failure := errors.New("destination failed")
+	calls := 0
+	_, _, err := StreamValidated(api.HistoryQuery{ExecutionID: "execution"}, func(handler api.HistoryEventHandler) error {
+		_ = handler(executionStarted("execution"))
+		_ = handler(executionStarted("execution"))
+		return nil // Even a misbehaving source cannot hide a handler failure.
+	}, func(*api.HistoryEvent) error {
+		calls++
+		return failure
+	})
+	require.ErrorIs(t, err, failure)
+	require.Equal(t, 1, calls)
+}
+
+func TestStreamValidatedEndOfStreamIdentity(t *testing.T) {
+	called := false
+	_, _, err := StreamValidated(api.HistoryQuery{ExecutionID: "execution"}, func(handler api.HistoryEventHandler) error {
+		return handler(&api.HistoryEvent{Type: api.HistoryEventOrchestratorStarted})
+	}, func(*api.HistoryEvent) error {
+		called = true
+		return nil
+	})
+	require.True(t, called, "events are delivered without waiting for the whole history")
+	require.ErrorContains(t, err, "missing an ExecutionStarted")
+}
 
 func collectEvents(query api.HistoryQuery, events ...*api.HistoryEvent) (*api.OrchestrationHistory, error) {
 	return Collect("instance", query, func(handler api.HistoryEventHandler) error {

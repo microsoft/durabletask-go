@@ -1,16 +1,18 @@
 package exporthistory
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"io"
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/historyconv"
 	"github.com/microsoft/durabletask-go/task"
 )
 
@@ -26,12 +28,14 @@ type HistorySource interface {
 		id api.InstanceID,
 		opts ...api.FetchOrchestrationMetadataOptions,
 	) (*api.OrchestrationMetadata, error)
-	// GetOrchestrationHistory returns the instance's durable history.
-	GetOrchestrationHistory(
+	// StreamOrchestrationHistory delivers events serially, stopping when the
+	// handler returns an error or ctx is canceled.
+	StreamOrchestrationHistory(
 		ctx context.Context,
 		id api.InstanceID,
 		query api.HistoryQuery,
-	) (*api.OrchestrationHistory, error)
+		handler api.HistoryEventHandler,
+	) error
 }
 
 // exportRuntime carries the worker-side dependencies shared by the export
@@ -157,45 +161,58 @@ func (r *exportRuntime) exportInstance(ctx context.Context, input ExportRequest)
 
 	query := r.historyPage
 	query.ExecutionID = metadata.ExecutionID
-	history, err := r.source.GetOrchestrationHistory(ctx, instanceID, query)
-	if err != nil {
-		return ExportResult{}, fmt.Errorf("failed to read instance %s history: %w", input.InstanceID, err)
-	}
-	if history == nil {
-		return ExportResult{}, fmt.Errorf("instance %s returned no history", input.InstanceID)
-	}
-	if history.ExecutionID != metadata.ExecutionID {
-		return ExportResult{}, fmt.Errorf("instance %s history execution ID %q does not match metadata execution %q",
-			input.InstanceID, history.ExecutionID, metadata.ExecutionID)
-	}
-
-	content, contentType, err := serializeHistory(history.Events, input.Format)
-	if err != nil {
-		return ExportResult{}, err
-	}
-
 	completedAt := completionTimestamp(metadata)
 	name := blobObjectName(completedAt, input.InstanceID, input.Format)
 	path := input.Destination.BlobPath(name)
 	object := ExportObject{
 		Container:   input.Destination.Container,
 		Name:        path,
-		Content:     content,
-		ContentType: contentType,
+		ContentType: input.Format.ContentType(),
 		Metadata: map[string]string{
 			"instanceId":    input.InstanceID,
-			"executionId":   history.ExecutionID,
+			"executionId":   metadata.ExecutionID,
 			"schemaVersion": input.Format.SchemaVersion,
 		},
 	}
-	if err := r.store.Write(ctx, object); err != nil {
-		return ExportResult{}, err
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	reader, writer := io.Pipe()
+	defer reader.Close() //nolint:errcheck // PipeReader.Close always returns nil.
+	object.Content = reader
+	type streamResult struct {
+		count int
+		err   error
+	}
+	done := make(chan streamResult, 1)
+	go func() {
+		count, streamErr := writeHistory(streamCtx, writer, input.Format, query, func(handler api.HistoryEventHandler) error {
+			return r.source.StreamOrchestrationHistory(streamCtx, instanceID, query, handler)
+		})
+		if streamErr != nil {
+			// Readers interpret EOF as success. Keep a source's EOF opaque on
+			// the pipe; the original error is returned through done below.
+			_ = writer.CloseWithError(errors.New("history export producer failed: " + streamErr.Error()))
+			cancel()
+		} else {
+			_ = writer.Close()
+		}
+		done <- streamResult{count: count, err: streamErr}
+	}()
+	uploadErr := r.store.Write(streamCtx, object)
+	// An uploader may fail without reading anything. Wake a blocked pipe write
+	// AND a source blocked in its next receive, then join the producer.
+	cancel()
+	_ = reader.CloseWithError(io.ErrClosedPipe)
+	streamed := <-done
+	if err := errors.Join(streamed.err, uploadErr); err != nil {
+		return ExportResult{}, fmt.Errorf("failed to export instance %s history: %w", input.InstanceID, err)
 	}
 	return ExportResult{
-		InstanceID: input.InstanceID,
-		Success:    true,
-		BlobPath:   path,
-		EventCount: len(history.Events),
+		InstanceID:  input.InstanceID,
+		ExecutionID: metadata.ExecutionID,
+		Success:     true,
+		BlobPath:    path,
+		EventCount:  streamed.count,
 	}, nil
 }
 
@@ -217,44 +234,69 @@ func blobObjectName(completedAt time.Time, instanceID string, format ExportForma
 	return hex.EncodeToString(digest[:]) + "." + format.FileExtension()
 }
 
-// serializeHistory renders events in the requested format and returns the object
-// body with the content type to store it under.
+// writeHistory validates and serializes one event at a time. Only successful
+// end-of-stream validation permits the JSON closing bracket or gzip trailer.
 //
 // A JSONL object is gzip-compressed and stored as an opaque gzip file: its name
 // ends in .jsonl.gz and its content type is application/gzip, with no
 // Content-Encoding. Declaring the compression as a content coding instead would
 // make some clients transparently decompress the download while the object name
 // still promises gzip bytes, so readers could not tell what they received.
-func serializeHistory(
-	events []*api.HistoryEvent,
+func writeHistory(
+	ctx context.Context,
+	output io.Writer,
 	format ExportFormat,
-) (content []byte, contentType string, err error) {
+	query api.HistoryQuery,
+	stream func(api.HistoryEventHandler) error,
+) (int, error) {
+	var compressed *gzip.Writer
 	if format.Kind == ExportFormatJSON {
-		if events == nil {
-			events = []*api.HistoryEvent{}
+		if _, err := io.WriteString(output, "["); err != nil {
+			return 0, err
 		}
-		payload, err := json.Marshal(events)
+	} else {
+		var err error
+		compressed, err = gzip.NewWriterLevel(output, gzip.BestCompression)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to serialize orchestration history: %w", err)
+			return 0, err
 		}
-		return payload, format.ContentType(), nil
+		output = compressed
 	}
-
-	var builder strings.Builder
-	for i, event := range events {
-		if event == nil {
-			continue
+	first := true
+	_, count, err := historyconv.StreamValidated(query, stream, func(event *api.HistoryEvent) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		line, err := json.Marshal(event)
+		encoded, err := json.Marshal(event)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to serialize orchestration history event %d: %w", i, err)
+			return fmt.Errorf("failed to serialize orchestration history event: %w", err)
 		}
-		builder.Write(line)
-		builder.WriteByte('\n')
-	}
-	compressed, err := gzipContent([]byte(builder.String()))
+		if format.Kind == ExportFormatJSON && !first {
+			if _, err := io.WriteString(output, ","); err != nil {
+				return err
+			}
+		}
+		first = false
+		if _, err := output.Write(encoded); err != nil {
+			return err
+		}
+		if format.Kind == ExportFormatJSONL {
+			_, err = io.WriteString(output, "\n")
+		}
+		return err
+	})
 	if err != nil {
-		return nil, "", err
+		return count, err
 	}
-	return compressed, format.ContentType(), nil
+	if err := ctx.Err(); err != nil {
+		return count, err
+	}
+	if compressed != nil {
+		if err := compressed.Close(); err != nil {
+			return count, fmt.Errorf("finish export compression: %w", err)
+		}
+	} else {
+		_, err = io.WriteString(output, "]")
+	}
+	return count, err
 }

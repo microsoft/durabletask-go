@@ -1,9 +1,12 @@
 package exporthistory
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -52,7 +55,7 @@ func TestAzureBlobHistoryStoreAzuriteWritesCompressedObjects(t *testing.T) {
 	ctx := context.Background()
 
 	events := []*api.HistoryEvent{
-		{Type: api.HistoryEventExecutionStarted},
+		{Type: api.HistoryEventExecutionStarted, ExecutionStarted: &api.HistoryExecutionStartedEvent{ExecutionID: "execution-1"}},
 		{Type: api.HistoryEventExecutionCompleted},
 	}
 	content, contentType, err := serializeHistory(events, DefaultExportFormat())
@@ -60,7 +63,7 @@ func TestAzureBlobHistoryStoreAzuriteWritesCompressedObjects(t *testing.T) {
 	object := ExportObject{
 		Container:   container,
 		Name:        "batch-job/" + strings.Repeat("a", 64) + ".jsonl.gz",
-		Content:     content,
+		Content:     bytes.NewReader(content),
 		ContentType: contentType,
 		Metadata:    map[string]string{"instanceId": "instance-1", "schemaVersion": DefaultSchemaVersion},
 	}
@@ -71,7 +74,7 @@ func TestAzureBlobHistoryStoreAzuriteWritesCompressedObjects(t *testing.T) {
 	// and no client transparently decompresses it.
 	assert.Equal(t, "application/gzip", derefString(properties.ContentType))
 	assert.Empty(t, derefString(properties.ContentEncoding))
-	assert.Equal(t, "instance-1", metadataValue(properties.Metadata, "instanceId"))
+	assert.Equal(t, base64.RawURLEncoding.EncodeToString([]byte("instance-1")), metadataValue(properties.Metadata, "instanceIdBase64"))
 	assert.Equal(t, DefaultSchemaVersion, metadataValue(properties.Metadata, "schemaVersion"))
 
 	// Downloading always yields exactly the gzip bytes that were uploaded.
@@ -85,10 +88,78 @@ func TestAzureBlobHistoryStoreAzuriteWritesCompressedObjects(t *testing.T) {
 	assert.Contains(t, lines[1], string(api.HistoryEventExecutionCompleted))
 
 	// Re-exporting the same instance overwrites its object rather than failing.
-	object.Content = []byte("second write")
+	object.Content = strings.NewReader("second write")
 	object.ContentType = "text/plain"
 	require.NoError(t, store.Write(ctx, object))
 	assert.Equal(t, []byte("second write"), downloadAzuriteBlob(t, store, container, object.Name))
+}
+
+func TestAzureBlobHistoryStoreAzuriteUnicodeIdentifiers(t *testing.T) {
+	store, container := newAzuriteExportStore(t)
+	source := newFakeSource()
+	instanceID, executionID := "日本語-café-😀", "実行-é-🚀"
+	source.addInstance(instanceID, api.RUNTIME_STATUS_COMPLETED, 1)
+	source.metadata[instanceID].ExecutionID = executionID
+	source.history[instanceID].Events[0].ExecutionStarted.ExecutionID = executionID
+	request := ExportRequest{
+		InstanceID: instanceID, Destination: ExportDestination{Container: container}, Format: DefaultExportFormat(),
+	}
+	result, err := newTestRuntime(source, store).exportInstance(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	properties := azuriteBlobProperties(t, store, container, result.BlobPath)
+	for key, expected := range map[string]string{"instanceId": instanceID, "executionId": executionID} {
+		require.Empty(t, metadataValue(properties.Metadata, key), "raw identifiers must never be sent as headers")
+		decoded, err := base64.RawURLEncoding.DecodeString(metadataValue(properties.Metadata, key+"Base64"))
+		require.NoError(t, err)
+		require.Equal(t, expected, string(decoded))
+	}
+	content := downloadAzuriteBlob(t, store, container, result.BlobPath)
+	require.Contains(t, string(decompressGzip(t, content)), instanceID)
+	require.Contains(t, string(decompressGzip(t, content)), executionID)
+	require.Equal(t, blobObjectName(completionTimestamp(source.metadata[instanceID]), instanceID, request.Format), result.BlobPath)
+}
+
+func TestAzureBlobHistoryStoreAzuriteSourceFailurePreservesBlob(t *testing.T) {
+	store, container := newAzuriteExportStore(t)
+	base := streamTestSource()
+	request := streamTestRequest()
+	request.Destination.Container = container
+	request.Format.Kind = ExportFormatJSON
+	result, err := newTestRuntime(base, store).exportInstance(context.Background(), request)
+	require.NoError(t, err)
+	original := downloadAzuriteBlob(t, store, container, result.BlobPath)
+	err = store.Write(context.Background(), ExportObject{
+		Container: container,
+		Name:      result.BlobPath,
+		Content: &terminalErrorReader{
+			content: strings.Repeat("x", historyUploadBlockSize),
+			err:     io.ErrUnexpectedEOF,
+		},
+	})
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Equal(t, original, downloadAzuriteBlob(t, store, container, result.BlobPath),
+		"reader errors returned alongside a full block must prevent commit")
+
+	for _, failure := range []error{errors.New("source failed after staged block"), io.EOF, io.ErrUnexpectedEOF} {
+		source := streamingSource{fakeSource: base, stream: func(_ context.Context, handler api.HistoryEventHandler) error {
+			if err := handler(base.history["subject"].Events[0]); err != nil {
+				return err
+			}
+			if err := handler(&api.HistoryEvent{Generic: &api.HistoryPayloadEvent{
+				SerializedInput: strings.Repeat("x", 2*historyUploadBlockSize),
+			}}); err != nil {
+				return err
+			}
+			return failure
+		}}
+		result, err := newTestRuntime(source, store).exportInstance(context.Background(), request)
+		require.ErrorIs(t, err, failure)
+		require.False(t, result.Success)
+		path := blobObjectName(completionTimestamp(base.metadata["subject"]), "subject", request.Format)
+		require.Equal(t, original, downloadAzuriteBlob(t, store, container, path),
+			"a source error after staging blocks must not replace the committed blob")
+	}
 }
 
 // TestAzureBlobHistoryStoreAzuriteRejectsDisallowedContainer keeps a job from writing
@@ -98,7 +169,7 @@ func TestAzureBlobHistoryStoreAzuriteRejectsDisallowedContainer(t *testing.T) {
 	err := store.Write(context.Background(), ExportObject{
 		Container: randomContainerName(t),
 		Name:      "object.jsonl.gz",
-		Content:   []byte("payload"),
+		Content:   strings.NewReader("payload"),
 	})
 	require.ErrorIs(t, err, ErrValidation)
 	assert.Contains(t, err.Error(), "is not allowed by this worker")
@@ -130,7 +201,7 @@ func TestAzureBlobHistoryStoreAzuriteWritesAcrossAllowedContainers(t *testing.T)
 		require.NoError(t, store.Write(ctx, ExportObject{
 			Container: container,
 			Name:      "prefix/object.json",
-			Content:   []byte(`[]`),
+			Content:   strings.NewReader(`[]`),
 			Metadata:  map[string]string{"instanceId": "instance-1"},
 		}), container)
 		assert.Equal(t, []byte(`[]`), downloadAzuriteBlob(t, store, container, "prefix/object.json"))

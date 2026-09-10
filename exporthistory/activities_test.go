@@ -1,6 +1,7 @@
 package exporthistory
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -105,6 +106,22 @@ func (s *fakeSource) GetOrchestrationHistory(
 	return history, nil
 }
 
+func (s *fakeSource) StreamOrchestrationHistory(ctx context.Context, id api.InstanceID, query api.HistoryQuery, handler api.HistoryEventHandler) error {
+	history, err := s.GetOrchestrationHistory(ctx, id, query)
+	if err != nil {
+		return err
+	}
+	if history == nil {
+		return errors.New("no history")
+	}
+	for _, event := range history.Events {
+		if err := handler(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *fakeSource) addInstance(instanceID string, status api.OrchestrationStatus, events int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -127,6 +144,12 @@ func (s *fakeSource) addInstance(instanceID string, status api.OrchestrationStat
 			EventID:   int32(i),
 			Timestamp: completedAt,
 		})
+	}
+	if events > 0 {
+		history.Events[0].Type = api.HistoryEventExecutionStarted
+		history.Events[0].ExecutionStarted = &api.HistoryExecutionStartedEvent{
+			InstanceID: api.InstanceID(instanceID), ExecutionID: history.ExecutionID,
+		}
 	}
 	s.history[instanceID] = history
 }
@@ -294,10 +317,10 @@ func TestExportInstanceHistoryActivity(t *testing.T) {
 		decompressed := decompressGzip(t, object.Content)
 		lines := strings.Split(strings.TrimRight(string(decompressed), "\n"), "\n")
 		require.Len(t, lines, 3)
-		for _, line := range lines {
+		for i, line := range lines {
 			var event api.HistoryEvent
 			require.NoError(t, json.Unmarshal([]byte(line), &event))
-			assert.Equal(t, api.HistoryEventOrchestratorStarted, event.Type)
+			assert.Equal(t, source.history["instance-1"].Events[i].Type, event.Type)
 		}
 	})
 
@@ -398,7 +421,7 @@ func TestExportInstanceHistoryActivity(t *testing.T) {
 			instanceID string
 			message    string
 		}{
-			{"history-error", "failed to read instance history-error history"},
+			{"history-error", "failed to export instance history-error history"},
 			{"metadata-error", "failed to read instance metadata-error metadata"},
 			{"store-error", "upload rejected"},
 		}
@@ -476,19 +499,29 @@ func TestSerializeHistory(t *testing.T) {
 		assert.JSONEq(t, `[]`, string(content))
 	})
 
-	t.Run("nil events are skipped rather than serialized as null", func(t *testing.T) {
+	t.Run("nil events are rejected", func(t *testing.T) {
 		events := []*api.HistoryEvent{
-			{Type: api.HistoryEventExecutionStarted},
+			{Type: api.HistoryEventOrchestratorStarted},
 			nil,
 			{Type: api.HistoryEventExecutionCompleted},
 		}
-		content, _, err := serializeHistory(events, DefaultExportFormat())
-		require.NoError(t, err)
-		decompressed := decompressGzip(t, content)
-		lines := strings.Split(strings.TrimRight(string(decompressed), "\n"), "\n")
-		require.Len(t, lines, 2)
-		assert.NotContains(t, string(decompressed), "null")
+		_, _, err := serializeHistory(events, DefaultExportFormat())
+		require.ErrorContains(t, err, "must not be nil")
 	})
+}
+
+// Only tests buffer serialized output; the production path streams it.
+func serializeHistory(events []*api.HistoryEvent, format ExportFormat) ([]byte, string, error) {
+	var output bytes.Buffer
+	_, err := writeHistory(context.Background(), &output, format, api.HistoryQuery{}, func(handler api.HistoryEventHandler) error {
+		for _, event := range events {
+			if err := handler(event); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return output.Bytes(), format.ContentType(), err
 }
 
 func TestBlobObjectName(t *testing.T) {
@@ -629,11 +662,9 @@ func TestExportInstanceHistoryRejectsExecutionIdentity(t *testing.T) {
 			source.addInstance("instance-1", api.RUNTIME_STATUS_COMPLETED, 1)
 			source.metadata["instance-1"].ExecutionID = test.metadataID
 			source.history["instance-1"].ExecutionID = test.historyID
-			// Identity validation must run before attempting to serialize content.
-			details := &api.FailureDetails{}
-			details.InnerFailure = details
 			source.history["instance-1"].Events = []*api.HistoryEvent{{
-				TaskFailed: &api.HistoryTaskFailureEvent{FailureDetails: details},
+				Type:             api.HistoryEventExecutionStarted,
+				ExecutionStarted: &api.HistoryExecutionStartedEvent{ExecutionID: test.historyID},
 			}}
 			store := newMemoryStore()
 			runtime := newTestRuntime(source, store)
@@ -643,7 +674,7 @@ func TestExportInstanceHistoryRejectsExecutionIdentity(t *testing.T) {
 				Format:      DefaultExportFormat(),
 			}))
 			assert.ErrorContains(t, err, "execution")
-			assert.Zero(t, store.writeCount())
+			assert.Zero(t, store.count())
 			assert.Empty(t, store.snapshot())
 			if test.readHistory {
 				assert.Equal(t, test.metadataID, source.historyQuery.ExecutionID)
@@ -758,7 +789,7 @@ func TestExportInstanceHistoryPinsTheClientCollector(t *testing.T) {
 			if test.wantError {
 				assert.ErrorContains(t, err, "execution")
 				assert.Nil(t, result)
-				assert.Zero(t, store.writeCount())
+				assert.Zero(t, store.count())
 			} else {
 				require.NoError(t, err)
 				require.True(t, result.(ExportResult).Success)

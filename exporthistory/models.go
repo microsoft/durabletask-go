@@ -314,16 +314,18 @@ type ExportJobConfiguration struct {
 
 // ExportJobState is the persisted entity state of an export job.
 type ExportJobState struct {
-	Status                 ExportJobStatus         `json:"Status"`
-	Config                 *ExportJobConfiguration `json:"Config,omitempty"`
-	Checkpoint             *ExportCheckpoint       `json:"Checkpoint,omitempty"`
-	CreatedAt              *time.Time              `json:"CreatedAt,omitempty"`
-	LastModifiedAt         *time.Time              `json:"LastModifiedAt,omitempty"`
-	LastCheckpointTime     *time.Time              `json:"LastCheckpointTime,omitempty"`
-	LastError              string                  `json:"LastError,omitempty"`
-	ScannedInstances       int64                   `json:"ScannedInstances"`
-	ExportedInstances      int64                   `json:"ExportedInstances"`
-	OrchestratorInstanceID string                  `json:"OrchestratorInstanceId,omitempty"`
+	Status             ExportJobStatus         `json:"Status"`
+	Config             *ExportJobConfiguration `json:"Config,omitempty"`
+	Checkpoint         *ExportCheckpoint       `json:"Checkpoint,omitempty"`
+	CreatedAt          *time.Time              `json:"CreatedAt,omitempty"`
+	LastModifiedAt     *time.Time              `json:"LastModifiedAt,omitempty"`
+	LastCheckpointTime *time.Time              `json:"LastCheckpointTime,omitempty"`
+	LastError          string                  `json:"LastError,omitempty"`
+	// ScannedInstances is cumulative scan progress, including repeated pages.
+	ScannedInstances int64 `json:"ScannedInstances"`
+	// ExportedInstances counts successful exports, including re-exports; it is not a distinct-execution count.
+	ExportedInstances      int64  `json:"ExportedInstances"`
+	OrchestratorInstanceID string `json:"OrchestratorInstanceId,omitempty"`
 	// RunToken identifies the job's current run generation. Every Create mints
 	// a new one, so a run that started before the job was deleted and recreated
 	// carries a stale token and is fenced out of the new generation's state.
@@ -341,11 +343,13 @@ type ExportJobDescription struct {
 	// OrchestratorInstanceID identifies the current generation, reserved during
 	// Create before its Run signal is delivered. Recreation assigns a new ID.
 	OrchestratorInstanceID string
-	ScannedInstances       int64
-	ExportedInstances      int64
-	LastError              string
-	Checkpoint             *ExportCheckpoint
-	LastCheckpointTime     time.Time
+	// ScannedInstances includes entries counted again when a page is re-scanned.
+	ScannedInstances int64
+	// ExportedInstances includes re-exports, matching ExportJobState's processing-total semantics.
+	ExportedInstances  int64
+	LastError          string
+	Checkpoint         *ExportCheckpoint
+	LastCheckpointTime time.Time
 }
 
 // ExportJobQuery filters a single page of export jobs. Status and creation-time
@@ -457,11 +461,12 @@ type ExportRequest struct {
 // failures are collected rather than thrown so a batch can report every failing
 // instance at once.
 type ExportResult struct {
-	InstanceID string `json:"InstanceId"`
-	Success    bool   `json:"Success"`
-	Error      string `json:"Error,omitempty"`
-	BlobPath   string `json:"BlobPath,omitempty"`
-	EventCount int    `json:"EventCount,omitempty"`
+	InstanceID  string `json:"InstanceId"`
+	ExecutionID string `json:"ExecutionId,omitempty"`
+	Success     bool   `json:"Success"`
+	Error       string `json:"Error,omitempty"`
+	BlobPath    string `json:"BlobPath,omitempty"`
+	EventCount  int    `json:"EventCount,omitempty"`
 }
 
 // TerminalStatuses returns the orchestration runtime statuses an export job

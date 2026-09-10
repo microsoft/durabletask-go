@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -534,10 +535,15 @@ func downloadHistories(
 			if item.Name == nil {
 				continue
 			}
-			instanceID := metadataValue(item.Metadata, "instanceId")
-			if instanceID == "" {
-				return nil, fmt.Errorf("blob %s has no instanceId metadata", *item.Name)
+			encodedID := metadataValue(item.Metadata, "instanceIdBase64")
+			if encodedID == "" {
+				return nil, fmt.Errorf("blob %s has no instanceIdBase64 metadata", *item.Name)
 			}
+			decodedID, err := base64.RawURLEncoding.DecodeString(encodedID)
+			if err != nil {
+				return nil, fmt.Errorf("decode instance ID metadata on blob %s: %w", *item.Name, err)
+			}
+			instanceID := string(decodedID)
 			response, err := client.DownloadStream(ctx, container, *item.Name, nil)
 			if err != nil {
 				return nil, err

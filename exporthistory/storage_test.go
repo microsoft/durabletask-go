@@ -4,19 +4,24 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
+	"github.com/microsoft/durabletask-go/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +46,7 @@ const azuriteConnectionString = "DefaultEndpointsProtocol=http;AccountName=devst
 // pipeline without Azure Storage.
 type memoryStore struct {
 	mu      sync.Mutex
-	objects map[string]ExportObject
+	objects map[string]storedExportObject
 	writes  int
 	failure error
 	// failFor fails the write for a specific instance ID, so a test can drive a
@@ -49,8 +54,13 @@ type memoryStore struct {
 	failFor map[string]error
 }
 
+type storedExportObject struct {
+	ExportObject
+	Content []byte
+}
+
 func newMemoryStore() *memoryStore {
-	return &memoryStore{objects: make(map[string]ExportObject), failFor: make(map[string]error)}
+	return &memoryStore{objects: make(map[string]storedExportObject), failFor: make(map[string]error)}
 }
 
 func (s *memoryStore) Write(_ context.Context, object ExportObject) error {
@@ -63,7 +73,12 @@ func (s *memoryStore) Write(_ context.Context, object ExportObject) error {
 	if err, ok := s.failFor[object.Metadata["instanceId"]]; ok {
 		return err
 	}
-	s.objects[object.Container+"/"+object.Name] = object
+	content, err := io.ReadAll(object.Content)
+	if err != nil {
+		return err
+	}
+	object.Content = nil
+	s.objects[object.Container+"/"+object.Name] = storedExportObject{ExportObject: object, Content: content}
 	return nil
 }
 
@@ -79,7 +94,7 @@ func (s *memoryStore) writeCount() int {
 	return s.writes
 }
 
-func (s *memoryStore) snapshot() map[string]ExportObject {
+func (s *memoryStore) snapshot() map[string]storedExportObject {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return maps.Clone(s.objects)
@@ -291,7 +306,7 @@ func TestAzureBlobHistoryStoreRejectsDisallowedContainers(t *testing.T) {
 	})
 	require.NoError(t, err)
 	store.createContainerHook = func(context.Context, string) error { return nil }
-	store.uploadBlobHook = func(context.Context, string, string, []byte, *azblob.UploadBufferOptions) error {
+	store.uploadBlobHook = func(context.Context, string, string, io.Reader, *blockblob.CommitBlockListOptions) error {
 		return nil
 	}
 
@@ -319,7 +334,7 @@ func TestAzureBlobHistoryStoreAllowAnyContainer(t *testing.T) {
 	})
 	require.NoError(t, err)
 	store.createContainerHook = func(context.Context, string) error { return nil }
-	store.uploadBlobHook = func(context.Context, string, string, []byte, *azblob.UploadBufferOptions) error {
+	store.uploadBlobHook = func(context.Context, string, string, io.Reader, *blockblob.CommitBlockListOptions) error {
 		return nil
 	}
 	require.NoError(t, store.Write(context.Background(), ExportObject{Container: "anything", Name: "a"}))
@@ -343,7 +358,7 @@ func TestAzureBlobHistoryStoreCreatesEachContainerOnce(t *testing.T) {
 		creates[container]++
 		return nil
 	}
-	store.uploadBlobHook = func(context.Context, string, string, []byte, *azblob.UploadBufferOptions) error {
+	store.uploadBlobHook = func(context.Context, string, string, io.Reader, *blockblob.CommitBlockListOptions) error {
 		return nil
 	}
 
@@ -389,7 +404,7 @@ func TestAzureBlobHistoryStoreRetriesContainerBeingDeleted(t *testing.T) {
 		waits = append(waits, d)
 		return nil
 	}
-	store.uploadBlobHook = func(context.Context, string, string, []byte, *azblob.UploadBufferOptions) error {
+	store.uploadBlobHook = func(context.Context, string, string, io.Reader, *blockblob.CommitBlockListOptions) error {
 		return nil
 	}
 
@@ -411,7 +426,7 @@ func TestAzureBlobHistoryStoreTreatsExistingContainerAsSuccess(t *testing.T) {
 		return &azcore.ResponseError{ErrorCode: string(bloberror.ContainerAlreadyExists)}
 	}
 	uploaded := 0
-	store.uploadBlobHook = func(context.Context, string, string, []byte, *azblob.UploadBufferOptions) error {
+	store.uploadBlobHook = func(context.Context, string, string, io.Reader, *blockblob.CommitBlockListOptions) error {
 		uploaded++
 		return nil
 	}
@@ -436,7 +451,7 @@ func TestAzureBlobHistoryStoreRetriesAfterContainerCreationFailure(t *testing.T)
 		}
 		return nil
 	}
-	store.uploadBlobHook = func(context.Context, string, string, []byte, *azblob.UploadBufferOptions) error {
+	store.uploadBlobHook = func(context.Context, string, string, io.Reader, *blockblob.CommitBlockListOptions) error {
 		return nil
 	}
 
@@ -460,7 +475,7 @@ func TestAzureBlobHistoryStoreForgetsDeletedContainer(t *testing.T) {
 		return nil
 	}
 	uploads := 0
-	store.uploadBlobHook = func(context.Context, string, string, []byte, *azblob.UploadBufferOptions) error {
+	store.uploadBlobHook = func(context.Context, string, string, io.Reader, *blockblob.CommitBlockListOptions) error {
 		uploads++
 		if uploads == 2 {
 			return &azcore.ResponseError{ErrorCode: string(bloberror.ContainerNotFound)}
@@ -492,7 +507,7 @@ func TestAzureBlobHistoryStoreReportsCreationFailureToWaiters(t *testing.T) {
 		return creationFailure
 	}
 	uploads := 0
-	store.uploadBlobHook = func(context.Context, string, string, []byte, *azblob.UploadBufferOptions) error {
+	store.uploadBlobHook = func(context.Context, string, string, io.Reader, *blockblob.CommitBlockListOptions) error {
 		uploads++
 		return nil
 	}
@@ -533,7 +548,7 @@ func TestAzureBlobHistoryStoreInvalidationKeepsNewerInitialization(t *testing.T)
 		creates++
 		return nil
 	}
-	store.uploadBlobHook = func(context.Context, string, string, []byte, *azblob.UploadBufferOptions) error {
+	store.uploadBlobHook = func(context.Context, string, string, io.Reader, *blockblob.CommitBlockListOptions) error {
 		return nil
 	}
 
@@ -562,24 +577,26 @@ func TestAzureBlobHistoryStoreSendsHeadersAndMetadata(t *testing.T) {
 	require.NoError(t, err)
 	store.createContainerHook = func(context.Context, string) error { return nil }
 
-	var captured *azblob.UploadBufferOptions
+	var captured *blockblob.CommitBlockListOptions
 	var capturedBody []byte
 	var capturedName string
 	store.uploadBlobHook = func(
 		_ context.Context,
 		_ string,
 		name string,
-		body []byte,
-		options *azblob.UploadBufferOptions,
+		body io.Reader,
+		options *blockblob.CommitBlockListOptions,
 	) error {
-		capturedName, capturedBody, captured = name, body, options
-		return nil
+		capturedName, captured = name, options
+		var err error
+		capturedBody, err = io.ReadAll(body)
+		return err
 	}
 
 	require.NoError(t, store.Write(context.Background(), ExportObject{
 		Container:   "primary",
 		Name:        "prefix/object.jsonl.gz",
-		Content:     []byte("body"),
+		Content:     strings.NewReader("body"),
 		ContentType: "application/gzip",
 		Metadata:    map[string]string{"instanceId": "abc"},
 	}))
@@ -591,20 +608,91 @@ func TestAzureBlobHistoryStoreSendsHeadersAndMetadata(t *testing.T) {
 	// The store never declares a content coding, so no reader transparently
 	// decompresses an object whose name promises gzip bytes.
 	assert.Nil(t, captured.HTTPHeaders.BlobContentEncoding)
-	require.NotNil(t, captured.Metadata["instanceId"])
-	assert.Equal(t, "abc", *captured.Metadata["instanceId"])
+	require.NotNil(t, captured.Metadata["instanceIdBase64"])
+	assert.Equal(t, base64.RawURLEncoding.EncodeToString([]byte("abc")), *captured.Metadata["instanceIdBase64"])
+	assert.NotContains(t, captured.Metadata, "instanceId")
 }
 
-func TestGzipContentRoundTrip(t *testing.T) {
-	payload := []byte(strings.Repeat("history event\n", 512))
-	compressed, err := gzipContent(payload)
+func TestAzureBlobHistoryStoreFailedBlockCancelsProducer(t *testing.T) {
+	var blocks, commits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("comp") {
+		case "block":
+			blocks.Add(1)
+			w.Header().Set("x-ms-error-code", "AuthorizationPermissionMismatch")
+			w.WriteHeader(http.StatusForbidden)
+		case "blocklist":
+			commits.Add(1)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Errorf("unexpected blob request: %s", r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	store, err := NewAzureBlobHistoryStore(AzureBlobHistoryStoreOptions{
+		ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=" +
+			placeholderAccountKey + ";BlobEndpoint=" + server.URL + "/devstoreaccount1;",
+		ContainerName: "container", AllowInsecureHTTP: true,
+	})
 	require.NoError(t, err)
-	assert.Less(t, len(compressed), len(payload))
-	assert.Equal(t, payload, decompressGzip(t, compressed))
+	store.createContainerHook = func(context.Context, string) error { return nil }
+	base := streamTestSource()
+	stopped := make(chan struct{})
+	source := streamingSource{fakeSource: base, stream: func(ctx context.Context, handler api.HistoryEventHandler) error {
+		defer close(stopped)
+		if err := handler(base.history["subject"].Events[0]); err != nil {
+			return err
+		}
+		if err := handler(&api.HistoryEvent{Generic: &api.HistoryPayloadEvent{
+			SerializedInput: strings.Repeat("x", 2*historyUploadBlockSize),
+		}}); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request := streamTestRequest()
+	request.Format.Kind = ExportFormatJSON
+	_, err = newTestRuntime(source, store).exportInstance(ctx, request)
+	require.Error(t, err)
+	var responseErr *azcore.ResponseError
+	require.ErrorAs(t, err, &responseErr)
+	require.Equal(t, http.StatusForbidden, responseErr.StatusCode)
+	require.NoError(t, ctx.Err(), "upload failure must not wait for a source receive or outer deadline")
+	<-stopped
+	require.Equal(t, int32(1), blocks.Load())
+	require.Zero(t, commits.Load(), "failed blocks must never be committed")
+}
 
-	empty, err := gzipContent(nil)
-	require.NoError(t, err)
-	assert.Empty(t, decompressGzip(t, empty))
+type terminalErrorReader struct {
+	content string
+	err     error
+}
+
+func (r *terminalErrorReader) Read(p []byte) (int, error) {
+	n := copy(p, r.content)
+	r.content = r.content[n:]
+	return n, r.err
+}
+
+func TestReadHistoryBlockPreservesErrors(t *testing.T) {
+	ctx := context.Background()
+	for _, size := range []int{3, 8} {
+		for _, failure := range []error{io.ErrUnexpectedEOF, errors.New("source failed")} {
+			reader := &terminalErrorReader{content: strings.Repeat("x", size), err: failure}
+			n, err := readHistoryBlock(ctx, reader, make([]byte, 8))
+			require.Equal(t, size, n)
+			require.ErrorIs(t, err, failure, "a source error accompanying data must survive")
+		}
+	}
+	n, err := readHistoryBlock(ctx, strings.NewReader("end"), make([]byte, 8))
+	require.Equal(t, 3, n)
+	require.ErrorIs(t, err, io.EOF, "a clean partial final block keeps its EOF")
+	_, err = readHistoryBlock(ctx, &terminalErrorReader{}, make([]byte, 8))
+	require.ErrorIs(t, err, io.ErrNoProgress)
 }
 
 func decompressGzip(t *testing.T, content []byte) []byte {

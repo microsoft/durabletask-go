@@ -34,6 +34,16 @@ exports each instance's history in bounded parallel windows, and commits a
 checkpoint back to the entity. A batch job completes when the task hub reports
 no more pages; a continuous job idles for a minute and lists again.
 
+### Progress counters
+
+`ScannedInstances` and `ExportedInstances` are cumulative processing totals, not
+counts of distinct instances or executions. This retains the Python SDK's
+counter semantics. A continuous job preserves the last opaque cursor when a
+terminal page has no next token. If the source returns that page again, its
+entries and successful exports are counted again, even when no new instance has
+completed. Retries of blob writes remain idempotent, but that does not make these
+counters unique. Do not use them as exact unique-export or billing totals.
+
 ### Lifecycle
 
 | Operation | From | To |
@@ -103,10 +113,16 @@ exactly the gzip stream the name promises. Declaring the compression as
 the download while others would not, leaving a reader unable to tell what it
 received.
 
-JSONL objects carry one `api.HistoryEvent` per line. Every object carries
-`instanceId` and `schemaVersion` metadata, plus `executionId` when the task hub
-returns one. The name is derived deterministically, so re-exporting an instance
-overwrites its object instead of duplicating it.
+JSONL objects carry one `api.HistoryEvent` per line; JSON objects contain an
+array of the same events. Azure objects carry `schemaVersion`,
+`instanceIdBase64`, and `executionIdBase64` metadata. The identifier values are
+always UTF-8 bytes encoded as **unpadded RFC 4648 base64url**
+(`base64.RawURLEncoding` in Go), even for ASCII identifiers. Decode those
+suffixed keys to recover the original IDs. Raw identifiers are never sent as
+Azure metadata headers; the history body and object-name hash still use the
+original IDs. Metadata keys may be returned with different casing by Azure.
+The name is derived deterministically, so re-exporting an instance overwrites
+its object instead of duplicating it.
 
 When no destination is supplied, a job writes to the client's configured
 container under the prefix `<mode>-<jobId>/`.
@@ -129,8 +145,17 @@ worker, err := durabletaskscheduler.NewWorker(options, registry, logger,
 ```
 
 `Source` supplies the three management reads the export performs:
-`ListInstanceIDs`, `FetchOrchestrationMetadata`, and `GetOrchestrationHistory`.
+`ListInstanceIDs`, `FetchOrchestrationMetadata`, and `StreamOrchestrationHistory`.
 `*client.TaskHubGrpcClient` and the Durable Task Scheduler client satisfy it.
+
+The exporter pins the read to metadata's execution ID and incrementally checks
+`HistoryQuery.MaxEvents`, the aggregate approximate byte limit, and the observed
+`ExecutionStarted` identity. It does not retain an event list or a whole
+serialized/compressed history. Per export, memory consists of the current source
+chunk/event, its encoded JSON, gzip state when needed, a single 1 MiB upload
+block, and Azure's bounded block-ID list (at most 50,000 entries). Parallel
+exports each own that budget; large individual events/source chunks still
+require memory.
 
 `Store` is a narrow interface with a single `Write` method. `AzureBlobHistoryStore` is
 the production implementation; supply your own to export elsewhere. It is
@@ -139,6 +164,19 @@ contract assigns random object names inside a single container. Its endpoint
 validation is at least as strict as that store's: an `AccountURL` carrying
 userinfo, a query string, or a fragment is rejected outright, and plaintext HTTP
 is confined to loopback endpoints behind `AllowInsecureHTTP`.
+
+`ExportObject.Content` is now a single-use `io.Reader`, not `[]byte`. Custom
+stores must consume it synchronously, honor cancellation, and publish only
+after a clean EOF: a read error must leave an existing object unchanged. The
+Azure implementation stages blocks sequentially and commits the block list
+only after successful source validation and gzip finalization. On source or
+upload failure, the opposite side is canceled and joined. SDK transport retries
+rewind only the current block; an activity retry opens a fresh pinned history
+stream, never reuses a consumed reader. Failed attempts can leave uncommitted
+Azure blocks for service-managed expiration, but do not replace committed data.
+Custom history sources must deliver events serially and stop on handler errors
+or context cancellation. Update preview source/store implementations and blob
+metadata readers when upgrading.
 
 ### Versioning
 

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -336,11 +337,13 @@ func listExportedInstances(
 			assert.True(t, strings.HasSuffix(name, ".jsonl.gz"), name)
 			instanceID := ""
 			for key, value := range item.Metadata {
-				if strings.EqualFold(key, "instanceId") && value != nil {
-					instanceID = *value
+				if strings.EqualFold(key, "instanceIdBase64") && value != nil {
+					decoded, err := base64.RawURLEncoding.DecodeString(*value)
+					require.NoError(t, err, "invalid instanceIdBase64 metadata")
+					instanceID = string(decoded)
 				}
 			}
-			require.NotEmpty(t, instanceID, "exported object %s has no instanceId metadata", name)
+			require.NotEmpty(t, instanceID, "exported object %s has no instanceIdBase64 metadata", name)
 			// The object is an opaque gzip file, so nothing transparently
 			// decompresses it and the download is always the gzip stream.
 			assert.Equal(t, "application/gzip", derefBlobString(item.Properties.ContentType), name)
