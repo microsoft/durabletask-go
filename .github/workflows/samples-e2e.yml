@@ -27,14 +27,9 @@ jobs:
   samples:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        group: [emulator, storage, telemetry]
     env:
       DTS_CONNECTION_STRING: "Endpoint=http://127.0.0.1:8080;TaskHub=default;Authentication=None"
       DTS_SAMPLES_E2E: "1"
-      DTS_SAMPLES_GROUP: ${{ matrix.group }}
       DTS_SAMPLES_RACE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,7 +46,6 @@ jobs:
           curl --fail --retry 30 --retry-delay 1 --retry-all-errors http://127.0.0.1:8082/ >/dev/null
 
       - name: Start isolated blob storage
-        if: matrix.group == 'storage'
         shell: bash
         run: |
           key="$(openssl rand -base64 32)"
@@ -62,13 +56,11 @@ jobs:
             mcr.microsoft.com/azure-storage/azurite:3.37.0
           connection="DefaultEndpointsProtocol=http;AccountName=sampleacct;AccountKey=$key;BlobEndpoint=http://127.0.0.1:10000/sampleacct;"
           echo "::add-mask::$connection"
-          printf 'AZURE_STORAGE_CONNECTION_STRING=%s\nEXPORT_STORAGE_CONNECTION_STRING=%s\n' \
-            "$connection" "$connection" >> "$GITHUB_ENV"
+          printf 'AZURE_STORAGE_CONNECTION_STRING=%s\n' "$connection" >> "$GITHUB_ENV"
           printf 'DTS_SAMPLE_ALLOW_INSECURE_STORAGE=1\nDTS_SAMPLE_ISOLATED_TASKHUB=1\n' >> "$GITHUB_ENV"
           timeout 60 bash -c 'until </dev/tcp/127.0.0.1/10000; do sleep 1; done'
 
       - name: Start trace collector
-        if: matrix.group == 'telemetry'
         run: |
           mkdir -p "$RUNNER_TEMP/sample-traces"
           docker run -d --name sample-collector \
@@ -83,7 +75,11 @@ jobs:
           timeout 60 bash -c 'until </dev/tcp/127.0.0.1/4318; do sleep 1; done'
 
       - name: Execute and verify sample entry points
-        run: go test ./tests/samples -run 'TestSampleCatalogue|TestSamplesE2E' -count=1 -timeout=20m -v
+        # Azure authentication and hub-wide maintenance run separately on approved targets.
+        run: >-
+          go test ./tests/samples -run 'TestSampleCatalogue|TestSamplesE2E'
+          -skip '^TestSamplesE2E/(authentication|serviceoperations)$'
+          -count=1 -timeout=20m -v
 
       - name: Service diagnostics
         if: failure()

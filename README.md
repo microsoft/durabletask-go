@@ -137,7 +137,7 @@ For more information, read the [DTS transport guide and feature matrix](./durabl
 Each sample connects to the task hub in `DTS_CONNECTION_STRING`. Set that variable first. Then run `go run ./samples/<name>`.
 
 The [complete feature-to-sample catalogue](./samples/README.md) covers the SDK's
-feature families and documents actual end-to-end execution groups. These are
+feature families and documents how to run and validate each example. These are
 useful starting points:
 
 | Sample | Description |

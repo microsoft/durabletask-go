@@ -15,35 +15,34 @@ import (
 
 type sample struct {
 	name    string
-	group   string
 	input   string
 	timeout time.Duration
 }
 
 // Keep this execution list aligned with the feature map in samples/README.md.
 var catalogue = []sample{
-	{name: "durabletaskscheduler", group: "emulator"},
-	{name: "parallel", group: "emulator"},
-	{name: "coroutines", group: "emulator"},
-	{name: "timers", group: "emulator"},
-	{name: "externalevents", group: "emulator", input: "Taylor\n"},
-	{name: "suborchestrations", group: "emulator"},
-	{name: "retries", group: "emulator"},
-	{name: "continueasnew", group: "emulator"},
-	{name: "management", group: "emulator"},
-	{name: "scheduledtasks", group: "emulator"},
-	{name: "versioning", group: "emulator"},
-	{name: "entity", group: "emulator"},
-	{name: "dataconverter", group: "emulator"},
-	{name: "largepayloads", group: "storage"},
-	{name: "history", group: "emulator"},
-	{name: "observability", group: "emulator"},
-	{name: "worker", group: "emulator"},
-	{name: "authentication", group: "azure", timeout: 3 * time.Minute},
-	{name: "distributedtracing", group: "telemetry"},
-	{name: "exporthistory", group: "storage", timeout: 8 * time.Minute},
-	{name: "replayanalysis", group: "emulator"},
-	{name: "serviceoperations", group: "admin", timeout: 6 * time.Minute},
+	{name: "durabletaskscheduler"},
+	{name: "parallel"},
+	{name: "coroutines"},
+	{name: "timers"},
+	{name: "externalevents", input: "Taylor\n"},
+	{name: "suborchestrations"},
+	{name: "retries"},
+	{name: "continueasnew"},
+	{name: "management"},
+	{name: "scheduledtasks"},
+	{name: "versioning"},
+	{name: "entity"},
+	{name: "dataconverter"},
+	{name: "largepayloads"},
+	{name: "history"},
+	{name: "observability"},
+	{name: "worker"},
+	{name: "authentication", timeout: 3 * time.Minute},
+	{name: "distributedtracing"},
+	{name: "exporthistory", timeout: 8 * time.Minute},
+	{name: "replayanalysis"},
+	{name: "serviceoperations", timeout: 6 * time.Minute},
 }
 
 func repositoryRoot(t *testing.T) string {
@@ -107,22 +106,10 @@ func TestSamplesE2E(t *testing.T) {
 	if os.Getenv("DTS_SAMPLES_E2E") != "1" {
 		t.Skip("set DTS_SAMPLES_E2E=1 to execute real sample programs; this skip is not E2E coverage")
 	}
-	group := os.Getenv("DTS_SAMPLES_GROUP")
-	if group == "" {
-		group = "all"
-	}
-	switch group {
-	case "all", "emulator", "storage", "telemetry", "azure", "admin":
-	default:
-		t.Fatalf("unknown DTS_SAMPLES_GROUP %q", group)
-	}
 	root := repositoryRoot(t)
 	for _, entry := range catalogue {
-		if group != "all" && entry.group != group {
-			continue
-		}
 		t.Run(entry.name, func(t *testing.T) {
-			environment := sampleEnvironment(t, entry.group)
+			environment := os.Environ()
 			binary := filepath.Join(t.TempDir(), entry.name)
 			if runtime.GOOS == "windows" {
 				binary += ".exe"
@@ -165,45 +152,6 @@ func TestSamplesE2E(t *testing.T) {
 			}
 		})
 	}
-}
-
-func sampleEnvironment(t *testing.T, group string) []string {
-	t.Helper()
-	connectionVariable := "DTS_CONNECTION_STRING"
-	switch group {
-	case "azure":
-		connectionVariable = "DTS_SAMPLES_AZURE_CONNECTION_STRING"
-	case "admin":
-		connectionVariable = "DTS_SAMPLES_ADMIN_CONNECTION_STRING"
-		if requiredEnvironment(t, "DTS_SAMPLE_ALLOW_HUB_MAINTENANCE") != "1" {
-			t.Fatal("admin E2E requires explicit hub-maintenance acknowledgement")
-		}
-	case "telemetry":
-		requiredEnvironment(t, "OTEL_EXPORTER_OTLP_ENDPOINT")
-		requiredEnvironment(t, "OTEL_CAPTURE_FILE")
-	}
-	environment := append(os.Environ(), "DTS_CONNECTION_STRING="+requiredEnvironment(t, connectionVariable))
-	if group == "storage" {
-		if requiredEnvironment(t, "DTS_SAMPLE_ISOLATED_TASKHUB") != "1" {
-			t.Fatal("storage E2E includes whole-window history export and requires an isolated task hub")
-		}
-		connection := os.Getenv("AZURE_STORAGE_CONNECTION_STRING")
-		if connection == "" {
-			connection = requiredEnvironment(t, "EXPORT_STORAGE_CONNECTION_STRING")
-		}
-		environment = append(environment, "AZURE_STORAGE_CONNECTION_STRING="+connection,
-			"EXPORT_STORAGE_CONNECTION_STRING="+connection)
-	}
-	return environment
-}
-
-func requiredEnvironment(t *testing.T, name string) string {
-	t.Helper()
-	value := os.Getenv(name)
-	if value == "" {
-		t.Fatalf("%s is required for the selected E2E group; missing configuration is not a pass", name)
-	}
-	return value
 }
 
 func checkReplayAnalysis(t *testing.T, root string) {
