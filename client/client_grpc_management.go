@@ -209,19 +209,6 @@ func (c *TaskHubGrpcClient) RestartInstance(ctx context.Context, id api.Instance
 	return api.InstanceID(resp.GetInstanceId()), nil
 }
 
-func (c *TaskHubGrpcClient) RewindInstance(ctx context.Context, id api.InstanceID, opts ...api.RewindOptions) error {
-	req := &protos.RewindInstanceRequest{InstanceId: string(id)}
-	for _, configure := range opts {
-		if err := configure(req); err != nil {
-			return fmt.Errorf("failed to configure rewind request: %w", api.WrapInvalidArgument(err))
-		}
-	}
-	if _, err := c.client.RewindInstance(ctx, req); err != nil {
-		return clientRPCError(ctx, "failed to rewind orchestration instance", err)
-	}
-	return nil
-}
-
 func (c *TaskHubGrpcClient) PurgeInstances(ctx context.Context, request api.PurgeInstancesRequest) (*api.PurgeInstancesResult, error) {
 	if err := request.Validate(); err != nil {
 		return nil, err
@@ -295,54 +282,6 @@ func (c *TaskHubGrpcClient) pollPurgeInstances(ctx context.Context, req *protos.
 		case <-timer.C:
 		}
 	}
-}
-
-func (c *TaskHubGrpcClient) SkipGracefulOrchestrationTerminations(ctx context.Context, ids []api.InstanceID, reason string) ([]api.InstanceID, error) {
-	if len(ids) == 0 {
-		return nil, api.WrapInvalidArgument(errors.New("at least one instance ID is required"))
-	}
-	if len(ids) > api.MaxInstanceBatchSize {
-		return nil, api.WrapInvalidArgument(fmt.Errorf("instance batch cannot exceed %d IDs", api.MaxInstanceBatchSize))
-	}
-	instanceIDs := make([]string, len(ids))
-	for i, id := range ids {
-		if id == api.EmptyInstanceID {
-			return nil, api.WrapInvalidArgument(errors.New("instance ID cannot be empty"))
-		}
-		instanceIDs[i] = string(id)
-	}
-	resp, err := c.client.SkipGracefulOrchestrationTerminations(ctx, &protos.SkipGracefulOrchestrationTerminationsRequest{
-		InstanceBatch: &protos.InstanceBatch{InstanceIds: instanceIDs},
-		Reason:        stringValue(reason),
-	})
-	if err != nil {
-		return nil, clientRPCError(ctx, "failed to skip graceful orchestration terminations", err)
-	}
-	unterminated := make([]api.InstanceID, 0, len(resp.GetUnterminatedInstanceIds()))
-	for _, id := range resp.GetUnterminatedInstanceIds() {
-		unterminated = append(unterminated, api.InstanceID(id))
-	}
-	return unterminated, nil
-}
-
-func (c *TaskHubGrpcClient) CreateTaskHub(ctx context.Context, opts ...api.CreateTaskHubOptions) error {
-	req := &protos.CreateTaskHubRequest{}
-	for _, configure := range opts {
-		if err := configure(req); err != nil {
-			return fmt.Errorf("failed to configure task hub creation request: %w", api.WrapInvalidArgument(err))
-		}
-	}
-	if _, err := c.client.CreateTaskHub(ctx, req); err != nil {
-		return clientRPCError(ctx, "failed to create task hub", err)
-	}
-	return nil
-}
-
-func (c *TaskHubGrpcClient) DeleteTaskHub(ctx context.Context) error {
-	if _, err := c.client.DeleteTaskHub(ctx, &protos.DeleteTaskHubRequest{}); err != nil {
-		return clientRPCError(ctx, "failed to delete task hub", err)
-	}
-	return nil
 }
 
 func makePurgeFilterRequest(request api.PurgeInstancesRequest) (*protos.PurgeInstancesRequest, error) {

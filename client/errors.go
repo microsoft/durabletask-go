@@ -9,9 +9,7 @@ import (
 )
 
 var (
-	// ErrTaskHubExists indicates that task-hub creation targeted an existing hub.
-	ErrTaskHubExists = errors.New("task hub already exists")
-	// ErrTaskHubNotFound indicates that a task-hub operation targeted a missing hub.
+	// ErrTaskHubNotFound indicates that the configured task hub does not exist.
 	ErrTaskHubNotFound = errors.New("task hub not found")
 	// ErrStreamedHistoryLimitExceeded indicates that a worker refused to retain
 	// an orchestration history beyond its configured safety limit.

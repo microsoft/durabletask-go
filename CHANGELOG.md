@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a runnable DTS feature-family sample catalogue with outcome assertions, owned-resource cleanup, and process-level E2E groups for DTS, blob storage, telemetry, Azure authentication, and isolated hub maintenance.
 - Added the exported `task.CallActivityOption` type, per-activity tag options, completion-action tag propagation, distinct activity and sub-orchestration action trace contexts, and legacy entity-operation trace forwarding.
 - Added the top-level `durabletaskscheduler` transport package, a dedicated resilient gRPC worker, DTS emulator tests, and an environment-driven sample.
-- Added advanced management APIs for bounded instance queries/listing, restart, rewind, batch/filter purge polling, immediate termination, and task-hub lifecycle operations.
-- Added orchestration tags to scheduling, metadata, queries, sub-orchestrations, continue-as-new, restart, and rewind.
+- Added advanced management APIs for bounded instance queries/listing, restart, and batch/filter purge polling.
+- Added orchestration tags to scheduling, metadata, queries, sub-orchestrations, continue-as-new, and restart.
 - Added explicit worker capability advertisement and orchestration/activity name/version filters with local fallback enforcement.
 - Added pluggable large-payload store/resolver support with size limits, SHA-256 integrity validation, memory/file implementations, and opt-in DTS capability advertisement.
 - Added API-owned structured failure details, typed task and entity operation errors, stable cross-language error types, bounded panic stacks, nested causes, and custom error-property enrichment.
@@ -37,10 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Removed the unsupported SDK methods `RewindInstance`, `SkipGracefulOrchestrationTerminations`, `CreateTaskHub`, and `DeleteTaskHub`, along with `api.RewindOptions`, `api.WithRewindReason`, `api.CreateTaskHubOptions`, `api.WithRecreateTaskHub`, and the lifecycle-only `client.ErrTaskHubExists` sentinel. Provision and delete task hubs through the Azure control plane or Azure CLI. `RestartInstance`, normal termination, instance purge, entity maintenance, and passive decoding of rewind history records remain supported; `client.ErrTaskHubNotFound` still identifies a configured task hub that does not exist.
 - **Removed the sqlite and PostgreSQL storage backends** (`backend/sqlite` and `backend/postgres`) and the `modernc.org/sqlite` and `github.com/jackc/pgx/v5` dependencies. Durable Task Scheduler is now the only supported runtime, and this repository is the DTS Go SDK rather than an embeddable engine plus storage providers. Applications that hosted an embedded task hub must move to `durabletaskscheduler.NewClient` and `durabletaskscheduler.NewWorker`.
 - **Removed the standalone local gRPC server** (root `main.go` and its `Dockerfile`), along with the `--port`/`--host`/`--db` commands and the `.NET` client-SDK integration-test instructions that targeted it.
 - Removed the `samples/sequence` and `samples/heterogeneous` samples. The activity sequence is demonstrated by `samples/durabletaskscheduler`, and the heterogeneous sample only demonstrated routing between embedded task executor implementations, which has no Durable Task Scheduler equivalent.
-- Removed the residual public `backend` package. Logging moved to `api`, executor and metric contracts moved to `task`, task-hub lifecycle errors moved to `client`, and worker-only entity conversion and abandon-delay contracts are now private to `client`.
+- Removed the residual public `backend` package. Logging moved to `api`, executor and metric contracts moved to `task`, the missing-task-hub error moved to `client`, and worker-only entity conversion and abandon-delay contracts are now private to `client`.
 - Removed the unused `api.ErrNotStarted`, `api.ErrNoFailures`, and `api.ErrIgnoreInstance` sentinels and the test-only exported `task.NewOrchestrationContext` constructor.
 - Removed the embedded-backend integration harness under `./tests` and the SQLite-hosted generic gRPC suite under `./tests/grpc`. Their unique coverage was migrated to deterministic package tests (`client` task-hub management over a fake gRPC server, and `exporthistory.WithExportHistory` strict-version filter routing) and to the live `tests/durabletaskscheduler` suite.
 - Removed the `POSTGRES_ENABLED` environment variable and the PostgreSQL service from PR validation.
@@ -53,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Restore DTS-provided activity trace parents on `ActivityContext.Context()` without emitting duplicate SDK durable spans, preserving trace continuity for application instrumentation.
 - Missing-instance orchestration waits now return `api.ErrInstanceNotFound` immediately instead of retrying `NotFound` until the caller deadline.
 - After a worker has started, it reconnects with bounded backoff after `Unauthenticated` or `PermissionDenied` stream and reconnect-handshake responses so refreshed credentials and propagated RBAC can recover without a process restart. The initial `Hello` remains fail-fast.
 - Oversized orchestration responses are checked after large-payload externalization against the smaller of the 3.9 MiB worker safety bound and the configured gRPC send limit. The Go worker intentionally does not use the deprecated response-chunking fields; a response that still exceeds the effective limit now fails once with non-retriable `api.ErrorTypeOrchestratorResponseTooLarge` guidance instead of repeatedly hitting `ResourceExhausted`.

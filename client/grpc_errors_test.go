@@ -55,21 +55,18 @@ func TestClientRPCErrorPrefersCallerContext(t *testing.T) {
 	}
 }
 
-func TestClientRPCErrorPreservesLifecycleAndStateCategories(t *testing.T) {
+func TestClientRPCErrorPreservesTaskHubAndStateCategories(t *testing.T) {
 	tests := []struct {
 		code     codes.Code
 		message  string
 		category error
 	}{
-		{codes.AlreadyExists, ErrTaskHubExists.Error(), ErrTaskHubExists},
 		{codes.NotFound, ErrTaskHubNotFound.Error(), ErrTaskHubNotFound},
 		{codes.FailedPrecondition, api.ErrNotCompleted.Error(), api.ErrNotCompleted},
 	}
 	for _, test := range tests {
 		var reason string
 		switch {
-		case errors.Is(test.category, ErrTaskHubExists):
-			reason = grpcerrors.ReasonTaskHubExists
 		case errors.Is(test.category, ErrTaskHubNotFound):
 			reason = grpcerrors.ReasonTaskHubNotFound
 		case errors.Is(test.category, api.ErrNotCompleted):

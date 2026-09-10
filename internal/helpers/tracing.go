@@ -43,18 +43,26 @@ func traceStateValue(state trace.TraceState) *wrapperspb.StringValue {
 	return nil
 }
 
+// ContextWithTraceContext restores a wire parent without starting or recording a span.
+func ContextWithTraceContext(ctx context.Context, value *protos.TraceContext) context.Context {
+	if value == nil {
+		return ctx
+	}
+	carrier := propagation.MapCarrier{"traceparent": value.GetTraceParent()}
+	if state := value.GetTraceState().GetValue(); state != "" {
+		carrier.Set("tracestate", state)
+	}
+	return propagation.TraceContext{}.Extract(ctx, carrier)
+}
+
 // OrchestratorActionTraceContext creates the trace context for a service-owned
 // activity or sub-orchestration scheduling span.
 func OrchestratorActionTraceContext(parent *protos.TraceContext) (*protos.TraceContext, error) {
 	if parent == nil {
 		return nil, nil
 	}
-	carrier := propagation.MapCarrier{"traceparent": parent.GetTraceParent()}
-	if traceState := parent.GetTraceState().GetValue(); traceState != "" {
-		carrier.Set("tracestate", traceState)
-	}
 	parentContext := trace.SpanContextFromContext(
-		propagation.TraceContext{}.Extract(context.Background(), carrier),
+		ContextWithTraceContext(context.Background(), parent),
 	)
 	if !parentContext.IsValid() {
 		return nil, fmt.Errorf("invalid parent trace context")

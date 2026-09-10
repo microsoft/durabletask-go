@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/microsoft/durabletask-go/internal/protos"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 const (
@@ -64,15 +63,6 @@ func WithRestartNewInstanceID(restartWithNewInstanceID bool) RestartOptions {
 	}
 }
 
-type RewindOptions func(*protos.RewindInstanceRequest) error
-
-func WithRewindReason(reason string) RewindOptions {
-	return func(req *protos.RewindInstanceRequest) error {
-		req.Reason = wrapperspb.String(reason)
-		return nil
-	}
-}
-
 type PurgeInstanceFilter struct {
 	CreatedTimeFrom time.Time
 	CreatedTimeTo   time.Time
@@ -114,15 +104,6 @@ func (request PurgeInstancesRequest) Validate() error {
 		}
 	}
 	return nil
-}
-
-type CreateTaskHubOptions func(*protos.CreateTaskHubRequest) error
-
-func WithRecreateTaskHub(recreateIfExists bool) CreateTaskHubOptions {
-	return func(req *protos.CreateTaskHubRequest) error {
-		req.RecreateIfExists = recreateIfExists
-		return nil
-	}
 }
 
 func NormalizeInstanceQueryPageSize(pageSize int) (int, error) {

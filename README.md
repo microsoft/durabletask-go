@@ -334,10 +334,14 @@ This example does not show the client and worker setup. Read [Connection to DTS]
 The client also does these operations, if the connected service supplies them:
 
 - Query the instances with a limit. List the instance IDs.
-- Restart and rewind an orchestration.
+- Restart an orchestration.
 - Purge in a batch or with a filter.
-- Terminate an orchestration immediately.
+- Terminate an orchestration.
 - Read the tags and the worker capabilities.
+
+Provision and delete task hubs through the Azure control plane or Azure CLI.
+The SDK does not expose task-hub lifecycle, rewind, or skip-graceful-termination
+operations.
 
 To read a long history, use `StreamOrchestrationHistory`. This method reads the history one part at a time. If you buffer the history instead, the SDK applies a validated event cap.
 
@@ -452,6 +456,11 @@ The [`payload`](./payload) package includes Azure Blob Storage support. It emits
 ## Distributed tracing
 
 The SDK sends the W3C trace context of a sampled caller when it schedules an orchestration. DTS owns the spans for the orchestrations, activities, timers, and sub-orchestrations. Your application code can use standard [OpenTelemetry](https://opentelemetry.io/) instrumentation. Use it for caller spans, custom activity spans, and outbound dependencies.
+
+When DTS supplies an activity trace parent, the SDK restores it on
+`ActivityContext.Context()` without creating another durable-operation span.
+Application instrumentation can therefore attach outbound requests to the
+service-owned trace.
 
 This example sends the traces of your process to an [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) over OTLP/HTTP. Configure the DTS telemetry separately for the service-owned spans.
 
