@@ -259,32 +259,13 @@ func TestDTSEmulatorAdvancedManagementOperations(t *testing.T) {
 		}
 		return "done", nil
 	}))
-	var rewindAttempts atomic.Int32
-	require.NoError(t, registry.AddActivityN("DTSAdvancedRewindActivity", func(task.ActivityContext) (any, error) {
-		if rewindAttempts.Add(1) == 1 {
-			return nil, errors.New("first attempt fails")
-		}
-		return "recovered", nil
-	}))
-	require.NoError(t, registry.AddOrchestratorN("DTSAdvancedRewind", func(ctx *task.OrchestrationContext) (any, error) {
-		var result string
-		if err := ctx.CallActivity("DTSAdvancedRewindActivity").Await(&result); err != nil {
-			return nil, err
-		}
-		return result, nil
+	require.NoError(t, registry.AddOrchestratorN("DTSAdvancedFail", func(*task.OrchestrationContext) (any, error) {
+		return nil, errors.New("expected failure")
 	}))
 	managementClient, _, _ := startEmulatorClientAndWorker(t, registry)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	t.Run("create-task-hub", func(t *testing.T) {
-		err := managementClient.CreateTaskHub(ctx)
-		if errors.Is(err, api.ErrFeatureNotSupported) {
-			t.Log("DTS emulator limitation: CreateTaskHub is not implemented")
-			return
-		}
-		require.NoError(t, err)
-	})
 	prefix := "go-advanced-" + uuid.NewString()
 	completedIDs := make([]api.InstanceID, 0, 3)
 	for index := range 3 {
@@ -394,63 +375,23 @@ func TestDTSEmulatorAdvancedManagementOperations(t *testing.T) {
 	require.NoError(t, err)
 	_, err = managementClient.WaitForOrchestrationStart(ctx, waitID)
 	require.NoError(t, err)
-	t.Run("skip-graceful-termination", func(t *testing.T) {
-		unterminated, err := managementClient.SkipGracefulOrchestrationTerminations(ctx, []api.InstanceID{waitID}, "test")
-		if errors.Is(err, api.ErrFeatureNotSupported) {
-			t.Log("DTS emulator limitation: SkipGracefulOrchestrationTerminations is not implemented")
-			require.NoError(t, managementClient.TerminateOrchestration(ctx, waitID))
-			_, waitErr := managementClient.WaitForOrchestrationCompletion(ctx, waitID)
-			require.NoError(t, waitErr)
-			return
-		}
+	t.Run("terminate", func(t *testing.T) {
+		require.NoError(t, managementClient.TerminateOrchestration(ctx, waitID))
+		terminated, err := managementClient.WaitForOrchestrationCompletion(ctx, waitID)
 		require.NoError(t, err)
-		require.Empty(t, unterminated)
+		require.Equal(t, api.RUNTIME_STATUS_TERMINATED, terminated.RuntimeStatus)
 	})
 
-	rewindID := api.InstanceID(prefix + "-rewind")
+	failedID := api.InstanceID(prefix + "-failed")
 	_, err = managementClient.ScheduleNewOrchestration(
 		ctx,
-		"DTSAdvancedRewind",
-		api.WithInstanceID(rewindID),
+		"DTSAdvancedFail",
+		api.WithInstanceID(failedID),
 	)
 	require.NoError(t, err)
-	failed, err := managementClient.WaitForOrchestrationCompletion(ctx, rewindID)
+	failed, err := managementClient.WaitForOrchestrationCompletion(ctx, failedID)
 	require.NoError(t, err)
 	require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
-	failedExecutionID := failed.ExecutionID
-	t.Run("rewind", func(t *testing.T) {
-		err := managementClient.RewindInstance(ctx, rewindID, api.WithRewindReason("retry"))
-		if errors.Is(err, api.ErrFeatureNotSupported) {
-			t.Log("DTS emulator limitation: RewindInstance is not implemented")
-			return
-		}
-		require.NoError(t, err)
-		transitioned := false
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			current, fetchErr := managementClient.FetchOrchestrationMetadata(ctx, rewindID)
-			if fetchErr == nil &&
-				current.RuntimeStatus != api.RUNTIME_STATUS_FAILED &&
-				current.ExecutionID != failedExecutionID {
-				transitioned = true
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		if !transitioned {
-			t.Log("DTS emulator limitation: RewindInstance returns success without transitioning the failed instance")
-			return
-		}
-		rewound, err := managementClient.WaitForOrchestrationCompletion(ctx, rewindID, api.WithFetchPayloads(true))
-		require.NoError(t, err)
-		require.Equal(t, api.RUNTIME_STATUS_COMPLETED, rewound.RuntimeStatus)
-		require.EqualValues(t, 2, rewindAttempts.Load())
-		if rewound.SerializedOutput == "" {
-			t.Log("DTS emulator limitation: rewound completion output is not returned")
-		} else {
-			require.Equal(t, `"recovered"`, rewound.SerializedOutput)
-		}
-	})
 
 	t.Run("filter-purge", func(t *testing.T) {
 		filterStart := time.Now().UTC()
@@ -489,11 +430,11 @@ func TestDTSEmulatorAdvancedManagementOperations(t *testing.T) {
 
 	t.Run("batch-purge", func(t *testing.T) {
 		result, err := managementClient.PurgeInstances(ctx, api.PurgeInstancesRequest{
-			InstanceIDs: append(completedIDs, waitID, rewindID),
+			InstanceIDs: append(completedIDs, waitID, failedID),
 		})
 		if errors.Is(err, api.ErrFeatureNotSupported) {
 			t.Log("DTS emulator limitation: batch PurgeInstances is not implemented")
-			for _, id := range append(completedIDs, waitID, rewindID) {
+			for _, id := range append(completedIDs, waitID, failedID) {
 				purgeErr := managementClient.PurgeOrchestrationState(ctx, id)
 				require.True(t, purgeErr == nil || errors.Is(purgeErr, api.ErrInstanceNotFound))
 			}

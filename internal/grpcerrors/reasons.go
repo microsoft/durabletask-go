@@ -15,7 +15,6 @@ const (
 	ReasonInvalidArgument    = "INVALID_ARGUMENT"
 	ReasonInvalidState       = "INVALID_STATE"
 	ReasonNotCompleted       = "NOT_COMPLETED"
-	ReasonTaskHubExists      = "TASK_HUB_EXISTS"
 	ReasonTaskHubNotFound    = "TASK_HUB_NOT_FOUND"
 )
 

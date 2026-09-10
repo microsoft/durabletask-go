@@ -129,11 +129,15 @@ configurations is replay-breaking for affected in-flight orchestrations.
 ### Advanced management
 
 `TaskHubGrpcClient` exposes bounded `QueryInstances` and `ListInstanceIDs`
-operations with opaque continuation tokens, plus `RestartInstance`,
-`RewindInstance`, batch/filter `PurgeInstances`,
-`SkipGracefulOrchestrationTerminations`, and task-hub lifecycle RPCs. Queries
+operations with opaque continuation tokens, plus `RestartInstance` and
+batch/filter `PurgeInstances`. Queries
 can filter locally by exact tag key/value pairs when the current wire contract
 does not carry tag filters.
+
+Provision and delete task hubs through the Azure control plane or Azure CLI,
+not SDK RPCs. The SDK does not expose task-hub lifecycle, rewind, or
+skip-graceful-termination operations. Use `TerminateOrchestration` for normal
+orchestration termination.
 
 `GetOrchestrationHistory` returns API-owned history records with validated event
 and approximate byte caps. `StreamOrchestrationHistory` invokes a callback in
@@ -143,9 +147,7 @@ events. Serialized payloads remain raw until a `ReadInput`, `ReadResult`, or
 `ReadData` helper applies the configured data converter.
 
 The current DTS emulator supports query, restart, and batch purge, but has known
-service limitations: `SkipGracefulOrchestrationTerminations`
-is unimplemented, rewind can return success without transitioning the failed
-instance, filtered purge can complete without deleting matches, and
+service limitations: filtered purge can complete without deleting matches, and
 `ListInstanceIds` can omit matching IDs. The emulator integration tests record
 these limitations explicitly.
 
@@ -251,8 +253,6 @@ before large-payload externalization and after hydration. Converter errors are
 returned; the SDK never retries a payload with JSON. Raw input/output APIs and
 serialized metadata fields bypass conversion. Converter identity is not stored
 by the protocol, so deployments must retain backward decoding compatibility.
-The legacy skip-graceful termination `reason` remains a plain protocol string
-for cross-version service compatibility.
 
 ### Large payloads
 
@@ -305,11 +305,8 @@ cancels them only if the shutdown context expires.
 | Feature | Status |
 | --- | --- |
 | Schedule, bounded query/list, and wait for orchestrations | Supported |
-| Tags on schedule, metadata, query, sub-orchestration, continue-as-new, restart, and rewind | Supported; distinct from immutable context fields |
+| Tags on schedule, metadata, query, sub-orchestration, continue-as-new, and restart | Supported; distinct from immutable context fields |
 | Restart and batch/filter purge | Supported; see emulator limitations above |
-| Rewind | Client and wire support are complete; current emulator does not transition instances |
-| Skip-graceful termination | Client and wire support are complete; current emulator returns `Unimplemented` |
-| Task-hub create/delete | Client and wire support are complete; remote-service behavior is provider-specific |
 | Raise events, suspend/resume, terminate, and single-instance purge | Supported |
 | Orchestration and activity execution | Supported |
 | Bounded orchestration/activity/entity concurrency | Supported |

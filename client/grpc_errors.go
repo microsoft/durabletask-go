@@ -56,19 +56,11 @@ func clientRPCError(ctx context.Context, operation string, err error) error {
 	} else {
 		switch code {
 		case codes.AlreadyExists:
-			if operation == "failed to create task hub" {
-				category = ErrTaskHubExists
-			} else {
-				category = api.ErrDuplicateInstance
-			}
+			category = api.ErrDuplicateInstance
 		case codes.InvalidArgument:
 			category = api.ErrInvalidArgument
 		case codes.NotFound:
-			if operation == "failed to delete task hub" {
-				category = ErrTaskHubNotFound
-			} else {
-				category = api.ErrInstanceNotFound
-			}
+			category = api.ErrInstanceNotFound
 		case codes.FailedPrecondition:
 			if strings.HasPrefix(grpcStatus.Message(), api.ErrNotCompleted.Error()) {
 				category = api.ErrNotCompleted
@@ -104,8 +96,6 @@ func clientErrorReasonCategory(reason string) error {
 		return api.ErrInvalidState
 	case grpcerrors.ReasonNotCompleted:
 		return api.ErrNotCompleted
-	case grpcerrors.ReasonTaskHubExists:
-		return ErrTaskHubExists
 	case grpcerrors.ReasonTaskHubNotFound:
 		return ErrTaskHubNotFound
 	default:

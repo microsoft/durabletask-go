@@ -329,10 +329,14 @@ This example does not show the client and worker setup. Read [Connection to DTS]
 The client also does these operations, if the connected service supplies them:
 
 - Query the instances with a limit. List the instance IDs.
-- Restart and rewind an orchestration.
+- Restart an orchestration.
 - Purge in a batch or with a filter.
-- Terminate an orchestration immediately.
+- Terminate an orchestration.
 - Read the tags and the worker capabilities.
+
+Provision and delete task hubs through the Azure control plane or Azure CLI.
+The SDK does not expose task-hub lifecycle, rewind, or skip-graceful-termination
+operations.
 
 To read a long history, use `StreamOrchestrationHistory`. This method reads the history one part at a time. If you buffer the history instead, the SDK applies a validated event cap.
 
