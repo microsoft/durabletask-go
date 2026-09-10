@@ -136,6 +136,10 @@ For more information, read the [DTS transport guide and feature matrix](./durabl
 
 Each sample connects to the task hub in `DTS_CONNECTION_STRING`. Set that variable first. Then run `go run ./samples/<name>`.
 
+The [complete feature-to-sample catalogue](./samples/README.md) covers the SDK's
+feature families and documents actual end-to-end execution groups. These are
+useful starting points:
+
 | Sample | Description |
 | --- | --- |
 | [durabletaskscheduler](./samples/durabletaskscheduler) | Connect to DTS and call activities in sequence. |
@@ -146,10 +150,11 @@ Each sample connects to the task hub in `DTS_CONNECTION_STRING`. Set that variab
 | [exporthistory](./samples/exporthistory) | Export orchestration histories to Azure Blob Storage. |
 | [distributedtracing](./samples/distributedtracing) | Send trace data to an OpenTelemetry collector. |
 
-Two samples need more steps:
+Some samples need additional services:
 
-- `distributedtracing` is a separate Go module. Run it with `cd samples/distributedtracing && go run .`.
-- `exporthistory` also needs `EXPORT_STORAGE_CONNECTION_STRING`. It accepts the optional variable `EXPORT_CONTAINER`.
+- `distributedtracing` is a separate Go module and uses a local OTLP collector. Run it with `cd samples/distributedtracing && go run .`.
+- `exporthistory` and `largepayloads` need blob storage; see their READMEs for the storage connection variables.
+- `authentication` requires a real Azure identity and DTS endpoint. Hub-wide administrative examples require a disposable hub and explicit acknowledgement.
 
 Most samples use the shared helper [`samples/internal/dtssample`](./samples/internal/dtssample). The helper reads `DTS_CONNECTION_STRING`, opens the client, and starts the worker. The `exporthistory` sample does not use the helper. That sample needs the client before it registers the export system tasks.
 

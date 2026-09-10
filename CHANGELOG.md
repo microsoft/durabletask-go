@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added a runnable DTS feature-family sample catalogue with outcome assertions, owned-resource cleanup, and process-level E2E groups for DTS, blob storage, telemetry, Azure authentication, and isolated hub maintenance.
 - Added the exported `task.CallActivityOption` type, per-activity tag options, completion-action tag propagation, distinct activity and sub-orchestration action trace contexts, and legacy entity-operation trace forwarding.
 - Added the top-level `durabletaskscheduler` transport package, a dedicated resilient gRPC worker, DTS emulator tests, and an environment-driven sample.
 - Added advanced management APIs for bounded instance queries/listing, restart, rewind, batch/filter purge polling, immediate termination, and task-hub lifecycle operations.

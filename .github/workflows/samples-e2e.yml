@@ -1,0 +1,100 @@
+name: Sample E2E
+
+on:
+  pull_request:
+    paths:
+      - "samples/**"
+      - "tests/samples/**"
+      - "api/**"
+      - "task/**"
+      - "client/**"
+      - "durabletaskscheduler/**"
+      - "exporthistory/**"
+      - "payload/**"
+      - "internal/**"
+      - "cmd/orchestratorvet/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/samples-e2e.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  samples:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [emulator, storage, telemetry]
+    env:
+      DTS_CONNECTION_STRING: "Endpoint=http://127.0.0.1:8080;TaskHub=default;Authentication=None"
+      DTS_SAMPLES_E2E: "1"
+      DTS_SAMPLES_GROUP: ${{ matrix.group }}
+      DTS_SAMPLES_RACE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.x"
+
+      - name: Start isolated DTS
+        run: |
+          docker run -d --name sample-dts \
+            -p 127.0.0.1:8080:8080 -p 127.0.0.1:8082:8082 \
+            -e DTS_TASK_HUB_NAMES=default \
+            mcr.microsoft.com/dts/dts-emulator:latest@sha256:361323065a608d605f9d3ae56b854eb11f1c47fcc16845a37f948f03ca9c5fac
+          curl --fail --retry 30 --retry-delay 1 --retry-all-errors http://127.0.0.1:8082/ >/dev/null
+
+      - name: Start isolated blob storage
+        if: matrix.group == 'storage'
+        shell: bash
+        run: |
+          key="$(openssl rand -base64 32)"
+          echo "::add-mask::$key"
+          export AZURITE_ACCOUNTS="sampleacct:$key"
+          docker run -d --name sample-azurite \
+            -p 127.0.0.1:10000:10000 -e AZURITE_ACCOUNTS \
+            mcr.microsoft.com/azure-storage/azurite:3.37.0
+          connection="DefaultEndpointsProtocol=http;AccountName=sampleacct;AccountKey=$key;BlobEndpoint=http://127.0.0.1:10000/sampleacct;"
+          echo "::add-mask::$connection"
+          printf 'AZURE_STORAGE_CONNECTION_STRING=%s\nEXPORT_STORAGE_CONNECTION_STRING=%s\n' \
+            "$connection" "$connection" >> "$GITHUB_ENV"
+          printf 'DTS_SAMPLE_ALLOW_INSECURE_STORAGE=1\nDTS_SAMPLE_ISOLATED_TASKHUB=1\n' >> "$GITHUB_ENV"
+          timeout 60 bash -c 'until </dev/tcp/127.0.0.1/10000; do sleep 1; done'
+
+      - name: Start trace collector
+        if: matrix.group == 'telemetry'
+        run: |
+          mkdir -p "$RUNNER_TEMP/sample-traces"
+          docker run -d --name sample-collector \
+            --user "$(id -u):$(id -g)" \
+            -p 127.0.0.1:4318:4318 \
+            -e OTEL_CAPTURE_FILE=/output/traces.json \
+            -v "$GITHUB_WORKSPACE/samples/distributedtracing/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro" \
+            -v "$RUNNER_TEMP/sample-traces:/output" \
+            otel/opentelemetry-collector-contrib:0.160.0
+          printf 'OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318\nOTEL_CAPTURE_FILE=%s/sample-traces/traces.json\n' \
+            "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          timeout 60 bash -c 'until </dev/tcp/127.0.0.1/4318; do sleep 1; done'
+
+      - name: Execute and verify sample entry points
+        run: go test ./tests/samples -run 'TestSampleCatalogue|TestSamplesE2E' -count=1 -timeout=20m -v
+
+      - name: Service diagnostics
+        if: failure()
+        run: |
+          docker logs sample-dts
+          if docker inspect sample-azurite >/dev/null 2>&1; then docker logs sample-azurite; fi
+          if docker inspect sample-collector >/dev/null 2>&1; then docker logs sample-collector; fi
+
+      - name: Stop owned services
+        if: always()
+        run: |
+          for service in sample-dts sample-azurite sample-collector; do
+            if docker inspect "$service" >/dev/null 2>&1; then docker rm -f "$service"; fi
+          done
