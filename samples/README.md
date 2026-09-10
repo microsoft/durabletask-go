@@ -31,7 +31,7 @@ operation is not evidence that a feature works end to end.
 | [distributedtracing](distributedtracing) | Application spans, caller propagation and actual OTLP receipt | OTLP collector and readable trace capture |
 | [exporthistory](exporthistory) | Export jobs and downloaded JSON/JSONL objects | Blob storage and an explicitly isolated Go-only hub |
 | [replayanalysis](replayanalysis) | Analyzer diagnostics and safe runnable counterparts | Local `cmd/orchestratorvet` sources |
-| [serviceoperations](serviceoperations) | Hub-wide filtered purge and empty-entity maintenance | Disposable hub and explicit maintenance acknowledgement |
+| [serviceoperations](serviceoperations) | Hub-wide filtered purge and empty-entity maintenance | Deletes data; read the sample's warning |
 
 Protocol bookkeeping, legacy wire compatibility and unsupported sandbox worker
 profiles are not separate runnable features. SDK regression tests cover the
@@ -91,7 +91,7 @@ DTS_SAMPLES_E2E=1 \
 ```
 
 There is no target switching in the runner: every selected sample inherits the
-same `DTS_CONNECTION_STRING`. Run maintenance separately on a disposable hub.
+same `DTS_CONNECTION_STRING`. Run maintenance separately: it performs hub-wide cleanup.
 Follow the individual READMEs for storage, telemetry and safety settings; the
 runner does not invent aliases, supply credentials or relax those checks.
 
@@ -118,8 +118,7 @@ or a missing precondition remains failed/blocked coverage. Do not turn such
 results into a success or a skipped test just to make a dashboard green.
 
 Hub-wide purge and entity maintenance are destructive.
-The `serviceoperations` example must use a newly provisioned disposable hub, never
-the hub used for ordinary shared examples. Remove that temporary control-plane resource
-afterward through Azure's control plane. Storage/export examples must
+Read the `serviceoperations` warning before running it against a task hub.
+Storage/export examples must
 use isolated destinations and task hubs so they cannot export or delete unrelated
 application data.

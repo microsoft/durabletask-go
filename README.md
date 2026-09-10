@@ -154,7 +154,7 @@ Some samples need additional services:
 
 - `distributedtracing` is a separate Go module and uses a local OTLP collector. Run it with `cd samples/distributedtracing && go run .`.
 - `exporthistory` and `largepayloads` need blob storage; see their READMEs for the storage connection variables.
-- `authentication` requires a real Azure identity and DTS endpoint. Hub-wide administrative examples require a disposable hub and explicit acknowledgement.
+- `authentication` requires a real Azure identity and DTS endpoint. `serviceoperations` performs hub-wide cleanup; read its warning before running it.
 
 Most samples use the shared helper [`samples/internal/dtssample`](./samples/internal/dtssample). The helper reads `DTS_CONNECTION_STRING`, opens the client, and starts the worker. The `exporthistory` sample does not use the helper. That sample needs the client before it registers the export system tasks.
 

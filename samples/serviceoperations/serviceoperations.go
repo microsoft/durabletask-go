@@ -1,4 +1,4 @@
-// Command serviceoperations verifies hub-wide maintenance in a disposable task hub.
+// Command serviceoperations verifies hub-wide purge and entity maintenance.
 package main
 
 import (
@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -24,14 +22,6 @@ func main() {
 }
 
 func run() (err error) {
-	options, err := dtssample.Options()
-	if err != nil {
-		return err
-	}
-	if os.Getenv("DTS_SAMPLE_ALLOW_HUB_MAINTENANCE") != "1" ||
-		!strings.HasPrefix(options.TaskHubName, "sample-") {
-		return errors.New("administration requires DTS_SAMPLE_ALLOW_HUB_MAINTENANCE=1 and a disposable task hub whose name starts with sample-; never use a shared hub")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	registry := task.NewTaskRegistry()
@@ -41,7 +31,7 @@ func run() (err error) {
 	if err := registry.AddEntityN("SampleAdminEntity", adminEntity); err != nil {
 		return err
 	}
-	app, err := dtssample.StartWithOptions(ctx, options, registry)
+	app, err := dtssample.Start(ctx, registry)
 	if err != nil {
 		return err
 	}

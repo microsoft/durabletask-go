@@ -1,24 +1,19 @@
-# Isolated hub maintenance
+# Hub maintenance
 
-**This sample performs hub-wide purge and entity maintenance. Never point it at
-a shared, production, or otherwise valuable hub.** Provision a new, disposable
-hub whose name starts with `sample-`, and remove that resource through Azure's
-control plane after the experiment.
-The sample does not provision Azure resources or change permissions.
+> **Warning:** This sample performs hub-wide cleanup and can delete data outside
+> its own instances. Use a test hub, not production or valuable application data.
 
 ## Run
 
 Use a DTS service that actually implements the operations below:
 
 ```bash
-export DTS_CONNECTION_STRING='Endpoint=https://<scheduler-host>;TaskHub=sample-<unique-disposable-hub>;Authentication=DefaultAzure'
-export DTS_SAMPLE_ALLOW_HUB_MAINTENANCE=1
+export DTS_CONNECTION_STRING='Endpoint=https://<scheduler-host>;TaskHub=<hub>;Authentication=DefaultAzure'
 go run ./samples/serviceoperations
 ```
 
-Both the explicit acknowledgement and the disposable-name prefix are required.
-Filters and entity maintenance act on the whole hub, so unique instance IDs alone
-are not adequate protection.
+No special hub name or additional opt-in variable is required. The sample does
+not provision Azure resources or change permissions.
 
 ## What it proves
 
@@ -27,9 +22,9 @@ are not adequate protection.
   entity must remain unchanged. If a transient record exists before cleanup,
   the sample also requires a reported removal and verifies that record disappears.
 
-Checks are bounded and failures are reported by operation. Ordinary instance
-cleanup uses only the generated IDs; hub-wide operations are intentionally
-restricted to the disposable hub.
+Checks are bounded and failures are reported by operation. Cleanup of the
+sample's instances uses their generated IDs; the demonstrated filter and entity
+maintenance APIs act across the selected hub.
 
 `SAMPLE_OK serviceoperations` is printed only if every operation and cleanup
 succeeds. Unsupported APIs and success responses with no observable state change
