@@ -7,7 +7,17 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 )
+
+func TestTimeoutSemantics(t *testing.T) {
+	if sampleHostTimeout != 5*time.Minute {
+		t.Fatalf("sampleHostTimeout = %s, want 5m", sampleHostTimeout)
+	}
+	if nameEventTimeout != 30*time.Second {
+		t.Fatalf("nameEventTimeout = %s, want 30s", nameEventTimeout)
+	}
+}
 
 func TestReadAndRaiseEvent(t *testing.T) {
 	readError := errors.New("input unavailable")
