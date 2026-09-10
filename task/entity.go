@@ -57,7 +57,6 @@ type EntityContext struct {
 	ctx         context.Context
 	logger      *slog.Logger
 	converter   api.DataConverter
-	parentTrace *protos.TraceContext
 }
 
 type entityPayload struct {
@@ -205,12 +204,11 @@ func (ctx *EntityContext) signalEntity(entityID api.EntityID, operationName stri
 		Id: ctx.nextActionID(),
 		OperationActionType: &protos.OperationAction_SendSignal{
 			SendSignal: &protos.SendSignalAction{
-				InstanceId:         entityID.String(),
-				Name:               operationName,
-				Input:              rawInput,
-				RequestTime:        timestampOrNil(ctx.currentTime),
-				ScheduledTime:      timestampOrNil(scheduledTime),
-				ParentTraceContext: helpers.CloneTraceContext(ctx.parentTrace),
+				InstanceId:    entityID.String(),
+				Name:          operationName,
+				Input:         rawInput,
+				RequestTime:   timestampOrNil(ctx.currentTime),
+				ScheduledTime: timestampOrNil(scheduledTime),
 			},
 		},
 	}
@@ -241,13 +239,12 @@ func (ctx *EntityContext) StartNewOrchestration(name string, opts ...EntityStart
 		Id: ctx.nextActionID(),
 		OperationActionType: &protos.OperationAction_StartNewOrchestration{
 			StartNewOrchestration: &protos.StartNewOrchestrationAction{
-				InstanceId:         options.instanceID,
-				Name:               name,
-				Version:            options.version,
-				Input:              options.rawInput,
-				ScheduledTime:      timestampOrNil(options.scheduledTime),
-				RequestTime:        timestampOrNil(ctx.currentTime),
-				ParentTraceContext: helpers.CloneTraceContext(ctx.parentTrace),
+				InstanceId:    options.instanceID,
+				Name:          name,
+				Version:       options.version,
+				Input:         options.rawInput,
+				ScheduledTime: timestampOrNil(options.scheduledTime),
+				RequestTime:   timestampOrNil(ctx.currentTime),
 			},
 		},
 	}

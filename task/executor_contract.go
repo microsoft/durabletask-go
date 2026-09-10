@@ -30,8 +30,9 @@ type Executor interface {
 	Shutdown(ctx context.Context) error
 }
 
-// EntityExecutor is implemented by executors that process durable entity
-// operation batches.
+// EntityExecutor processes normalized operation batches from V2 entity work
+// items. EntityBatchRequest is an internal execution model, not a supported
+// legacy work-item envelope.
 type EntityExecutor interface {
 	ExecuteEntity(context.Context, *protos.EntityBatchRequest) (*protos.EntityBatchResult, error)
 }

@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added a flat catalogue of directly runnable DTS samples with outcome assertions, owned-resource cleanup, and process-level E2E validation selected by sample name using Go's `-run` flag.
-- Added the exported `task.CallActivityOption` type, per-activity tag options, completion-action tag propagation, distinct activity and sub-orchestration action trace contexts, and legacy entity-operation trace forwarding.
+- Added the exported `task.CallActivityOption` type, per-activity tag options, completion-action tag propagation, and distinct activity and sub-orchestration action trace contexts.
 - Added the top-level `durabletaskscheduler` transport package, a dedicated resilient gRPC worker, DTS emulator tests, and an environment-driven sample.
 - Added advanced management APIs for bounded instance queries/listing, restart, and batch/filter purge polling.
 - Restored `RewindInstance`, `api.RewindOptions`, and `api.WithRewindReason` with request validation and typed errors. Added Python-aligned worker history replacement for real failed-activity and recursive child recovery, preserving successful work and renewing execution identity. Rewind returns after enqueueing, not recovery; activity retry-policy histories with retry timers remain unsupported, matching the pinned Python algorithm. Added a focused rewind sample.
@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Removed legacy entity work-item execution, state-elision handshakes, and legacy entity-operation trace forwarding. DTS workers accept only `EntityRequestV2`; the normalized entity batch representation remains internal.
 - Removed the unsupported SDK methods `SkipGracefulOrchestrationTerminations`, `CreateTaskHub`, and `DeleteTaskHub`, along with `api.CreateTaskHubOptions`, `api.WithRecreateTaskHub`, and the lifecycle-only `client.ErrTaskHubExists` sentinel. Provision and delete task hubs through the Azure control plane or Azure CLI. `RestartInstance`, normal termination, instance purge, and entity maintenance remain supported; `client.ErrTaskHubNotFound` still identifies a configured task hub that does not exist.
 - **Removed the sqlite and PostgreSQL storage backends** (`backend/sqlite` and `backend/postgres`) and the `modernc.org/sqlite` and `github.com/jackc/pgx/v5` dependencies. Durable Task Scheduler is now the only supported runtime, and this repository is the DTS Go SDK rather than an embeddable engine plus storage providers. Applications that hosted an embedded task hub must move to `durabletaskscheduler.NewClient` and `durabletaskscheduler.NewWorker`.
 - **Removed the standalone local gRPC server** (root `main.go` and its `Dockerfile`), along with the `--port`/`--host`/`--db` commands and the `.NET` client-SDK integration-test instructions that targeted it.

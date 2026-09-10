@@ -356,40 +356,12 @@ cancels them only if the shutdown context expires.
 | Scheduled-task capability | Supported; register system tasks and opt in with `durabletaskscheduler.WithScheduledTasks()` |
 | Azure Blob `blob:v2` payloads | Supported with connection-string or identity authentication and .NET-compatible gzip/token semantics |
 | Large-payload capability | Supported and advertised only when a store/resolver is configured |
-| Durable entities | Supported: legacy and V2 work items, scheduled signals, calls, queries, and critical sections |
+| Durable entities | Supported: V2 work items, scheduled signals, calls, queries, and critical sections |
 | Status-based instance-ID deduplication and replacement | Supported through `api.OrchestrationIDReusePolicy.DedupeStatuses` |
 | History export jobs (preview) | Buffers each complete history in worker memory and writes `api.HistoryEvent` JSON/JSONL; the schema version defaults to preview value `1.0` and is caller-configurable, so assess memory and schema compatibility before enabling |
 | Sandbox worker profiles | Not implemented |
 
-The current V2 protobuf cannot carry per-operation trace context or request time
-to an entity worker, and it has no properties map for legacy extended-session
-state elision. DTS therefore sends entity state on every V2 work item; causal
-trace metadata on entity-emitted actions is best-effort.
-
-## Emulator tests
-
-On Apple silicon with Apple Container, the current MCR emulator image runs
-under Rosetta:
-
-```bash
-container image pull mcr.microsoft.com/dts/dts-emulator:latest
-container run --detach --name dts-emulator \
-  --arch amd64 --rosetta \
-  --publish 8080:8080 --publish 8082:8082 \
-  --env DTS_TASK_HUB_NAMES=default \
-  mcr.microsoft.com/dts/dts-emulator:latest
-```
-
-The integration suite is environment-gated:
-
-```bash
-DTS_EMULATOR_ENDPOINT=http://127.0.0.1:8080 \
-DTS_TASK_HUB=default \
-go test ./tests/durabletaskscheduler -count=1
-```
-
-Azurite-backed blob tests additionally use:
-
-```bash
-export AZURITE_CONNECTION_STRING='DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=<development-key>;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
-```
+The V2 protobuf does not carry per-operation trace context or request time to an
+entity worker. DTS sends entity state on every work item; a null state means the
+entity does not exist. Entity-emitted actions cannot inherit per-operation trace
+context.

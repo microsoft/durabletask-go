@@ -45,7 +45,8 @@ func (w *TaskHubGrpcWorker) consumeConnection(run *grpcWorkerRun, connection *gr
 			}
 		case *protos.WorkItem_EntityRequest:
 			if err := w.dispatchEntity(run, connection, workItem.GetCompletionToken(), func(ctx context.Context) {
-				w.processEntityBatch(ctx, connection.client, workItem.GetCompletionToken(), request.EntityRequest, nil)
+				w.logger.Error("legacy entity work items are not supported; the scheduler must send EntityRequestV2")
+				w.abandonEntity(ctx, connection.client, workItem.GetCompletionToken())
 			}); err != nil {
 				return observedMessage, err
 			}
@@ -569,19 +570,9 @@ func (w *TaskHubGrpcWorker) processEntityV2(
 		w.abandonEntity(ctx, client, completionToken)
 		return
 	}
-	w.processEntityBatch(ctx, client, completionToken, batch, operationInfos)
-}
-
-func (w *TaskHubGrpcWorker) processEntityBatch(
-	ctx context.Context,
-	client protos.TaskHubSidecarServiceClient,
-	completionToken string,
-	request *protos.EntityBatchRequest,
-	operationInfos []*protos.OperationInfo,
-) {
-	entityID, parseErr := api.EntityIDFromString(request.GetInstanceId())
+	entityID, parseErr := api.EntityIDFromString(batch.GetInstanceId())
 	if parseErr != nil {
-		w.logger.Errorf("%s: invalid entity instance ID: %v", request.GetInstanceId(), parseErr)
+		w.logger.Errorf("%s: invalid entity instance ID: %v", batch.GetInstanceId(), parseErr)
 		w.abandonEntity(ctx, client, completionToken)
 		return
 	}
@@ -590,7 +581,7 @@ func (w *TaskHubGrpcWorker) processEntityBatch(
 		w.abandonEntity(ctx, client, completionToken)
 		return
 	}
-	if err := largepayload.TransformEntityBatchRequest(ctx, w.options.largePayloads, request); err != nil {
+	if err := largepayload.TransformEntityBatchRequest(ctx, w.options.largePayloads, batch); err != nil {
 		w.logger.Errorf("%s: failed to hydrate entity batch payloads: %v", request.GetInstanceId(), err)
 		if entityProcessingCanceled(ctx, err) {
 			w.abandonEntity(ctx, client, completionToken)
@@ -605,7 +596,7 @@ func (w *TaskHubGrpcWorker) processEntityBatch(
 		w.abandonEntity(ctx, client, completionToken)
 		return
 	}
-	result, err := executeEntitySafely(ctx, executor, request)
+	result, err := executeEntitySafely(ctx, executor, batch)
 	if err != nil {
 		if entityProcessingCanceled(ctx, err) {
 			w.logger.Warnf("%s: entity execution canceled; abandoning work item", request.GetInstanceId())
@@ -620,7 +611,7 @@ func (w *TaskHubGrpcWorker) processEntityBatch(
 		result = newEntityBatchFailure(completionToken, missingResultErr)
 	}
 	result.CompletionToken = completionToken
-	if err := validateEntityBatchResult(result, len(request.Operations), operationInfos); err != nil {
+	if err := validateEntityBatchResult(result, operationInfos); err != nil {
 		w.logger.Errorf("%s: invalid entity executor result: %v", request.GetInstanceId(), err)
 		result = newEntityBatchFailure(completionToken, err)
 	}
@@ -685,32 +676,21 @@ func (w *TaskHubGrpcWorker) completeEntityBatchFailure(
 
 func validateEntityBatchResult(
 	result *protos.EntityBatchResult,
-	operationCount int,
 	operationInfos []*protos.OperationInfo,
 ) error {
-	if result.FailureDetails != nil || result.RequiresState {
-		if result.FailureDetails != nil && result.RequiresState {
-			return fmt.Errorf("entity result cannot contain both failure details and a state request")
-		}
+	if result.RequiresState {
+		return fmt.Errorf("V2 entity results cannot request state; every work item includes entity state")
+	}
+	if result.FailureDetails != nil {
 		if len(result.Results) != 0 || len(result.Actions) != 0 || result.EntityState != nil ||
 			len(result.OperationInfos) != 0 {
-			return fmt.Errorf("entity batch failures and state requests must not contain partial effects")
+			return fmt.Errorf("entity batch failures must not contain partial effects")
 		}
 		result.OperationInfos = nil
 		return nil
 	}
-	if len(result.Results) != operationCount {
-		return fmt.Errorf(
-			"entity result count %d does not match operation count %d",
-			len(result.Results),
-			operationCount,
-		)
-	}
 	if len(result.OperationInfos) != 0 {
 		return fmt.Errorf("entity executor result must not set operation routing metadata")
-	}
-	if operationInfos == nil {
-		return nil
 	}
 	if len(operationInfos) != len(result.Results) {
 		return fmt.Errorf(

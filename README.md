@@ -397,7 +397,7 @@ The SDK also supports scheduled signals, orchestration calls, entity-to-entity s
 
 Entity names and operation names are matched case-insensitively using the same invariant rule as the .NET SDK, so a name resolves to the same entity in both SDKs.
 
-The DTS worker accepts the legacy `EntityBatchRequest` work item and the current `EntityRequestV2` work item.
+The DTS worker accepts only V2 entity work items (`EntityRequestV2`).
 
 Full sample: [samples/entity](./samples/entity).
 
@@ -442,7 +442,7 @@ The SDK does not save the identity of the converter. A new converter must contin
 
 Use `api.WithTags`, `task.WithActivityTags`, and `task.WithSubOrchestrationTags` to attach user tags. An activity and a sub-orchestration inherit the tags of the parent orchestration. A tag on the action has priority over an inherited tag. The completion actions carry the current tags, so ContinueAsNew keeps them.
 
-The client sends the sampled caller trace context when it schedules an orchestration or signals an entity. The worker adds separate action trace contexts for the service-owned activity and sub-orchestration spans. The worker does not emit duplicate local Durable Task spans. A legacy entity operation request also sends its operation trace context to the entity actions. The current DTS V2 entity request does not carry that source field.
+The client sends the sampled caller trace context when it schedules an orchestration or signals an entity. The worker adds separate action trace contexts for the service-owned activity and sub-orchestration spans. The worker does not emit duplicate local Durable Task spans. V2 entity requests do not carry per-operation trace context, so entity-emitted actions cannot inherit it.
 
 Use `task.OrchestrationOptions.MaxEventsPerTurn` to limit the new events in one turn. If the worker uses only part of a batch, it sets `numEventsProcessed`. DTS then keeps the remaining events for the next replay. This count obeys the DTS work-item rules. The orchestration control markers do not count against the limit.
 

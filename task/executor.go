@@ -14,7 +14,6 @@ import (
 	"github.com/microsoft/durabletask-go/internal/failure"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
-	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -373,11 +372,6 @@ func (te *taskExecutor) ExecuteEntity(
 	if err != nil {
 		return nil, fmt.Errorf("invalid entity instance ID: %w", err)
 	}
-	if !entityStateIncluded(req.Properties) {
-		// The scheduler omitted the entity state, so the batch cannot run until
-		// it is retransmitted.
-		return &protos.EntityBatchResult{RequiresState: true}, nil
-	}
 	factory, ok := te.Registry.getEntityFactory(entityID.Name)
 	if !ok {
 		result := &protos.EntityBatchResult{
@@ -481,20 +475,6 @@ func (te *taskExecutor) ExecuteEntity(
 	return result, nil
 }
 
-// entityStateIncluded reports whether the scheduler attached entity state to the
-// work item. It mirrors .NET's GrpcInstanceRunnerUtils: a missing property, or
-// one whose value is not a boolean, means the state was included.
-func entityStateIncluded(properties map[string]*structpb.Value) bool {
-	property, exists := properties["IncludeState"]
-	if !exists {
-		return true
-	}
-	if _, isBool := property.GetKind().(*structpb.Value_BoolValue); !isBool {
-		return true
-	}
-	return property.GetBoolValue()
-}
-
 func (te *taskExecutor) newEntityContext(
 	ctx context.Context,
 	entityID api.EntityID,
@@ -536,7 +516,6 @@ func (te *taskExecutor) newEntityContext(
 		ctx:         ctx,
 		logger:      logger,
 		converter:   te.converter,
-		parentTrace: helpers.CloneTraceContext(operation.GetTraceContext()),
 	}
 }
 

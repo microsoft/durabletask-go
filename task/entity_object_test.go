@@ -10,7 +10,6 @@ import (
 
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -93,7 +92,7 @@ func Test_EntityObjectFactory_StateLifecycleAndDispatch(t *testing.T) {
 	require.JSONEq(t, `{"value":10}`, result.EntityState.GetValue())
 }
 
-func Test_EntityFactory_RunsAfterStateHandshake(t *testing.T) {
+func Test_EntityFactory_RunsWithoutExistingState(t *testing.T) {
 	registry := NewTaskRegistry()
 	factoryCalls := 0
 	require.NoError(t, registry.AddEntityFactoryN("counter", func(EntityFactoryContext) (EntityBatch, error) {
@@ -106,18 +105,9 @@ func Test_EntityFactory_RunsAfterStateHandshake(t *testing.T) {
 
 	result, err := executor.ExecuteEntity(context.Background(), &protos.EntityBatchRequest{
 		InstanceId: "@counter@key",
-		Properties: map[string]*structpb.Value{
-			"IncludeState": structpb.NewBoolValue(false),
-		},
 	})
 	require.NoError(t, err)
-	require.True(t, result.RequiresState)
-	require.Zero(t, factoryCalls)
-
-	_, err = executor.ExecuteEntity(context.Background(), &protos.EntityBatchRequest{
-		InstanceId: "@counter@key",
-	})
-	require.NoError(t, err)
+	require.False(t, result.RequiresState)
 	require.Equal(t, 1, factoryCalls)
 }
 

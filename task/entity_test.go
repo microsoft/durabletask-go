@@ -5,10 +5,8 @@ import (
 	"testing"
 
 	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func presentEntityPayload(value string) entityPayload {
@@ -107,14 +105,9 @@ func Test_EntityContext_RawState(t *testing.T) {
 }
 
 func Test_EntityContext_SignalEntity(t *testing.T) {
-	parentTrace := &protos.TraceContext{
-		TraceParent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
-		TraceState:  wrapperspb.String("vendor=value"),
-	}
 	ctx := &EntityContext{
-		ID:          api.NewEntityID("test", "key1"),
-		Operation:   "op",
-		parentTrace: parentTrace,
+		ID:        api.NewEntityID("test", "key1"),
+		Operation: "op",
 	}
 
 	err := ctx.SignalEntity(api.NewEntityID("other", "key2"), "increment", 5)
@@ -127,8 +120,7 @@ func Test_EntityContext_SignalEntity(t *testing.T) {
 	assert.Equal(t, "@other@key2", signal.InstanceId)
 	assert.Equal(t, "increment", signal.Name)
 	assert.Equal(t, "5", signal.Input.GetValue())
-	assert.Equal(t, parentTrace, signal.ParentTraceContext)
-	assert.NotSame(t, parentTrace, signal.ParentTraceContext)
+	assert.Nil(t, signal.ParentTraceContext)
 }
 
 func Test_EntityContext_TypedNilSignalInputIsAbsent(t *testing.T) {
@@ -167,13 +159,9 @@ func Test_EntityContext_SignalEntity_RejectsInvalidEntityID(t *testing.T) {
 }
 
 func Test_EntityContext_StartNewOrchestration(t *testing.T) {
-	parentTrace := &protos.TraceContext{
-		TraceParent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
-	}
 	ctx := &EntityContext{
-		ID:          api.NewEntityID("test", "key1"),
-		Operation:   "op",
-		parentTrace: parentTrace,
+		ID:        api.NewEntityID("test", "key1"),
+		Operation: "op",
 	}
 
 	err := ctx.StartNewOrchestration("MyOrchestrator",
@@ -189,8 +177,7 @@ func Test_EntityContext_StartNewOrchestration(t *testing.T) {
 	assert.Equal(t, "MyOrchestrator", startOrch.Name)
 	assert.Equal(t, "my-instance", startOrch.InstanceId)
 	assert.Equal(t, `"hello"`, startOrch.Input.GetValue())
-	assert.Equal(t, parentTrace, startOrch.ParentTraceContext)
-	assert.NotSame(t, parentTrace, startOrch.ParentTraceContext)
+	assert.Nil(t, startOrch.ParentTraceContext)
 }
 
 func Test_EntityContext_StartNewOrchestration_RawInput(t *testing.T) {

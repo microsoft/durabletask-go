@@ -1113,7 +1113,22 @@ func TestTaskHubGrpcWorkerAppliesActivityBackpressure(t *testing.T) {
 	require.NoError(t, worker.Shutdown(context.Background()))
 }
 
-func TestTaskHubGrpcWorkerCompletesLegacyAndV2EntityBatches(t *testing.T) {
+func newFakeEntitySignalRequest(operation string, input *wrapperspb.StringValue) *protos.EntityRequest {
+	return &protos.EntityRequest{
+		InstanceId: "@counter@key",
+		OperationRequests: []*protos.HistoryEvent{{
+			EventType: &protos.HistoryEvent_EntityOperationSignaled{
+				EntityOperationSignaled: &protos.EntityOperationSignaledEvent{
+					RequestId: uuid.NewString(),
+					Operation: operation,
+					Input:     input,
+				},
+			},
+		}},
+	}
+}
+
+func TestTaskHubGrpcWorkerCompletesV2EntityBatches(t *testing.T) {
 	stream := newFakeWorkItemStream(2)
 	client := &fakeSchedulerClient{stream: stream}
 	worker := newFakeWorker(t, client, WithMaxConcurrentEntityWorkItems(1))
@@ -1121,6 +1136,7 @@ func TestTaskHubGrpcWorkerCompletesLegacyAndV2EntityBatches(t *testing.T) {
 		executeEntity: func(_ context.Context, request *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
 			require.Equal(t, "@counter@key", request.InstanceId)
 			require.Len(t, request.Operations, 1)
+			require.Equal(t, "1", request.Operations[0].Input.GetValue())
 			return &protos.EntityBatchResult{
 				Results: []*protos.OperationResult{{
 					ResultType: &protos.OperationResult_Success{
@@ -1131,14 +1147,11 @@ func TestTaskHubGrpcWorkerCompletesLegacyAndV2EntityBatches(t *testing.T) {
 			}, nil
 		},
 	}
-	legacyRequestID := uuid.NewString()
-	v2RequestID := uuid.NewString()
+	signal := newFakeEntitySignalRequest("add", wrapperspb.String("1"))
+	callRequestID := uuid.NewString()
 	stream.results <- fakeWorkItemResult{item: &protos.WorkItem{
-		Request: &protos.WorkItem_EntityRequest{EntityRequest: &protos.EntityBatchRequest{
-			InstanceId: "@counter@key",
-			Operations: []*protos.OperationRequest{{Operation: "add", RequestId: legacyRequestID}},
-		}},
-		CompletionToken: "legacy-token",
+		Request:         &protos.WorkItem_EntityRequestV2{EntityRequestV2: signal},
+		CompletionToken: "signal-token",
 	}}
 	stream.results <- fakeWorkItemResult{item: &protos.WorkItem{
 		Request: &protos.WorkItem_EntityRequestV2{EntityRequestV2: &protos.EntityRequest{
@@ -1146,14 +1159,16 @@ func TestTaskHubGrpcWorkerCompletesLegacyAndV2EntityBatches(t *testing.T) {
 			OperationRequests: []*protos.HistoryEvent{{
 				EventType: &protos.HistoryEvent_EntityOperationCalled{
 					EntityOperationCalled: &protos.EntityOperationCalledEvent{
-						RequestId:        v2RequestID,
-						Operation:        "add",
-						ParentInstanceId: wrapperspb.String("caller"),
+						RequestId:         callRequestID,
+						Operation:         "add",
+						Input:             wrapperspb.String("1"),
+						ParentInstanceId:  wrapperspb.String("caller"),
+						ParentExecutionId: wrapperspb.String("caller-execution"),
 					},
 				},
 			}},
 		}},
-		CompletionToken: "v2-token",
+		CompletionToken: "call-token",
 	}}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1164,14 +1179,51 @@ func TestTaskHubGrpcWorkerCompletesLegacyAndV2EntityBatches(t *testing.T) {
 		return len(client.entityCompletions) == 2
 	}, time.Second, time.Millisecond)
 	client.mu.Lock()
-	require.Equal(t, "legacy-token", client.entityCompletions[0].CompletionToken)
-	require.Equal(t, "v2-token", client.entityCompletions[1].CompletionToken)
+	require.Equal(t, "signal-token", client.entityCompletions[0].CompletionToken)
+	require.Len(t, client.entityCompletions[0].OperationInfos, 1)
+	require.Equal(t, signal.OperationRequests[0].GetEntityOperationSignaled().RequestId, client.entityCompletions[0].OperationInfos[0].RequestId)
+	require.Nil(t, client.entityCompletions[0].OperationInfos[0].ResponseDestination)
+	require.Equal(t, "call-token", client.entityCompletions[1].CompletionToken)
 	require.Len(t, client.entityCompletions[1].OperationInfos, 1)
-	require.Equal(t, v2RequestID, client.entityCompletions[1].OperationInfos[0].RequestId)
+	require.Equal(t, callRequestID, client.entityCompletions[1].OperationInfos[0].RequestId)
 	require.Equal(t, "caller", client.entityCompletions[1].OperationInfos[0].ResponseDestination.InstanceId)
+	require.Equal(t, "caller-execution", client.entityCompletions[1].OperationInfos[0].ResponseDestination.ExecutionId.GetValue())
 	client.mu.Unlock()
 	cancel()
 	require.NoError(t, worker.Shutdown(context.Background()))
+}
+
+func TestTaskHubGrpcWorkerRejectsLegacyEntityWorkItems(t *testing.T) {
+	stream := newFakeWorkItemStream(1)
+	client := &fakeSchedulerClient{stream: stream}
+	worker := newFakeWorker(t, client)
+	var executions atomic.Int32
+	worker.executor = &recordingExecutor{
+		executeEntity: func(context.Context, *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
+			executions.Add(1)
+			return &protos.EntityBatchResult{}, nil
+		},
+	}
+	stream.results <- fakeWorkItemResult{item: &protos.WorkItem{
+		Request: &protos.WorkItem_EntityRequest{EntityRequest: &protos.EntityBatchRequest{
+			InstanceId: "@counter@key",
+			Operations: []*protos.OperationRequest{{Operation: "add", RequestId: uuid.NewString()}},
+		}},
+		CompletionToken: "legacy-token",
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, worker.Start(ctx))
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return client.entityAbandonAttempts == 1
+	}, time.Second, time.Millisecond)
+	cancel()
+	require.NoError(t, worker.Shutdown(context.Background()))
+	require.Zero(t, executions.Load())
+	require.Empty(t, client.entityCompletions)
 }
 
 func TestTaskHubGrpcWorkerForwardsEntityParameters(t *testing.T) {
@@ -1244,15 +1296,11 @@ func TestTaskHubGrpcWorkerCompletesEntityFrameworkFailure(t *testing.T) {
 		},
 	}
 
-	worker.processEntityBatch(
+	worker.processEntityV2(
 		context.Background(),
 		client,
 		"entity-token",
-		&protos.EntityBatchRequest{
-			InstanceId: "@counter@key",
-			Operations: []*protos.OperationRequest{{Operation: "get"}},
-		},
-		nil,
+		newFakeEntitySignalRequest("get", nil),
 	)
 
 	require.Len(t, client.entityCompletions, 1)
@@ -1291,12 +1339,11 @@ func TestTaskHubGrpcWorkerCompletesEntityExecutorPanicAndNilResult(t *testing.T)
 			client := new(fakeSchedulerClient)
 			worker := newFakeWorker(t, client)
 			worker.executor = &recordingExecutor{executeEntity: test.executeEntity}
-			worker.processEntityBatch(
+			worker.processEntityV2(
 				context.Background(),
 				client,
 				"entity-token",
-				&protos.EntityBatchRequest{InstanceId: "@counter@key"},
-				nil,
+				&protos.EntityRequest{InstanceId: "@counter@key"},
 			)
 			require.Len(t, client.entityCompletions, 1)
 			require.Contains(t, client.entityCompletions[0].FailureDetails.ErrorMessage, test.errorContains)
@@ -1344,15 +1391,11 @@ func TestTaskHubGrpcWorkerCompletesEntityPayloadFailures(t *testing.T) {
 			ThresholdBytes:  1,
 			MaxPayloadBytes: 1024,
 		}))
-		worker.processEntityBatch(
+		worker.processEntityV2(
 			context.Background(),
 			client,
 			"token",
-			&protos.EntityBatchRequest{
-				InstanceId: "@counter@key",
-				Operations: []*protos.OperationRequest{{Operation: "run", Input: input}},
-			},
-			nil,
+			newFakeEntitySignalRequest("run", input),
 		)
 		require.Len(t, client.entityCompletions, 1)
 		require.Contains(t, client.entityCompletions[0].FailureDetails.ErrorMessage, "hydrate failed")
@@ -1367,15 +1410,11 @@ func TestTaskHubGrpcWorkerCompletesEntityPayloadFailures(t *testing.T) {
 			ThresholdBytes:  1,
 			MaxPayloadBytes: 1024,
 		}))
-		worker.processEntityBatch(
+		worker.processEntityV2(
 			context.Background(),
 			client,
 			"token",
-			&protos.EntityBatchRequest{
-				InstanceId: "@counter@key",
-				Operations: []*protos.OperationRequest{{Operation: "run", Input: input}},
-			},
-			nil,
+			newFakeEntitySignalRequest("run", input),
 		)
 		require.Empty(t, client.entityCompletions)
 		require.Equal(t, 1, client.entityAbandonAttempts)
@@ -1399,12 +1438,11 @@ func TestTaskHubGrpcWorkerCompletesEntityPayloadFailures(t *testing.T) {
 				return &protos.EntityBatchResult{EntityState: wrapperspb.String("large")}, nil
 			},
 		}
-		worker.processEntityBatch(
+		worker.processEntityV2(
 			context.Background(),
 			client,
 			"token",
-			&protos.EntityBatchRequest{InstanceId: "@counter@key"},
-			nil,
+			&protos.EntityRequest{InstanceId: "@counter@key"},
 		)
 		require.Len(t, client.entityCompletions, 1)
 		completion := client.entityCompletions[0]
@@ -1431,33 +1469,38 @@ func TestTaskHubGrpcWorkerAbandonsWhenEntityFailureFallbackCannotComplete(t *tes
 		},
 	}
 
-	worker.processEntityBatch(
+	worker.processEntityV2(
 		context.Background(),
 		client,
 		"token",
-		&protos.EntityBatchRequest{InstanceId: "@counter@key"},
-		nil,
+		&protos.EntityRequest{InstanceId: "@counter@key"},
 	)
 	require.Equal(t, 1, client.entityAbandonAttempts)
 }
 
 func TestTaskHubGrpcWorkerConvertsInvalidEntityResultsToBatchFailure(t *testing.T) {
 	tests := []struct {
-		name           string
-		result         *protos.EntityBatchResult
-		operationInfos []*protos.OperationInfo
-		errorContains  string
+		name          string
+		result        *protos.EntityBatchResult
+		errorContains string
 	}{
 		{
-			name:          "V1 result count mismatch",
+			name:          "V2 result count mismatch",
 			result:        &protos.EntityBatchResult{},
 			errorContains: "does not match operation count",
 		},
 		{
-			name:           "V2 result count mismatch",
-			result:         &protos.EntityBatchResult{},
-			operationInfos: []*protos.OperationInfo{{RequestId: uuid.NewString()}},
-			errorContains:  "does not match operation count",
+			name:          "state elision is unsupported",
+			result:        &protos.EntityBatchResult{RequiresState: true},
+			errorContains: "V2 entity results cannot request state",
+		},
+		{
+			name: "executor supplies routing metadata",
+			result: &protos.EntityBatchResult{
+				Results:        []*protos.OperationResult{{}},
+				OperationInfos: []*protos.OperationInfo{{RequestId: uuid.NewString()}},
+			},
+			errorContains: "must not set operation routing metadata",
 		},
 		{
 			name: "batch failure with partial state",
@@ -1478,15 +1521,11 @@ func TestTaskHubGrpcWorkerConvertsInvalidEntityResultsToBatchFailure(t *testing.
 				},
 			}
 
-			worker.processEntityBatch(
+			worker.processEntityV2(
 				context.Background(),
 				client,
 				"entity-token",
-				&protos.EntityBatchRequest{
-					InstanceId: "@counter@key",
-					Operations: []*protos.OperationRequest{{Operation: "get"}},
-				},
-				test.operationInfos,
+				newFakeEntitySignalRequest("get", nil),
 			)
 
 			require.Len(t, client.entityCompletions, 1)
@@ -1494,8 +1533,14 @@ func TestTaskHubGrpcWorkerConvertsInvalidEntityResultsToBatchFailure(t *testing.
 			require.Contains(t, completion.FailureDetails.ErrorMessage, test.errorContains)
 			require.Empty(t, completion.OperationInfos)
 			require.Nil(t, completion.EntityState)
+			require.False(t, completion.RequiresState)
 		})
 	}
+}
+
+func TestValidateEntityBatchResultRequiresV2Routing(t *testing.T) {
+	result := &protos.EntityBatchResult{Results: []*protos.OperationResult{{}}}
+	require.ErrorContains(t, validateEntityBatchResult(result, nil), "does not match operation count")
 }
 
 func TestTaskHubGrpcWorkerAbandonsInvalidV2EntityWithBoundedRetry(t *testing.T) {

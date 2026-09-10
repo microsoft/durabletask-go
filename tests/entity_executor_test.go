@@ -12,7 +12,6 @@ import (
 	"github.com/microsoft/durabletask-go/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -20,7 +19,7 @@ func newEntityExecutor(r *task.TaskRegistry) task.EntityExecutor {
 	return task.NewTaskExecutor(r).(task.EntityExecutor)
 }
 
-func Test_Executor_EntityActionsInheritOperationTraceContext(t *testing.T) {
+func Test_Executor_EntityActionsWithoutOperationTraceContext(t *testing.T) {
 	registry := task.NewTaskRegistry()
 	require.NoError(t, registry.AddEntityN("router", func(ctx *task.EntityContext) (any, error) {
 		if err := ctx.SignalEntity(api.NewEntityID("target", "one"), "signal", nil); err != nil {
@@ -31,27 +30,20 @@ func Test_Executor_EntityActionsInheritOperationTraceContext(t *testing.T) {
 			task.WithEntityStartOrchestrationInstanceID("child-instance"),
 		)
 	}))
-	parent := &protos.TraceContext{
-		TraceParent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
-		TraceState:  wrapperspb.String("vendor=value"),
-	}
 	result, err := newEntityExecutor(registry).ExecuteEntity(
 		context.Background(),
 		&protos.EntityBatchRequest{
 			InstanceId: "@router@key",
 			Operations: []*protos.OperationRequest{{
-				Operation:    "route",
-				RequestId:    "request",
-				TraceContext: parent,
+				Operation: "route",
+				RequestId: "request",
 			}},
 		},
 	)
 	require.NoError(t, err)
 	require.Len(t, result.Actions, 2)
-	require.Equal(t, parent, result.Actions[0].GetSendSignal().GetParentTraceContext())
-	require.Equal(t, parent, result.Actions[1].GetStartNewOrchestration().GetParentTraceContext())
-	require.NotSame(t, parent, result.Actions[0].GetSendSignal().GetParentTraceContext())
-	require.NotSame(t, parent, result.Actions[1].GetStartNewOrchestration().GetParentTraceContext())
+	require.Nil(t, result.Actions[0].GetSendSignal().GetParentTraceContext())
+	require.Nil(t, result.Actions[1].GetStartNewOrchestration().GetParentTraceContext())
 }
 
 func Test_Executor_EntityBasicOperation(t *testing.T) {
@@ -777,89 +769,42 @@ func Test_Executor_EntityStartOrchestrationIDIsStableAcrossRetry(t *testing.T) {
 	)
 }
 
-// The scheduler signals an elided entity state with the "IncludeState" property,
-// matching Microsoft.DurableTask's GrpcInstanceRunnerUtils.
-func Test_Executor_EntityStateElisionRequestsState(t *testing.T) {
-	var invoked bool
-	r := task.NewTaskRegistry()
-	require.NoError(t, r.AddEntityN("cached", func(*task.EntityContext) (any, error) {
-		invoked = true
-		return nil, nil
-	}))
-	executor := newEntityExecutor(r)
-	result, err := executor.ExecuteEntity(context.Background(), &protos.EntityBatchRequest{
-		InstanceId: "@cached@key",
-		Operations: []*protos.OperationRequest{{
-			Operation: "get",
-			RequestId: uuid.NewString(),
-		}},
-		Properties: map[string]*structpb.Value{
-			"IncludeState": structpb.NewBoolValue(false),
-		},
-	})
-	require.NoError(t, err)
-	assert.True(t, result.RequiresState)
-	assert.False(t, invoked)
-	assert.Empty(t, result.Results)
-	assert.Nil(t, result.EntityState)
-}
-
-// A state request is driven by the property alone, so an attached state does not
-// suppress it and an unregistered entity does not mask it.
-func Test_Executor_EntityStateElisionIgnoresAttachedStateAndRegistration(t *testing.T) {
-	executor := newEntityExecutor(task.NewTaskRegistry())
-	result, err := executor.ExecuteEntity(context.Background(), &protos.EntityBatchRequest{
-		InstanceId:  "@unregistered@key",
-		EntityState: wrapperspb.String("42"),
-		Operations: []*protos.OperationRequest{{
-			Operation: "get",
-			RequestId: uuid.NewString(),
-		}},
-		Properties: map[string]*structpb.Value{
-			"IncludeState": structpb.NewBoolValue(false),
-		},
-	})
-	require.NoError(t, err)
-	assert.True(t, result.RequiresState)
-	assert.Empty(t, result.Results)
-}
-
-// A missing or non-boolean property means the state was included.
-func Test_Executor_EntityStateElisionDefaultsToIncluded(t *testing.T) {
-	properties := map[string]map[string]*structpb.Value{
-		"absent": nil,
-		"wrong-type": {
-			"IncludeState": structpb.NewStringValue("false"),
-		},
-		"misspelled": {
-			"includestate": structpb.NewBoolValue(false),
-		},
-		"true": {
-			"IncludeState": structpb.NewBoolValue(true),
-		},
+func Test_Executor_EntityStateAlwaysIncluded(t *testing.T) {
+	states := map[string]*wrapperspb.StringValue{
+		"new entity":      nil,
+		"existing entity": wrapperspb.String("42"),
 	}
-	for name, property := range properties {
+	for name, state := range states {
 		t.Run(name, func(t *testing.T) {
 			var invoked bool
 			r := task.NewTaskRegistry()
-			require.NoError(t, r.AddEntityN("cached", func(*task.EntityContext) (any, error) {
+			require.NoError(t, r.AddEntityN("counter", func(ctx *task.EntityContext) (any, error) {
 				invoked = true
+				assert.Equal(t, state != nil, ctx.HasState())
+				if state != nil {
+					value, hasValue := ctx.GetRawState()
+					assert.True(t, hasValue)
+					assert.Equal(t, state.Value, value)
+				}
 				return nil, nil
 			}))
 			result, err := newEntityExecutor(r).ExecuteEntity(
 				context.Background(),
 				&protos.EntityBatchRequest{
-					InstanceId: "@cached@key",
+					InstanceId:  "@counter@key",
+					EntityState: state,
 					Operations: []*protos.OperationRequest{{
 						Operation: "get",
 						RequestId: uuid.NewString(),
 					}},
-					Properties: property,
 				},
 			)
 			require.NoError(t, err)
 			assert.False(t, result.RequiresState)
 			assert.True(t, invoked)
+			require.Len(t, result.Results, 1)
+			require.NotNil(t, result.Results[0].GetSuccess())
+			assert.Equal(t, state, result.EntityState)
 		})
 	}
 }
