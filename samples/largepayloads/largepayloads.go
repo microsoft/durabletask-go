@@ -294,6 +294,15 @@ func verifyStoredPayloads(
 ) error {
 	sawHash := false
 	for name := range names {
+		properties, err := client.ServiceClient().NewContainerClient(container).NewBlobClient(name).GetProperties(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("read payload blob %s properties: %w", name, err)
+		}
+		// A download may be transparently decompressed by the HTTP transport.
+		storedGzip := properties.ContentEncoding != nil && strings.EqualFold(*properties.ContentEncoding, "gzip")
+		if storedGzip != wantGzip {
+			return fmt.Errorf("payload blob %s stored gzip=%t, want %t", name, storedGzip, wantGzip)
+		}
 		response, err := client.DownloadStream(ctx, container, name, nil)
 		if err != nil {
 			return fmt.Errorf("download payload blob %s: %w", name, err)
@@ -304,9 +313,6 @@ func verifyStoredPayloads(
 			return errors.Join(readErr, closeErr)
 		}
 		isGzip := response.ContentEncoding != nil && strings.EqualFold(*response.ContentEncoding, "gzip")
-		if isGzip != wantGzip {
-			return fmt.Errorf("payload blob %s gzip=%t, want %t", name, isGzip, wantGzip)
-		}
 		if isGzip {
 			reader, err := gzip.NewReader(bytes.NewReader(body))
 			if err != nil {
