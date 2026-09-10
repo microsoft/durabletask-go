@@ -345,7 +345,7 @@ cancels them only if the shutdown context expires.
 | Bounded orchestration/activity/entity concurrency | Supported |
 | Work-item filters for orchestrations, activities, and entities | Supported |
 | Completion tokens and abandon RPCs | Supported |
-| Oversized orchestration responses | Blob-externalized before send; residual responses above the effective limit fail once with non-retriable guidance; the Go worker does not use deprecated legacy chunking |
+| Oversized orchestration responses | Blob-externalized before send; residual responses above the effective limit fail once with non-retriable guidance |
 | Health pings, silent-disconnect detection, auth/RBAC recovery, and channel recreation | Supported |
 | Public orchestration history | Supported through buffered and callback-streaming API-owned records |
 | Version-aware registry dispatch and controlled unversioned fallback | Supported |
