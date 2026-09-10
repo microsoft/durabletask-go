@@ -139,9 +139,9 @@ func verifyStartConcurrencyAndDrain(
 	select {
 	case err := <-shutdownDone:
 		if err != nil {
-			return fmt.Errorf("Shutdown completed with an error while activity was blocked: %w", err)
+			return fmt.Errorf("shutdown completed with an error while activity was blocked: %w", err)
 		}
-		return errors.New("Shutdown completed before the accepted blocked activity was released")
+		return errors.New("shutdown completed before the accepted blocked activity was released")
 	case <-time.After(200 * time.Millisecond):
 	}
 	barrier.Release()
@@ -151,7 +151,7 @@ func verifyStartConcurrencyAndDrain(
 			return err
 		}
 	case <-shutdownCtx.Done():
-		return fmt.Errorf("Shutdown did not drain the released activity before deadline: %w", shutdownCtx.Err())
+		return fmt.Errorf("shutdown did not drain the released activity before deadline: %w", shutdownCtx.Err())
 	}
 	workerStopped = true
 	if worker.Running() {
@@ -238,7 +238,7 @@ func verifyRun(
 			return err
 		}
 	case <-time.After(5 * time.Second):
-		return errors.New("Run worker did not stop after its context was canceled")
+		return errors.New("run worker did not stop after its context was canceled")
 	}
 	fmt.Println("verified Run blocks and exits cleanly when its context is canceled")
 	return nil

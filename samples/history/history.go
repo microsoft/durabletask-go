@@ -206,12 +206,18 @@ func verifyStreamedHistory(
 
 func verifyHistoryCaps(ctx context.Context, client *durabletaskscheduler.Client, id api.InstanceID, executionID string) error {
 	_, err := client.GetOrchestrationHistory(ctx, id, api.HistoryQuery{ExecutionID: executionID, MaxEvents: 1})
+	if err == nil {
+		return errors.New("history event limit was not enforced")
+	}
 	if !errors.Is(err, api.ErrHistoryLimitExceeded) {
-		return fmt.Errorf("MaxEvents cap error = %v, want %v", err, api.ErrHistoryLimitExceeded)
+		return fmt.Errorf("read event-limited history: %w", err)
 	}
 	_, err = client.GetOrchestrationHistory(ctx, id, api.HistoryQuery{ExecutionID: executionID, MaxBytes: 64})
+	if err == nil {
+		return errors.New("history byte limit was not enforced")
+	}
 	if !errors.Is(err, api.ErrHistoryLimitExceeded) {
-		return fmt.Errorf("MaxBytes cap error = %v, want %v", err, api.ErrHistoryLimitExceeded)
+		return fmt.Errorf("read byte-limited history: %w", err)
 	}
 	fmt.Println("verified buffered history event and byte caps")
 	return nil

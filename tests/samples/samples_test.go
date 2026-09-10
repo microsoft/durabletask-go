@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -123,7 +124,7 @@ func TestSamplesE2E(t *testing.T) {
 			buildCtx, stopBuild := context.WithTimeout(t.Context(), 3*time.Minute)
 			build := exec.CommandContext(buildCtx, "go", buildArgs...)
 			build.Dir = filepath.Join(root, "samples", entry.name)
-			build.Env = append(environment, "GOWORK=off")
+			build.Env = append(slices.Clone(environment), "GOWORK=off")
 			output, err := build.CombinedOutput()
 			stopBuild()
 			if err != nil {

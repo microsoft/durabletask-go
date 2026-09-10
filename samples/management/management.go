@@ -210,7 +210,10 @@ func verifySuspendResume(ctx context.Context, client *durabletaskscheduler.Clien
 	_, waitErr := client.WaitForOrchestrationCompletion(waitCtx, id)
 	cancel()
 	if !errors.Is(waitErr, context.DeadlineExceeded) {
-		return fmt.Errorf("suspended instance completed unexpectedly: %v", waitErr)
+		if waitErr != nil {
+			return fmt.Errorf("wait for suspended instance: %w", waitErr)
+		}
+		return errors.New("suspended instance completed unexpectedly")
 	}
 	suspended, err := client.FetchOrchestrationMetadata(ctx, id)
 	if err != nil {
@@ -345,7 +348,10 @@ func verifyStatusBasedIDReuse(ctx context.Context, client *durabletaskscheduler.
 			DedupeStatuses: []api.OrchestrationStatus{api.RUNTIME_STATUS_COMPLETED},
 		}),
 	); !errors.Is(err, api.ErrDuplicateInstance) {
-		return fmt.Errorf("completed-status duplicate scheduling error=%v, want ErrDuplicateInstance", err)
+		if err != nil {
+			return fmt.Errorf("schedule duplicate completed instance: %w", err)
+		}
+		return errors.New("duplicate completed instance was not rejected")
 	}
 	if _, err := client.ScheduleNewOrchestration(
 		ctx,
@@ -417,7 +423,10 @@ func verifySingleAndBatchPurge(ctx context.Context, client *durabletaskscheduler
 	}
 	for _, id := range ids {
 		if _, err := client.FetchOrchestrationMetadata(ctx, id); !errors.Is(err, api.ErrInstanceNotFound) {
-			return fmt.Errorf("purged instance %s remains readable or lookup failed: %v", id, err)
+			if err != nil {
+				return fmt.Errorf("read purged instance %s: %w", id, err)
+			}
+			return fmt.Errorf("purged instance %s remains readable", id)
 		}
 	}
 	return nil
