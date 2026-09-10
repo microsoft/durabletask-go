@@ -17,6 +17,7 @@ operation is not evidence that a feature works end to end.
 | [externalevents](externalevents) | Typed and repeated events, timeouts, cross-instance events | Piped or interactive input |
 | [suborchestrations](suborchestrations) | Child workflows, results, IDs, metadata and failures | None |
 | [retries](retries) | Controlled retries, retry handlers, typed/non-retriable failures | None |
+| [rewind](rewind) | Failed-activity recovery, renewed execution identity and preserved successful work | Rewind-capable DTS service |
 | [continueasnew](continueasnew) | Checkpoints, event carryover, continuation and history/turn budgets | None |
 | [management](management) | Progress, queries/paging, lifecycle, restart, ID reuse, ID-scoped purge | None |
 | [scheduledtasks](scheduledtasks) | Actual scheduled execution and schedule lifecycle | Go-only task hub |
@@ -107,9 +108,8 @@ are not exposed to untrusted pull requests.
 
 ## Capability and safety boundaries
 
-Rewind, skip-graceful termination and SDK task-hub lifecycle RPCs are intentionally
-not supported. Provision and remove task hubs through Azure's control plane or
-CLI. Filtered purge and instance listing have documented emulator limitations;
+Skip-graceful termination is intentionally not supported. Filtered purge and
+instance listing have documented emulator limitations;
 consult the [SDK feature matrix](../durabletaskscheduler/README.md#feature-matrix).
 
 The administrative sample verifies state changes, not just acknowledgements.

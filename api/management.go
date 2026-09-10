@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 const (
@@ -59,6 +60,17 @@ type RestartOptions func(*protos.RestartInstanceRequest) error
 func WithRestartNewInstanceID(restartWithNewInstanceID bool) RestartOptions {
 	return func(req *protos.RestartInstanceRequest) error {
 		req.RestartWithNewInstanceId = restartWithNewInstanceID
+		return nil
+	}
+}
+
+// RewindOptions configures a request to rewind a failed orchestration.
+type RewindOptions func(*protos.RewindInstanceRequest) error
+
+// WithRewindReason records the reason for rewinding an orchestration.
+func WithRewindReason(reason string) RewindOptions {
+	return func(req *protos.RewindInstanceRequest) error {
+		req.Reason = wrapperspb.String(reason)
 		return nil
 	}
 }

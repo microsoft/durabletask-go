@@ -28,6 +28,7 @@ var catalogue = []sample{
 	{name: "externalevents", input: "Taylor\n"},
 	{name: "suborchestrations"},
 	{name: "retries"},
+	{name: "rewind"},
 	{name: "continueasnew"},
 	{name: "management"},
 	{name: "scheduledtasks"},

@@ -34,6 +34,4 @@ Some services eagerly remove empty entity records. The output explicitly reports
 that case: it validates idempotency and live-state preservation, not a removal
 that did not happen. It never claims a nonzero removal count for an empty set.
 
-Rewind, skip-graceful termination, and SDK task-hub create/delete are intentionally
-not supported. Provision and remove task hubs through Azure's control plane or
-CLI, not SDK lifecycle RPCs.
+Skip-graceful termination is intentionally not supported.

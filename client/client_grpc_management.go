@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -207,6 +208,32 @@ func (c *TaskHubGrpcClient) RestartInstance(ctx context.Context, id api.Instance
 		return api.EmptyInstanceID, clientRPCError(ctx, "failed to restart orchestration instance", err)
 	}
 	return api.InstanceID(resp.GetInstanceId()), nil
+}
+
+// RewindInstance enqueues recovery of a failed orchestration. The service
+// replaces its failed history with a new execution, preserving successful work
+// and recursively rewinding failed sub-orchestrations.
+//
+// A nil error means the request was enqueued, not that recovery completed.
+// Observe a new execution and its terminal status separately. Canceling ctx
+// cancels enqueueing; it does not cancel a rewind already accepted by the service.
+func (c *TaskHubGrpcClient) RewindInstance(ctx context.Context, id api.InstanceID, opts ...api.RewindOptions) error {
+	if id == api.EmptyInstanceID {
+		return api.WrapInvalidArgument(errors.New("rewind instance ID cannot be empty"))
+	}
+	if strings.HasPrefix(string(id), "@") {
+		return api.WrapInvalidArgument(errors.New("rewind does not support entity instance IDs"))
+	}
+	req := &protos.RewindInstanceRequest{InstanceId: string(id)}
+	for _, configure := range opts {
+		if err := configure(req); err != nil {
+			return fmt.Errorf("failed to configure rewind request: %w", api.WrapInvalidArgument(err))
+		}
+	}
+	if _, err := c.client.RewindInstance(ctx, req); err != nil {
+		return clientRPCError(ctx, "failed to rewind orchestration instance", err)
+	}
+	return nil
 }
 
 func (c *TaskHubGrpcClient) PurgeInstances(ctx context.Context, request api.PurgeInstancesRequest) (*api.PurgeInstancesResult, error) {

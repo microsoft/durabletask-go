@@ -267,6 +267,9 @@ func (te *taskExecutor) ExecuteOrchestrator(
 	if err != nil {
 		return nil, err
 	}
+	if isRewindRequest(oldEvents, newEvents) {
+		return buildRewindResult(id, oldEvents, newEvents)
+	}
 	started := startedEvent(oldEvents, newEvents)
 	name := started.GetName()
 	version := started.GetVersion().GetValue()
