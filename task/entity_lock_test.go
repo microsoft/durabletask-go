@@ -18,8 +18,10 @@ func TestLockEntitiesSortsAndDeduplicatesEveryPermutation(t *testing.T) {
 		api.NewEntityID("account", "b"),
 		api.NewEntityID("account", "a"),
 		api.NewEntityID("cart", "z"),
+		api.NewEntityID("counter", "k"),
+		api.NewEntityID("counter2", "k"),
 	}
-	expected := []string{"@account@a", "@account@b", "@cart@z"}
+	expected := []string{"@account@a", "@account@b", "@cart@z", "@counter2@k", "@counter@k"}
 	random := rand.New(rand.NewSource(42))
 
 	for iteration := 0; iteration < 100; iteration++ {

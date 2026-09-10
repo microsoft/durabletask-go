@@ -89,6 +89,7 @@ type OrchestrationContext struct {
 	criticalSectionLocks            []string
 	criticalSectionAvailable        map[string]bool
 	criticalSectionRequestCommitted bool
+	criticalSectionAbandoned        bool
 }
 
 // callSubOrchestratorOptions is a struct that holds the options for the CallSubOrchestrator orchestrator method.
@@ -1123,6 +1124,8 @@ func (ctx *OrchestrationContext) SignalEntity(entityID api.EntityID, operationNa
 }
 
 // LockEntities acquires an ordered critical section over a set of entities.
+// If cancellation follows a committed request, critical-section restrictions
+// remain in effect until the eventual grant is received and automatically released.
 func (ctx *OrchestrationContext) LockEntities(entityIDs ...api.EntityID) (func(), error) {
 	engine := ctx.engineContext()
 	if engine.isTerminated || ctx.scope.isCanceled() {
@@ -1162,13 +1165,25 @@ func (ctx *OrchestrationContext) LockEntities(entityIDs ...api.EntityID) (func()
 	engine.pendingActions[action.Id] = action
 	engine.criticalSectionID = criticalSectionID
 	engine.criticalSectionLocks = append([]string(nil), lockSet...)
-	engine.criticalSectionRequestCommitted = engine.IsReplaying
+	engine.criticalSectionRequestCommitted = false
 	lockTask := newTaskInScope(engine, ctx.scope)
 	engine.pendingEntityTasks[criticalSectionID] = lockTask
 	if err := lockTask.Await(nil); err != nil {
-		if !engine.criticalSectionRequestCommitted {
-			delete(engine.pendingActions, action.Id)
-			engine.clearCriticalSection()
+		if engine.criticalSectionID == criticalSectionID {
+			delete(engine.pendingEntityTasks, criticalSectionID)
+			// Coroutines run before subsequent history markers. A request may
+			// already be committed even though its marker has not been replayed.
+			if !engine.criticalSectionRequestCommitted {
+				engine.criticalSectionRequestCommitted = engine.hasHistoricalEntityLockRequest(action.Id, criticalSectionID)
+			}
+			if engine.criticalSectionRequestCommitted {
+				// The lock set is acquired sequentially. Keep the critical
+				// section reserved until the full grant makes releasing safe.
+				engine.criticalSectionAbandoned = true
+			} else {
+				delete(engine.pendingActions, action.Id)
+				engine.clearCriticalSection()
+			}
 		}
 		return nil, err
 	}
@@ -1527,12 +1542,33 @@ func (ctx *OrchestrationContext) onEntityLockRequested(eventID int32, event *pro
 		message.GetEntityLockRequested().CriticalSectionId != event.CriticalSectionId {
 		return fmt.Errorf("entity lock request %q does not match pending action %d", event.CriticalSectionId, eventID)
 	}
-	ctx.criticalSectionRequestCommitted = true
+	if ctx.criticalSectionID == event.CriticalSectionId {
+		ctx.criticalSectionRequestCommitted = true
+	}
 	delete(ctx.pendingActions, eventID)
 	return nil
 }
 
+func (ctx *OrchestrationContext) hasHistoricalEntityLockRequest(actionID int32, criticalSectionID string) bool {
+	for _, history := range [][]*protos.HistoryEvent{ctx.oldEvents, ctx.newEvents} {
+		for _, event := range history {
+			if requested := event.GetEntityLockRequested(); requested != nil &&
+				event.EventId == actionID && requested.CriticalSectionId == criticalSectionID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (ctx *OrchestrationContext) onEntityLockGranted(event *protos.EntityLockGrantedEvent) error {
+	if ctx.criticalSectionID != event.CriticalSectionId {
+		return nil
+	}
+	if ctx.criticalSectionAbandoned {
+		ctx.releaseCriticalSection(event.CriticalSectionId)
+		return nil
+	}
 	if task := ctx.takePendingEntityTask(event.CriticalSectionId); task != nil {
 		task.complete(nil)
 	}
@@ -1747,6 +1783,7 @@ func (ctx *OrchestrationContext) clearCriticalSection() {
 	ctx.criticalSectionLocks = nil
 	ctx.criticalSectionAvailable = nil
 	ctx.criticalSectionRequestCommitted = false
+	ctx.criticalSectionAbandoned = false
 }
 
 func (ctx *OrchestrationContext) getNextSequenceNumber() int32 {

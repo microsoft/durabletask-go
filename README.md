@@ -403,6 +403,11 @@ orchestrations to acquire overlapping multi-entity lock sets concurrently;
 different acquisition orders can deadlock. Keep those lock sets isolated until
 the SDKs share an ordering contract.
 
+When upgrading from a pre-release build that retained canceled lock acquisitions,
+complete or terminate affected orchestrations on the old workers first. Releasing
+an abandoned acquisition as soon as its grant arrives changes the action sequence
+relative to older histories that released it only at orchestration completion.
+
 Entity names and operation names are matched case-insensitively using the same invariant rule as the .NET SDK, so a name resolves to the same entity in both SDKs.
 
 The DTS worker accepts only V2 entity work items (`EntityRequestV2`).
