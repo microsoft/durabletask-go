@@ -486,9 +486,14 @@ func TestAlreadyCanceledSelectDoesNotWaitOrConsume(t *testing.T) {
 					runner.Go(func(*OrchestrationContext) {
 						defer done.Done()
 						defer func() { canceled = isTaskCanceled(recover()) }()
+						// Start the callback before cancellation; an unstarted
+						// callback in a canceled scope must not run at all.
+						cancel()
+						if err := child.WaitForSingleEvent("cancel-boundary", -1).Await(nil); !errors.Is(err, ErrTaskCanceled) {
+							panic("cancellation was not applied at the scheduler boundary")
+						}
 						selector.Select(OnEvent(channel, func(int) { invoked = true }))
 					})
-					cancel()
 					done.Wait(ctx)
 					value, received, err := channel.TryReceiveErr()
 					_, again, nextErr := channel.TryReceiveErr()

@@ -26,7 +26,7 @@ func isRewindRequest(oldEvents, newEvents []*protos.HistoryEvent) bool {
 // Keep this transformation aligned with durabletask-python's
 // _OrchestrationExecutor._build_rewind_result and the DTS backend contract.
 func buildRewindResult(id api.InstanceID, oldEvents, newEvents []*protos.HistoryEvent) (*ExecutionResults, error) {
-	if len(newEvents) != 2 || newEvents[1].GetExecutionRewound() == nil {
+	if len(newEvents) != 2 || newEvents[0].GetOrchestratorStarted() == nil || newEvents[1].GetExecutionRewound() == nil {
 		return nil, fmt.Errorf("rewind requires exactly two new events: orchestrator started and execution rewound")
 	}
 	rewound := newEvents[1].GetExecutionRewound()

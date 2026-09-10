@@ -72,6 +72,10 @@ func (c *coroutine) run() {
 		return
 	}
 
+	if c.scope.isCanceled() {
+		c.sendSignal(coroutineSignal{kind: coroutineCanceled})
+		return
+	}
 	c.fn()
 	c.sendSignal(coroutineSignal{kind: coroutineFinished})
 }

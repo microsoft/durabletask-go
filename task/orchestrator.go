@@ -658,6 +658,7 @@ func (ctx *OrchestrationContext) newFailedTask(engine *OrchestrationContext, err
 
 // Go starts a coroutine that is cooperatively scheduled with the orchestration.
 // Only one orchestration coroutine runs at a time, in monotonically increasing ID order.
+// A callback whose scope is canceled before it starts is not invoked.
 func (ctx *OrchestrationContext) Go(fn func(ctx *OrchestrationContext)) {
 	if fn == nil {
 		panic("orchestration coroutine function must be non-nil")

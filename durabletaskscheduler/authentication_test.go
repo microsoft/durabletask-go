@@ -687,7 +687,18 @@ func TestRetryServiceConfigDefaults(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(retryServiceConfig), &parsed))
 	require.Len(t, parsed.MethodConfig, 1)
 	method := parsed.MethodConfig[0]
-	require.Equal(t, []map[string]any{{}}, method.Name)
+	var methods []string
+	for _, selector := range method.Name {
+		require.Len(t, selector, 2)
+		require.Equal(t, "TaskHubSidecarService", selector["service"])
+		name, ok := selector["method"].(string)
+		require.True(t, ok)
+		methods = append(methods, name)
+	}
+	require.ElementsMatch(t, []string{
+		"Hello", "GetInstance", "WaitForInstanceStart", "WaitForInstanceCompletion",
+		"QueryInstances", "ListInstanceIds", "StreamInstanceHistory", "GetEntity", "QueryEntities",
+	}, methods)
 	require.Equal(t, 5, method.RetryPolicy.MaxAttempts)
 	require.Equal(t, "0.050s", method.RetryPolicy.InitialBackoff)
 	require.Equal(t, "0.250s", method.RetryPolicy.MaxBackoff)

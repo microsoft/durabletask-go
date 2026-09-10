@@ -50,7 +50,17 @@ type schedulerCredentialRefresh struct {
 
 const retryServiceConfig = `{
   "methodConfig": [{
-    "name": [{}],
+    "name": [
+      {"service": "TaskHubSidecarService", "method": "Hello"},
+      {"service": "TaskHubSidecarService", "method": "GetInstance"},
+      {"service": "TaskHubSidecarService", "method": "WaitForInstanceStart"},
+      {"service": "TaskHubSidecarService", "method": "WaitForInstanceCompletion"},
+      {"service": "TaskHubSidecarService", "method": "QueryInstances"},
+      {"service": "TaskHubSidecarService", "method": "ListInstanceIds"},
+      {"service": "TaskHubSidecarService", "method": "StreamInstanceHistory"},
+      {"service": "TaskHubSidecarService", "method": "GetEntity"},
+      {"service": "TaskHubSidecarService", "method": "QueryEntities"}
+    ],
     "retryPolicy": {
       "maxAttempts": 5,
       "initialBackoff": "0.050s",

@@ -157,11 +157,15 @@ func TestRewindMalformedRequests(t *testing.T) {
 	for _, events := range [][]*protos.HistoryEvent{
 		{rewindEvent("")},
 		{rewindEvent(""), helpers.NewOrchestratorStartedEvent()},
+		{nil, rewindEvent("")},
+		{new(protos.HistoryEvent), rewindEvent("")},
+		{helpers.NewTaskCompletedEvent(0, nil), rewindEvent("")},
 		{helpers.NewOrchestratorStartedEvent(), rewindEvent(""), helpers.NewEventRaisedEvent("extra", nil)},
 	} {
-		_, err := NewTaskExecutor(NewTaskRegistry()).ExecuteOrchestrator(context.Background(), "instance",
+		result, err := NewTaskExecutor(NewTaskRegistry()).ExecuteOrchestrator(context.Background(), "instance",
 			[]*protos.HistoryEvent{failedCompletionEvent()}, events, nil)
 		require.ErrorContains(t, err, "rewind requires exactly two new events")
+		require.Nil(t, result)
 	}
 	require.False(t, isRewindRequest([]*protos.HistoryEvent{rewindEvent(""), failedCompletionEvent()}, nil))
 	require.False(t, isRewindRequest(nil, []*protos.HistoryEvent{rewindEvent("")}))

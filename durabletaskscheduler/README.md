@@ -69,9 +69,12 @@ whitespace or newlines. Unset worker IDs default to
 `Options.HelloTimeout` (default 30 seconds) bounds the fail-fast `Hello`
 handshake for both `NewClient` and the worker connection factory; the caller's
 context still applies when it is shorter. Client channels use a default gRPC
-service config that retries `UNAVAILABLE` up to five attempts with a 50 ms
-initial backoff, 250 ms cap, and multiplier 2. Worker channels do not, because
-the worker owns its own reconnect loop.
+service config that retries `UNAVAILABLE` for the idempotent `Hello` handshake
+and read-only RPCs up to five attempts with a 50 ms initial backoff, 250 ms cap,
+and multiplier 2. Mutations such as `RaiseEvent`, `SignalEntity`, and instance
+lifecycle operations are not automatically retried: a failed acknowledgement
+can follow a successful service-side change. Worker channels do not use this
+policy, because the worker owns its own reconnect loop.
 
 Individual gRPC messages are bounded to 64 MiB by default through
 `Options.MaxReceiveMessageSize` and `Options.MaxSendMessageSize`. The worker uses a
