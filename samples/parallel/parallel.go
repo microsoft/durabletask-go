@@ -1,152 +1,178 @@
+// Command parallel demonstrates deterministic fan-out/fan-in with WhenAll and
+// a timer-controlled race with WhenAny.
+//
+//	export DTS_CONNECTION_STRING="Endpoint=http://localhost:8080;TaskHub=default;Authentication=None"
+//	go run ./samples/parallel
 package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
-	"math/rand"
+	"reflect"
 	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/microsoft/durabletask-go/backend"
-	"github.com/microsoft/durabletask-go/backend/sqlite"
+	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/samples/internal/dtssample"
 	"github.com/microsoft/durabletask-go/task"
 )
 
+type parallelInput struct {
+	Devices []deviceUpdate `json:"devices"`
+}
+
+type deviceUpdate struct {
+	DeviceID       string `json:"deviceId"`
+	TargetVersion  int    `json:"targetVersion"`
+	ExpectedToFail bool   `json:"expectedToFail,omitempty"`
+}
+
+type deviceResult struct {
+	DeviceID       string `json:"deviceId"`
+	AppliedVersion int    `json:"appliedVersion"`
+	Status         string `json:"status"`
+}
+
+type parallelSummary struct {
+	RaceWinner string         `json:"raceWinner"`
+	Total      int            `json:"total"`
+	Updated    []string       `json:"updated"`
+	Failed     []string       `json:"failed"`
+	Results    []deviceResult `json:"results"`
+}
+
 func main() {
-	// Create a new task registry and add the orchestrator and activities
-	r := task.NewTaskRegistry()
-	if err := r.AddOrchestrator(UpdateDevicesOrchestrator); err != nil {
-		log.Fatalf("Failed to register orchestrator: %v", err)
+	if err := run(); err != nil {
+		log.Fatal(err)
 	}
-	if err := r.AddActivity(GetDevicesToUpdate); err != nil {
-		log.Fatalf("Failed to register activity: %v", err)
-	}
-	if err := r.AddActivity(UpdateDevice); err != nil {
-		log.Fatalf("Failed to register activity: %v", err)
-	}
-
-	// Init the client
-	ctx := context.Background()
-	client, worker, err := Init(ctx, r)
-	if err != nil {
-		log.Fatalf("Failed to initialize the client: %v", err)
-	}
-	defer func() {
-		if err := worker.Shutdown(ctx); err != nil {
-			log.Printf("Failed to shutdown worker: %v", err)
-		}
-	}()
-
-	// Start a new orchestration
-	id, err := client.ScheduleNewOrchestration(ctx, UpdateDevicesOrchestrator)
-	if err != nil {
-		log.Fatalf("Failed to schedule new orchestration: %v", err) //nolint:gocritic // Fatalf in sample main() is acceptable
-	}
-
-	// Wait for the orchestration to complete
-	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
-	if err != nil {
-		log.Fatalf("Failed to wait for orchestration to complete: %v", err)
-	}
-
-	// Print the results
-	metadataEnc, err := json.MarshalIndent(metadata, "", "  ")
-	if err != nil {
-		log.Fatalf("Failed to encode result to JSON: %v", err)
-	}
-	log.Printf("Orchestration completed: %v", string(metadataEnc))
+	fmt.Println("SAMPLE_OK parallel")
 }
 
-// Init creates and initializes an in-memory client and worker pair with default configuration.
-func Init(ctx context.Context, r *task.TaskRegistry) (backend.TaskHubClient, backend.TaskHubWorker, error) {
-	logger := backend.DefaultLogger()
-
-	// Create an executor
-	executor := task.NewTaskExecutor(r)
-
-	// Create a new backend
-	// Use the in-memory sqlite provider by specifying ""
-	be := sqlite.NewSqliteBackend(sqlite.NewSqliteOptions(""), logger)
-	orchestrationWorker := backend.NewOrchestrationWorker(be, executor, logger)
-	activityWorker := backend.NewActivityTaskWorker(be, executor, logger)
-	taskHubWorker := backend.NewTaskHubWorker(be, orchestrationWorker, activityWorker, logger)
-
-	// Start the worker
-	err := taskHubWorker.Start(ctx)
-	if err != nil {
-		return nil, nil, err
+func run() (err error) {
+	registry := task.NewTaskRegistry()
+	if err := registry.AddOrchestratorN("UpdateDevicesOrchestrator", UpdateDevicesOrchestrator); err != nil {
+		return fmt.Errorf("failed to register orchestrator: %w", err)
+	}
+	if err := registry.AddActivityN("UpdateDevice", UpdateDevice); err != nil {
+		return fmt.Errorf("failed to register activity: %w", err)
 	}
 
-	// Get the client to the backend
-	taskHubClient := backend.NewTaskHubClient(be)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	app, err := dtssample.Start(ctx, registry)
+	if err != nil {
+		return err
+	}
+	var ownedIDs []api.InstanceID
+	defer func() { err = errors.Join(err, app.Shutdown()) }()
+	defer func() { err = errors.Join(err, dtssample.Cleanup(app.Client, ownedIDs...)) }()
 
-	return taskHubClient, taskHubWorker, nil
+	id := dtssample.NewInstanceID("parallel")
+	ownedIDs = append(ownedIDs, id)
+	input := parallelInput{Devices: []deviceUpdate{
+		{DeviceID: "thermostat-01", TargetVersion: 7},
+		{DeviceID: "door-lock-02", TargetVersion: 7, ExpectedToFail: true},
+		{DeviceID: "light-03", TargetVersion: 7},
+		{DeviceID: "sensor-04", TargetVersion: 7},
+	}}
+	if _, err := app.Client.ScheduleNewOrchestration(
+		ctx,
+		"UpdateDevicesOrchestrator",
+		api.WithInstanceID(id),
+		api.WithInput(input),
+	); err != nil {
+		return fmt.Errorf("failed to schedule parallel orchestration: %w", err)
+	}
+
+	metadata, err := app.Client.WaitForOrchestrationCompletion(ctx, id, api.WithFetchPayloads(true))
+	if err != nil {
+		return fmt.Errorf("failed to wait for parallel orchestration: %w", err)
+	}
+	if err := dtssample.RequireCompleted(metadata); err != nil {
+		return err
+	}
+	var output parallelSummary
+	if err := metadata.ReadOutput(&output); err != nil {
+		return fmt.Errorf("failed to decode parallel output: %w", err)
+	}
+	expected := parallelSummary{
+		RaceWinner: "fast-timer",
+		Total:      4,
+		Updated:    []string{"thermostat-01", "light-03", "sensor-04"},
+		Failed:     []string{"door-lock-02"},
+		Results: []deviceResult{
+			{DeviceID: "thermostat-01", AppliedVersion: 7, Status: "updated"},
+			{DeviceID: "door-lock-02", AppliedVersion: 0, Status: "blocked-by-policy"},
+			{DeviceID: "light-03", AppliedVersion: 7, Status: "updated"},
+			{DeviceID: "sensor-04", AppliedVersion: 7, Status: "updated"},
+		},
+	}
+	if !reflect.DeepEqual(output, expected) {
+		return fmt.Errorf("parallel output = %#v, want %#v", output, expected)
+	}
+	return nil
 }
 
-// UpdateDevicesOrchestrator is an orchestrator that runs activities in parallel
+// UpdateDevicesOrchestrator runs all device updates together, waits for every
+// activity with WhenAll, and uses durable timers to make the WhenAny winner
+// independent from worker wall-clock scheduling.
 func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
-	// Get a dynamic list of devices to perform updates on
-	var devices []string
-	if err := ctx.CallActivity(GetDevicesToUpdate).Await(&devices); err != nil {
+	var input parallelInput
+	if err := ctx.GetInput(&input); err != nil {
 		return nil, err
 	}
 
-	// Start a dynamic number of tasks in parallel, not waiting for any to complete (yet)
-	tasks := make([]task.Task, len(devices))
-	for i, id := range devices {
-		tasks[i] = ctx.CallActivity(UpdateDevice, task.WithActivityInput(id))
+	fastTimer := ctx.CreateTimer(time.Second)
+	slowTimerCtx, cancelSlowTimer := ctx.WithCancel()
+	slowTimer := slowTimerCtx.CreateTimer(3 * time.Second)
+	raceWinner := "slow-timer"
+	if ctx.WhenAny(fastTimer, slowTimer) == fastTimer {
+		raceWinner = "fast-timer"
+		cancelSlowTimer()
 	}
 
-	// Now that all are started, wait for them to complete and then return the success rate
-	successCount := 0
-	for _, task := range tasks {
-		var succeeded bool
-		if err := task.Await(&succeeded); err == nil && succeeded {
-			successCount++
+	tasks := make([]task.Task, len(input.Devices))
+	for i, device := range input.Devices {
+		tasks[i] = ctx.CallActivity("UpdateDevice", task.WithActivityInput(device))
+	}
+	if err := ctx.WhenAll(tasks...); err != nil {
+		return nil, err
+	}
+
+	summary := parallelSummary{
+		RaceWinner: raceWinner,
+		Total:      len(input.Devices),
+		Results:    make([]deviceResult, len(tasks)),
+	}
+	for i, task := range tasks {
+		var result deviceResult
+		if err := task.Await(&result); err != nil {
+			return nil, err
+		}
+		summary.Results[i] = result
+		if result.Status == "updated" {
+			summary.Updated = append(summary.Updated, result.DeviceID)
+		} else {
+			summary.Failed = append(summary.Failed, result.DeviceID)
 		}
 	}
-
-	return float32(successCount) / float32(len(devices)), nil
+	return summary, nil
 }
 
-// GetDevicesToUpdate is an activity that returns a list of random device IDs to an orchestration.
-func GetDevicesToUpdate(task.ActivityContext) (any, error) {
-	// Return a fake list of device IDs
-	const deviceCount = 10
-	deviceIDs := make([]string, deviceCount)
-	for i := 0; i < deviceCount; i++ {
-		u, err := uuid.NewV7()
-		if err != nil {
-			deviceIDs[i] = uuid.NewString()
-			continue
-		}
-		deviceIDs[i] = u.String()
-	}
-	return deviceIDs, nil
-}
-
-// UpdateDevice is an activity that takes a device ID (string) and pretends to perform an update
-// on the corresponding device, with a random 67% success rate.
+// UpdateDevice is deterministic: the expected failure is part of the activity
+// input rather than a random or host-clock result.
 func UpdateDevice(ctx task.ActivityContext) (any, error) {
-	var deviceID string
-	if err := ctx.GetInput(&deviceID); err != nil {
+	var input deviceUpdate
+	if err := ctx.GetInput(&input); err != nil {
 		return nil, err
 	}
-	log.Printf("updating device: %s", deviceID)
-
-	// Delay and success results are randomly generated
-	delay := time.Duration(rand.Int31n(500)) * time.Millisecond
-	select {
-	case <-ctx.Context().Done():
-		return nil, ctx.Context().Err()
-	case <-time.After(delay):
-		// All good, continue
+	if input.ExpectedToFail {
+		return deviceResult{DeviceID: input.DeviceID, Status: "blocked-by-policy"}, nil
 	}
-
-	// Simulate random failures
-	success := rand.Intn(3) > 0
-
-	return success, nil
+	return deviceResult{
+		DeviceID:       input.DeviceID,
+		AppliedVersion: input.TargetVersion,
+		Status:         "updated",
+	}, nil
 }

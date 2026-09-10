@@ -1,0 +1,17 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+exporters:
+  file:
+    path: ${env:OTEL_CAPTURE_FILE}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [file]

@@ -1,0 +1,20 @@
+package fixesbatchalias
+
+import (
+	durabletask "github.com/microsoft/durabletask-go/task"
+)
+
+func first(ctx *durabletask.OrchestrationContext) (any, error) {
+	_ = ctx.CurrentTimeUtc // want `time\.Now is not deterministic in an orchestrator`
+	return helper(ctx), nil
+}
+
+func helper(other *durabletask.OrchestrationContext) any {
+	// A reached helper uses its own context, not the caller's parameter name.
+	return other.CurrentTimeUtc // want `time\.Now is not deterministic in an orchestrator`
+}
+
+func register() {
+	registry := durabletask.NewTaskRegistry()
+	_ = registry.AddOrchestrator(first)
+}
