@@ -187,6 +187,7 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 		return helpers.NewTaskFailedEvent(e.EventId, versionFailureDetails(versionErr)), nil
 	}
 	ctx = api.ContextWithFields(ctx, te.contextFields)
+	ctx = helpers.ContextWithTraceContext(ctx, ts.GetParentTraceContext())
 	tagInfo, tagFields := contextprop.Decode(ts.GetTags())
 	ctx = api.ContextWithFields(ctx, tagFields)
 	orchestrationInfo, _ := api.OrchestrationContextInfoFromContext(ctx)

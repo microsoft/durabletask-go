@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Restore DTS-provided activity trace parents on `ActivityContext.Context()` without emitting duplicate SDK durable spans, preserving trace continuity for application instrumentation.
 - Missing-instance orchestration waits now return `api.ErrInstanceNotFound` immediately instead of retrying `NotFound` until the caller deadline.
 - After a worker has started, it reconnects with bounded backoff after `Unauthenticated` or `PermissionDenied` stream and reconnect-handshake responses so refreshed credentials and propagated RBAC can recover without a process restart. The initial `Hello` remains fail-fast.
 - Oversized orchestration responses are checked after large-payload externalization against the smaller of the 3.9 MiB worker safety bound and the configured gRPC send limit. The Go worker intentionally does not use the deprecated response-chunking fields; a response that still exceeds the effective limit now fails once with non-retriable `api.ErrorTypeOrchestratorResponseTooLarge` guidance instead of repeatedly hitting `ResourceExhausted`.

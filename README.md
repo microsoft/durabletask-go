@@ -452,6 +452,11 @@ The [`payload`](./payload) package includes Azure Blob Storage support. It emits
 
 The SDK sends the W3C trace context of a sampled caller when it schedules an orchestration. DTS owns the spans for the orchestrations, activities, timers, and sub-orchestrations. Your application code can use standard [OpenTelemetry](https://opentelemetry.io/) instrumentation. Use it for caller spans, custom activity spans, and outbound dependencies.
 
+When DTS supplies an activity trace parent, the SDK restores it on
+`ActivityContext.Context()` without creating another durable-operation span.
+Application instrumentation can therefore attach outbound requests to the
+service-owned trace.
+
 This example sends the traces of your process to an [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) over OTLP/HTTP. Configure the DTS telemetry separately for the service-owned spans.
 
 ```go
