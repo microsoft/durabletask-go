@@ -56,6 +56,9 @@ func (s *FileStore) Store(ctx context.Context, payload []byte) (string, error) {
 	location := "file://sha256/" + hash
 	path := filepath.Join(s.root, hash+".payload")
 	if _, err := os.Stat(path); err == nil {
+		if _, err := s.Resolve(ctx, location); err != nil {
+			return "", fmt.Errorf("failed to verify existing payload file: %w", err)
+		}
 		return location, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("failed to inspect payload file: %w", err)
@@ -83,6 +86,9 @@ func (s *FileStore) Store(ctx context.Context, payload []byte) (string, error) {
 	}
 	if err := os.Rename(tempPath, path); err != nil {
 		if _, statErr := os.Stat(path); statErr == nil {
+			if _, verifyErr := s.Resolve(ctx, location); verifyErr != nil {
+				return "", fmt.Errorf("failed to verify existing payload file: %w", verifyErr)
+			}
 			return location, nil
 		}
 		return "", fmt.Errorf("failed to publish payload file: %w", err)
@@ -92,6 +98,9 @@ func (s *FileStore) Store(ctx context.Context, payload []byte) (string, error) {
 
 // Resolve reads a payload location created by this store.
 func (s *FileStore) Resolve(ctx context.Context, location string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	hash, err := parseFileLocation(location)
 	if err != nil {
 		return nil, err
@@ -111,6 +120,10 @@ func (s *FileStore) Resolve(ctx context.Context, location string) ([]byte, error
 	payload := make([]byte, info.Size())
 	if _, err := io.ReadFull(&contextReader{ctx: ctx, reader: file}, payload); err != nil {
 		return nil, fmt.Errorf("failed to read payload file: %w", err)
+	}
+	digest := sha256.Sum256(payload)
+	if !strings.EqualFold(hex.EncodeToString(digest[:]), hash) {
+		return nil, fmt.Errorf("%w: file SHA-256 mismatch", api.ErrLargePayloadIntegrity)
 	}
 	return payload, nil
 }

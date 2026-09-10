@@ -246,7 +246,11 @@ func TransformOrchestratorResponse(
 		case action.GetSendEvent() != nil:
 			plan.add(&action.GetSendEvent().Data)
 		case action.GetCompleteOrchestration() != nil:
-			plan.add(&action.GetCompleteOrchestration().Result)
+			completion := action.GetCompleteOrchestration()
+			plan.add(&completion.Result)
+			for _, event := range completion.CarryoverEvents {
+				planHistoryEvent(plan, event)
+			}
 		case action.GetTerminateOrchestration() != nil:
 			plan.add(&action.GetTerminateOrchestration().Reason)
 		case action.GetSendEntityMessage() != nil:

@@ -629,6 +629,39 @@ func TestStrictAutoFiltersPreserveAllowedUnversionedOrchestrator(t *testing.T) {
 	require.Contains(t, filters.Orchestrations, WorkItemFilter{Name: "application", Versions: []string{"1.0"}})
 }
 
+func TestStrictAutoFiltersPreserveMixedRegistrations(t *testing.T) {
+	for _, workerVersion := range []string{"V1", ""} {
+		t.Run(workerVersion, func(t *testing.T) {
+			registrations := []task.TaskRegistration{
+				{Name: "Mixed"},
+				{Name: "mixed", Version: "v1"},
+				{Name: "Mixed", Version: "v2"},
+			}
+			snapshot := task.TaskRegistrySnapshot{Orchestrators: registrations, Activities: registrations}
+			allowed := map[string]struct{}{"mixed": {}}
+			filters := workItemFiltersFromRegistry(snapshot,
+				&task.VersioningOptions{Version: workerVersion, MatchStrategy: task.VersionMatchStrict},
+				allowed, allowed)
+			expected := []string{""}
+			if workerVersion != "" {
+				expected = append(expected, workerVersion)
+			}
+			require.Equal(t, []WorkItemFilter{{Name: "Mixed", Versions: expected}}, filters.Orchestrations)
+			require.Equal(t, filters.Orchestrations, filters.Activities)
+			normalized, err := cloneWorkItemFilters(filters)
+			require.NoError(t, err)
+			wire := workItemFiltersToProto(normalized)
+			require.Equal(t, wire.Orchestrations[0].Versions, wire.Activities[0].Versions)
+			require.Len(t, wire.Orchestrations[0].Versions, len(expected))
+			for _, orchestrator := range []bool{false, true} {
+				require.True(t, matchesWorkItemFilters(normalized, orchestrator, "MIXED", ""))
+				require.Equal(t, workerVersion != "", matchesWorkItemFilters(normalized, orchestrator, "mixed", "v1"))
+				require.False(t, matchesWorkItemFilters(normalized, orchestrator, "mixed", "v2"))
+			}
+		})
+	}
+}
+
 // TestStrictAutoFiltersPreserveAllowedUnversionedActivity keeps a system
 // component's unversioned activities routable under strict worker versioning.
 // An activity inherits its caller's version, so an unversioned system

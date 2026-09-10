@@ -395,6 +395,14 @@ The SDK supports raw entity functions, state-struct dispatch, and persistent ent
 
 The SDK also supports scheduled signals, orchestration calls, entity-to-entity signals, queries, cleanup, and ordered critical sections across more than one entity.
 
+Multi-entity locks use lexicographic ordering of serialized `@name@key` IDs,
+matching the Python SDK's ordering. The .NET SDK currently orders the name and
+key separately using culture-sensitive comparison. These orders can differ,
+even for names such as `counter` and `counter2`. Do not use Go/Python and .NET
+orchestrations to acquire overlapping multi-entity lock sets concurrently;
+different acquisition orders can deadlock. Keep those lock sets isolated until
+the SDKs share an ordering contract.
+
 Entity names and operation names are matched case-insensitively using the same invariant rule as the .NET SDK, so a name resolves to the same entity in both SDKs.
 
 The DTS worker accepts only V2 entity work items (`EntityRequestV2`).

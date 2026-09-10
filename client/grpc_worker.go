@@ -795,9 +795,13 @@ func taskRegistrationsToFilters(
 		if versioning != nil && versioning.MatchStrategy == task.VersionMatchStrict {
 			if _, allowed := allowedUnversioned[strings.ToLower(group.name)]; allowed {
 				if unversioned, ok := group.versions[""]; ok {
+					versions := []string{unversioned}
+					if _, registered := group.versions[strings.ToLower(versioning.Version)]; registered && versioning.Version != "" {
+						versions = append(versions, versioning.Version)
+					}
 					filters = append(filters, WorkItemFilter{
 						Name:     group.name,
-						Versions: []string{unversioned},
+						Versions: versions,
 					})
 					continue
 				}

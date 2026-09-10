@@ -3,12 +3,14 @@ package largepayload
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/payload"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -107,6 +109,51 @@ func TestNativeLargePayloadThresholdIsInclusive(t *testing.T) {
 	}, wrapperspb.String("payload"))
 	require.NoError(t, err)
 	require.Equal(t, "blob:v2:https://account.example/payload", externalized.GetValue())
+}
+
+func TestTransformContinueAsNewCarryoverEvents(t *testing.T) {
+	store := payload.NewMemoryStore()
+	options := &api.LargePayloadOptions{Store: store, Resolver: store}
+	large := strings.Repeat("x", 5*1024*1024)
+	events := []*protos.HistoryEvent{
+		{
+			EventId: 42,
+			EventType: &protos.HistoryEvent_EventRaised{
+				EventRaised: &protos.EventRaisedEvent{Name: "large", Input: wrapperspb.String(large)},
+			},
+		},
+		nil,
+		{
+			EventId: 43,
+			EventType: &protos.HistoryEvent_EventRaised{
+				EventRaised: &protos.EventRaisedEvent{Name: "small", Input: wrapperspb.String("small")},
+			},
+		},
+	}
+	completion := &protos.CompleteOrchestrationAction{
+		OrchestrationStatus: protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
+		Result:              wrapperspb.String("next"),
+		CarryoverEvents:     events,
+	}
+	response := &protos.OrchestratorResponse{Actions: []*protos.OrchestratorAction{{
+		OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
+			CompleteOrchestration: completion,
+		},
+	}}}
+	require.NoError(t, TransformOrchestratorResponse(context.Background(), options, response))
+	require.Less(t, proto.Size(response), 4096)
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW, completion.OrchestrationStatus)
+	require.Equal(t, int32(42), events[0].EventId)
+	require.Equal(t, int32(43), events[2].EventId)
+	require.Equal(t, "small", events[2].GetEventRaised().GetInput().GetValue())
+	reference := events[0].GetEventRaised().GetInput().GetValue()
+	require.NotEqual(t, large, reference)
+	require.NoError(t, TransformOrchestratorResponse(context.Background(), options, response))
+	require.Equal(t, reference, events[0].GetEventRaised().GetInput().GetValue())
+
+	require.NoError(t, TransformOrchestratorRequest(context.Background(), options,
+		&protos.OrchestratorRequest{NewEvents: events}))
+	require.Equal(t, large, events[0].GetEventRaised().GetInput().GetValue())
 }
 
 func TestTransformOrchestratorResponsePayloadFields(t *testing.T) {
