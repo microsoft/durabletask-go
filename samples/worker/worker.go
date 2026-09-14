@@ -90,7 +90,7 @@ func verifyStartConcurrencyAndDrain(
 	registry *task.TaskRegistry,
 	concurrencyIDs []api.InstanceID,
 	drainID api.InstanceID,
-) error {
+) (err error) {
 	activityGauge.Reset()
 	worker, err := newSampleWorker(options, registry, 2)
 	if err != nil {
@@ -102,7 +102,7 @@ func verifyStartConcurrencyAndDrain(
 	workerStopped := false
 	defer func() {
 		if !workerStopped {
-			shutdownWorker(worker)
+			err = errors.Join(err, shutdownWorker(worker))
 		}
 	}()
 	for _, id := range concurrencyIDs {
@@ -165,7 +165,7 @@ func verifyStartConcurrencyAndDrain(
 	if err := recovery.Start(ctx); err != nil {
 		return err
 	}
-	defer shutdownWorker(recovery)
+	defer func() { err = errors.Join(err, shutdownWorker(recovery)) }()
 	if err := waitForWorkerOutput(ctx, client, drainID, "delay:"+string(drainID)); err != nil {
 		return fmt.Errorf("post-shutdown work did not survive worker restart: %w", err)
 	}
@@ -179,7 +179,7 @@ func verifyRestart(
 	client *durabletaskscheduler.Client,
 	registry *task.TaskRegistry,
 	id api.InstanceID,
-) error {
+) (err error) {
 	worker, err := newSampleWorker(options, registry, 2)
 	if err != nil {
 		return err
@@ -187,7 +187,7 @@ func verifyRestart(
 	if err := worker.Start(ctx); err != nil {
 		return err
 	}
-	defer shutdownWorker(worker)
+	defer func() { err = errors.Join(err, shutdownWorker(worker)) }()
 	if _, err := client.ScheduleNewOrchestration(ctx, "SampleWorkerEcho",
 		api.WithInstanceID(id), api.WithInput("restart")); err != nil {
 		return err
@@ -205,7 +205,7 @@ func verifyRun(
 	client *durabletaskscheduler.Client,
 	registry *task.TaskRegistry,
 	id api.InstanceID,
-) error {
+) (err error) {
 	worker, err := newSampleWorker(options, registry, 2)
 	if err != nil {
 		return err
@@ -215,9 +215,18 @@ func verifyRun(
 	go func() { done <- worker.Run(runCtx) }()
 	stopped := false
 	defer func() {
-		if !stopped {
-			cancelRun()
-			<-done
+		cancelRun()
+		if stopped {
+			return
+		}
+		err = errors.Join(err, shutdownWorker(worker))
+		waitCtx, stopWait := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopWait()
+		select {
+		case runErr := <-done:
+			err = errors.Join(err, runErr)
+		case <-waitCtx.Done():
+			err = errors.Join(err, fmt.Errorf("wait for Run worker shutdown: %w", waitCtx.Err()))
 		}
 	}()
 	if err := waitForWorkerRunning(ctx, worker); err != nil {
@@ -287,10 +296,10 @@ func newSampleWorker(
 	)
 }
 
-func shutdownWorker(worker *durabletaskclient.TaskHubGrpcWorker) {
+func shutdownWorker(worker *durabletaskclient.TaskHubGrpcWorker) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = worker.Shutdown(ctx)
+	return worker.Shutdown(ctx)
 }
 
 func workerEchoWorkflow(ctx *task.OrchestrationContext) (any, error) {

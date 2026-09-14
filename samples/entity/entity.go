@@ -25,13 +25,13 @@ const (
 var factoryStats = &factoryRecorder{}
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(context.Background()); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("SAMPLE_OK entity")
 }
 
-func run() (err error) {
+func run(ctx context.Context) (err error) {
 	registry := task.NewTaskRegistry()
 	if err := registry.AddEntityN(counterEntityName, CounterEntity); err != nil {
 		return err
@@ -65,9 +65,10 @@ func run() (err error) {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	app, err := dtssample.Start(ctx, registry)
+	// Entity delete signals still need a worker after the scenario times out.
+	app, err := dtssample.Start(context.WithoutCancel(ctx), registry)
 	if err != nil {
 		return err
 	}
@@ -86,7 +87,7 @@ func run() (err error) {
 	startedID := dtssample.NewInstanceID("entity-started")
 	ids := []api.InstanceID{counterWorkflowID, transferID, startedID}
 	defer func() {
-		err = errors.Join(err, deleteEntities(app.Client, entities...), dtssample.Cleanup(app.Client, ids...), app.Shutdown())
+		err = errors.Join(err, dtssample.Cleanup(app.Client, ids...), deleteEntities(app.Client, entities...), app.Shutdown())
 	}()
 
 	if err := verifyRawCounterSignalsAndQueries(ctx, app.Client, counterID); err != nil {
@@ -528,11 +529,16 @@ func deleteEntities(client *durabletaskscheduler.Client, entityIDs ...api.Entity
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	var failures []error
+	var signaled []api.EntityID
 	for _, id := range entityIDs {
 		if err := client.SignalEntity(ctx, id, "delete"); err != nil {
 			failures = append(failures, fmt.Errorf("delete %s: %w", id, err))
 			continue
 		}
+		signaled = append(signaled, id)
+	}
+	// Submit every delete before one entity's completion wait can exhaust the budget.
+	for _, id := range signaled {
 		if _, err := waitForEntity(ctx, client, id, func(metadata *api.EntityMetadata) (bool, error) {
 			return metadata == nil || !metadata.HasState, nil
 		}); err != nil {

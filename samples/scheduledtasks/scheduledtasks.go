@@ -40,14 +40,14 @@ type scheduledOutput struct {
 }
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(context.Background()); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("SAMPLE_OK scheduledtasks")
 }
 
-func run() (err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+func run(ctx context.Context) (err error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	createdFrom := time.Now().UTC().Add(-time.Second)
 	runID := string(dtssample.NewInstanceID("scheduledtasks"))
@@ -63,17 +63,28 @@ func run() (err error) {
 	if err := durabletaskscheduler.RegisterScheduledTasks(registry); err != nil {
 		return err
 	}
-	app, err := dtssample.Start(ctx, registry, durabletaskscheduler.WithScheduledTasks(), durabletaskclient.WithAutoWorkItemFilters())
+	// Durable schedule deletion still needs a worker after the scenario times out.
+	app, err := dtssample.Start(context.WithoutCancel(ctx), registry, durabletaskscheduler.WithScheduledTasks(), durabletaskclient.WithAutoWorkItemFilters())
 	if err != nil {
 		return err
 	}
 	var targetIDs []api.InstanceID
 	var handle *durabletaskscheduler.ScheduleClient
+	creationConfirmed := false
 	defer func() {
 		var cleanupErr error
 		if handle != nil {
 			deleteCtx, stopDelete := context.WithTimeout(context.Background(), 15*time.Second)
-			cleanupErr = errors.Join(cleanupErr, handle.Delete(deleteCtx))
+			if !creationConfirmed {
+				if confirmErr := waitForScheduleCreation(deleteCtx, handle); confirmErr != nil {
+					cleanupErr = fmt.Errorf("schedule %s creation outcome is unknown; cleanup incomplete: %w", scheduleID, confirmErr)
+				} else {
+					creationConfirmed = true
+				}
+			}
+			if creationConfirmed {
+				cleanupErr = errors.Join(cleanupErr, handle.Delete(deleteCtx))
+			}
 			stopDelete()
 		}
 		queryCtx, stopQuery := context.WithTimeout(context.Background(), 15*time.Second)
@@ -86,7 +97,12 @@ func run() (err error) {
 	}()
 
 	schedules := app.Client.ScheduledTasks()
-	handle, err = schedules.Create(ctx, durabletaskscheduler.ScheduleCreationOptions{
+	// Retain ownership even if Create is accepted but its completion wait fails.
+	handle, err = schedules.GetScheduleClient(scheduleID)
+	if err != nil {
+		return err
+	}
+	err = handle.Create(ctx, durabletaskscheduler.ScheduleCreationOptions{
 		ScheduleID:              scheduleID,
 		OrchestrationName:       scheduledTargetName,
 		TypedOrchestrationInput: scheduledInput{Run: runID, Phase: "initial", FailFirst: true},
@@ -106,6 +122,7 @@ func run() (err error) {
 	if err != nil {
 		return err
 	}
+	creationConfirmed = true
 	description, err := schedules.Get(ctx, scheduleID)
 	if err != nil {
 		return err
@@ -234,6 +251,23 @@ func run() (err error) {
 	_, observed, err = waitForObservedTargets(ctx, app.Client, createdFrom, runID)
 	targetIDs = appendMissingIDs(targetIDs, observed...)
 	return err
+}
+
+func waitForScheduleCreation(ctx context.Context, handle *durabletaskscheduler.ScheduleClient) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		// A unique owned ID must exist before Delete can safely follow its
+		// potentially still-queued Create operation.
+		if _, err := handle.Describe(ctx); !errors.Is(err, durabletaskscheduler.ErrScheduleNotFound) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func scheduledTargetOrchestrator(ctx *task.OrchestrationContext) (any, error) {

@@ -114,7 +114,15 @@ func run() (err error) {
 	}
 	var ownedIDs []api.InstanceID
 	defer func() {
-		err = errors.Join(err, dtssample.Cleanup(app.Client, ownedIDs...), cleanupStorage(), app.Shutdown())
+		cleanupErr := dtssample.Cleanup(app.Client, ownedIDs...)
+		if shutdownErr := app.Shutdown(); shutdownErr != nil {
+			// A shutdown timeout cancels processing without confirming that uploads drained.
+			err = errors.Join(err, cleanupErr, fmt.Errorf(
+				"storage container %s retained because worker shutdown did not confirm drain: %w",
+				settings.container, shutdownErr))
+			return
+		}
+		err = errors.Join(err, cleanupErr, cleanupStorage())
 	}()
 
 	content := strings.Repeat("large-payloads-sample-", 512)

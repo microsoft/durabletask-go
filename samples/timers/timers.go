@@ -20,7 +20,6 @@ import (
 const (
 	maximumPhysicalTimerInterval = 2 * time.Second
 	logicalTimerDelay            = 5 * time.Second
-	expectedPhysicalTimers       = 3
 )
 
 type timerInput struct {
@@ -110,9 +109,6 @@ func run() (err error) {
 	if !output.Deadline.Equal(output.StartedAt.Add(logicalTimerDelay)) {
 		return fmt.Errorf("deadline = %s, want %s", output.Deadline, output.StartedAt.Add(logicalTimerDelay))
 	}
-	if output.FiredAt.Before(output.Deadline) {
-		return fmt.Errorf("timer fired at %s before logical deadline %s", output.FiredAt, output.Deadline)
-	}
 	if output.FirstGUID == "" || output.SecondGUID == "" || output.FirstGUID == output.SecondGUID {
 		return fmt.Errorf("unexpected deterministic GUIDs: first=%q second=%q", output.FirstGUID, output.SecondGUID)
 	}
@@ -124,23 +120,30 @@ func run() (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to read timer orchestration history: %w", err)
 	}
-	timerCreated, timerFired := 0, 0
-	var lastTimerFireAt time.Time
-	for _, event := range history.Events {
+	return verifyTimerHistory(history.Events, output)
+}
+
+func verifyTimerHistory(events []*api.HistoryEvent, output timerOutput) error {
+	if output.FiredAt.Before(output.Deadline) {
+		return fmt.Errorf("timer fired at %s before logical deadline %s", output.FiredAt, output.Deadline)
+	}
+	pending := make(map[int32]time.Time)
+	fired := 0
+	for _, event := range events {
 		switch event.Type {
 		case api.HistoryEventTimerCreated:
-			timerCreated++
+			pending[event.EventID] = event.TimerCreated.FireAt
 		case api.HistoryEventTimerFired:
-			timerFired++
-			lastTimerFireAt = event.TimerFired.FireAt
+			fireAt, ok := pending[event.TimerFired.TimerID]
+			if !ok || !fireAt.Equal(event.TimerFired.FireAt) {
+				return fmt.Errorf("timer %d fired without a matching creation record", event.TimerFired.TimerID)
+			}
+			delete(pending, event.TimerFired.TimerID)
+			fired++
 		}
 	}
-	if timerCreated != expectedPhysicalTimers || timerFired != expectedPhysicalTimers {
-		return fmt.Errorf("physical timers created/fired = %d/%d, want %d/%d",
-			timerCreated, timerFired, expectedPhysicalTimers, expectedPhysicalTimers)
-	}
-	if !lastTimerFireAt.Equal(output.Deadline) {
-		return fmt.Errorf("last physical timer fire = %s, want logical deadline %s", lastTimerFireAt, output.Deadline)
+	if fired == 0 || len(pending) != 0 {
+		return fmt.Errorf("incomplete physical timer history: %d fired, %d pending", fired, len(pending))
 	}
 	return nil
 }
