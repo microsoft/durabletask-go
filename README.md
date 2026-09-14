@@ -17,9 +17,7 @@ The SDK gives you two connections:
 
 ## Features
 
-The features are in three groups. Group 1 has the most important features. Start with group 1.
-
-### Group 1: Basic features
+### Basic features
 
 You need these features for almost all applications.
 
@@ -30,7 +28,7 @@ You need these features for almost all applications.
 | Retries and failure handling | Retry a failed task with a policy. Read the cause from typed errors. |
 | Orchestration management | Start, query, wait for, terminate, suspend, resume, and purge an orchestration. |
 
-### Group 2: Common patterns
+### Common patterns
 
 Most applications use one or more of these patterns.
 
@@ -42,7 +40,7 @@ Most applications use one or more of these patterns.
 | Sub-orchestrations | Call one orchestration from a different orchestration. |
 | Durable entities | Keep addressable state. An entity does its operations one at a time. |
 
-### Group 3: Advanced features
+### Advanced features
 
 Use these features for large systems or for special conditions.
 
