@@ -23,7 +23,7 @@ HASH_FILE="${SCRIPT_DIR}/PROTO_SOURCE_COMMIT_HASH"
 
 mkdir -p "${PROTO_DIR}"
 
-CURL_AUTH=()
+CURL_AUTH=(-H "Accept: application/vnd.github.v3+json")
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     CURL_AUTH=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 fi

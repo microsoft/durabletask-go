@@ -1,3 +1,0 @@
-
-// Start a new orchestration instance
-POST http://localhost:7071/runtime/webhooks/durabletask/orchestrators/HelloCities

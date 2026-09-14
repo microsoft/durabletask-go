@@ -1,0 +1,18 @@
+// Package fixesimport proves the time.Now rewrite also removes the import it
+// leaves behind, so the fixed file still compiles.
+package fixesimport
+
+import (
+	"github.com/microsoft/durabletask-go/task"
+)
+
+// soleUse is the only reference to the time package in this file, so rewriting
+// it must delete the import as well.
+func soleUse(ctx *task.OrchestrationContext) (any, error) {
+	return ctx.CurrentTimeUtc, nil // want `time\.Now is not deterministic in an orchestrator`
+}
+
+func register() {
+	registry := task.NewTaskRegistry()
+	_ = registry.AddOrchestrator(soleUse)
+}

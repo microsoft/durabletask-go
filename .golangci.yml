@@ -20,4 +20,3 @@ linters:
   exclusions:
     paths:
       - internal/protos
-      - tests/mocks

@@ -1,9 +1,6 @@
 package helpers
 
 import (
-	"reflect"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,12 +17,13 @@ func NewExecutionStartedEvent(
 	parent *protos.ParentInstanceInfo,
 	parentTraceContext *protos.TraceContext,
 	scheduledStartTimeStamp *timestamppb.Timestamp,
+	version ...*wrapperspb.StringValue,
 ) *protos.HistoryEvent {
 	u, err := uuid.NewV7()
 	if err != nil {
 		u = uuid.New()
 	}
-	return &protos.HistoryEvent{
+	event := &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.New(time.Now()),
 		EventType: &protos.HistoryEvent_ExecutionStarted{
@@ -42,20 +40,10 @@ func NewExecutionStartedEvent(
 			},
 		},
 	}
-}
-
-func NewExecutionCompletedEvent(eventID int32, status protos.OrchestrationStatus, result *wrapperspb.StringValue, failureDetails *protos.TaskFailureDetails) *protos.HistoryEvent {
-	return &protos.HistoryEvent{
-		EventId:   eventID,
-		Timestamp: timestamppb.Now(),
-		EventType: &protos.HistoryEvent_ExecutionCompleted{
-			ExecutionCompleted: &protos.ExecutionCompletedEvent{
-				OrchestrationStatus: status,
-				Result:              result,
-				FailureDetails:      failureDetails,
-			},
-		},
+	if len(version) > 0 {
+		event.GetExecutionStarted().Version = version[0]
 	}
+	return event
 }
 
 func NewExecutionTerminatedEvent(rawReason *wrapperspb.StringValue, recurse bool) *protos.HistoryEvent {
@@ -242,13 +230,22 @@ func NewParentInfo(taskID int32, name string, iid string) *protos.ParentInstance
 	}
 }
 
-func NewScheduleTaskAction(taskID int32, name string, input *wrapperspb.StringValue) *protos.OrchestratorAction {
-	return &protos.OrchestratorAction{
+func NewScheduleTaskAction(
+	taskID int32,
+	name string,
+	input *wrapperspb.StringValue,
+	version ...*wrapperspb.StringValue,
+) *protos.OrchestratorAction {
+	action := &protos.OrchestratorAction{
 		Id: taskID,
 		OrchestratorActionType: &protos.OrchestratorAction_ScheduleTask{
 			ScheduleTask: &protos.ScheduleTaskAction{Name: name, Input: input},
 		},
 	}
+	if len(version) > 0 {
+		action.GetScheduleTask().Version = version[0]
+	}
+	return action
 }
 
 func NewCreateTimerAction(taskID int32, fireAt time.Time) *protos.OrchestratorAction {
@@ -273,13 +270,112 @@ func NewSendEventAction(iid string, name string, data *wrapperspb.StringValue) *
 	}
 }
 
+func NewEntityOperationSignaledAction(
+	id int32,
+	requestID string,
+	entityID string,
+	operation string,
+	input *wrapperspb.StringValue,
+	scheduledTime *timestamppb.Timestamp,
+) *protos.OrchestratorAction {
+	return &protos.OrchestratorAction{
+		Id: id,
+		OrchestratorActionType: &protos.OrchestratorAction_SendEntityMessage{
+			SendEntityMessage: &protos.SendEntityMessageAction{
+				EntityMessageType: &protos.SendEntityMessageAction_EntityOperationSignaled{
+					EntityOperationSignaled: &protos.EntityOperationSignaledEvent{
+						RequestId:        requestID,
+						Operation:        operation,
+						ScheduledTime:    scheduledTime,
+						Input:            input,
+						TargetInstanceId: wrapperspb.String(entityID),
+					},
+				},
+			},
+		},
+	}
+}
+
+func NewEntityOperationCalledAction(
+	id int32,
+	requestID string,
+	entityID string,
+	parentInstanceID string,
+	parentExecutionID string,
+	operation string,
+	input *wrapperspb.StringValue,
+) *protos.OrchestratorAction {
+	return &protos.OrchestratorAction{
+		Id: id,
+		OrchestratorActionType: &protos.OrchestratorAction_SendEntityMessage{
+			SendEntityMessage: &protos.SendEntityMessageAction{
+				EntityMessageType: &protos.SendEntityMessageAction_EntityOperationCalled{
+					EntityOperationCalled: &protos.EntityOperationCalledEvent{
+						RequestId:         requestID,
+						Operation:         operation,
+						Input:             input,
+						ParentInstanceId:  wrapperspb.String(parentInstanceID),
+						ParentExecutionId: wrapperspb.String(parentExecutionID),
+						TargetInstanceId:  wrapperspb.String(entityID),
+					},
+				},
+			},
+		},
+	}
+}
+
+func NewEntityLockRequestedAction(
+	id int32,
+	criticalSectionID string,
+	parentInstanceID string,
+	lockSet []string,
+) *protos.OrchestratorAction {
+	return &protos.OrchestratorAction{
+		Id: id,
+		OrchestratorActionType: &protos.OrchestratorAction_SendEntityMessage{
+			SendEntityMessage: &protos.SendEntityMessageAction{
+				EntityMessageType: &protos.SendEntityMessageAction_EntityLockRequested{
+					EntityLockRequested: &protos.EntityLockRequestedEvent{
+						CriticalSectionId: criticalSectionID,
+						LockSet:           append([]string(nil), lockSet...),
+						ParentInstanceId:  wrapperspb.String(parentInstanceID),
+					},
+				},
+			},
+		},
+	}
+}
+
+func NewEntityUnlockSentAction(
+	id int32,
+	criticalSectionID string,
+	parentInstanceID string,
+	entityID string,
+) *protos.OrchestratorAction {
+	return &protos.OrchestratorAction{
+		Id: id,
+		OrchestratorActionType: &protos.OrchestratorAction_SendEntityMessage{
+			SendEntityMessage: &protos.SendEntityMessageAction{
+				EntityMessageType: &protos.SendEntityMessageAction_EntityUnlockSent{
+					EntityUnlockSent: &protos.EntityUnlockSentEvent{
+						CriticalSectionId: criticalSectionID,
+						ParentInstanceId:  wrapperspb.String(parentInstanceID),
+						TargetInstanceId:  wrapperspb.String(entityID),
+					},
+				},
+			},
+		},
+	}
+}
+
 func NewCreateSubOrchestrationAction(
 	taskID int32,
 	name string,
 	iid string,
 	input *wrapperspb.StringValue,
+	version ...*wrapperspb.StringValue,
 ) *protos.OrchestratorAction {
-	return &protos.OrchestratorAction{
+	action := &protos.OrchestratorAction{
 		Id: taskID,
 		OrchestratorActionType: &protos.OrchestratorAction_CreateSubOrchestration{
 			CreateSubOrchestration: &protos.CreateSubOrchestrationAction{
@@ -289,6 +385,10 @@ func NewCreateSubOrchestrationAction(
 			},
 		},
 	}
+	if len(version) > 0 {
+		action.GetCreateSubOrchestration().Version = version[0]
+	}
+	return action
 }
 
 func NewCompleteOrchestrationAction(
@@ -311,94 +411,6 @@ func NewCompleteOrchestrationAction(
 	}
 }
 
-func NewTerminateOrchestrationAction(taskID int32, iid string, recurse bool, rawReason *wrapperspb.StringValue) *protos.OrchestratorAction {
-	return &protos.OrchestratorAction{
-		Id: taskID,
-		OrchestratorActionType: &protos.OrchestratorAction_TerminateOrchestration{
-			TerminateOrchestration: &protos.TerminateOrchestrationAction{
-				InstanceId: iid,
-				Recurse:    recurse,
-				Reason:     rawReason,
-			},
-		},
-	}
-}
-
-func NewTaskFailureDetails(err error) *protos.TaskFailureDetails {
-	if err == nil {
-		return nil
-	}
-	return &protos.TaskFailureDetails{
-		ErrorType:    reflect.TypeOf(err).String(),
-		ErrorMessage: err.Error(),
-	}
-}
-
-func HistoryListSummary(list []*protos.HistoryEvent) string {
-	var sb strings.Builder
-	sb.WriteString("[")
-	for i, e := range list {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		if i >= 10 {
-			sb.WriteString("...")
-			break
-		}
-		name := getHistoryEventTypeName(e)
-		sb.WriteString(name)
-		taskID := GetTaskId(e)
-		if taskID > -0 {
-			sb.WriteRune('#')
-			sb.WriteString(strconv.FormatInt(int64(taskID), 10))
-		}
-	}
-	sb.WriteString("]")
-	return sb.String()
-}
-
-func ActionListSummary(actions []*protos.OrchestratorAction) string {
-	var sb strings.Builder
-	sb.WriteString("[")
-	for i, a := range actions {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		if i >= 10 {
-			sb.WriteString("...")
-			break
-		}
-		name := getActionTypeName(a)
-		sb.WriteString(name)
-		if a.Id >= 0 {
-			sb.WriteRune('#')
-			sb.WriteString(strconv.FormatInt(int64(a.Id), 10))
-		}
-	}
-	sb.WriteString("]")
-	return sb.String()
-}
-
-func GetTaskId(e *protos.HistoryEvent) int32 {
-	if e.EventId >= 0 {
-		return e.EventId
-	} else if x := e.GetTaskCompleted(); x != nil {
-		return x.TaskScheduledId
-	} else if x := e.GetTaskFailed(); x != nil {
-		return x.TaskScheduledId
-	} else if x := e.GetSubOrchestrationInstanceCompleted(); x != nil {
-		return x.TaskScheduledId
-	} else if x := e.GetSubOrchestrationInstanceFailed(); x != nil {
-		return x.TaskScheduledId
-	} else if x := e.GetTimerFired(); x != nil {
-		return x.TimerId
-	} else if x := e.GetExecutionStarted().GetParentInstance(); x != nil {
-		return x.TaskScheduledId
-	} else {
-		return -1
-	}
-}
-
 func ToRuntimeStatusString(status protos.OrchestrationStatus) string {
 	name := protos.OrchestrationStatus_name[int32(status)]
 	return name[len("ORCHESTRATION_STATUS_"):]
@@ -407,14 +419,4 @@ func ToRuntimeStatusString(status protos.OrchestrationStatus) string {
 func FromRuntimeStatusString(status string) protos.OrchestrationStatus {
 	runtimeStatus := "ORCHESTRATION_STATUS_" + status
 	return protos.OrchestrationStatus(protos.OrchestrationStatus_value[runtimeStatus])
-}
-
-func getHistoryEventTypeName(e *protos.HistoryEvent) string {
-	// PERFORMANCE: Replace this with a switch statement or a map lookup to avoid this use of reflection
-	return reflect.TypeOf(e.EventType).Elem().Name()[len("HistoryEvent_"):]
-}
-
-func getActionTypeName(a *protos.OrchestratorAction) string {
-	// PERFORMANCE: Replace this with a switch statement or a map lookup to avoid this use of reflection
-	return reflect.TypeOf(a.OrchestratorActionType).Elem().Name()[len("OrchestratorAction_"):]
 }

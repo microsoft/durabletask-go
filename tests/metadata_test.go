@@ -8,7 +8,6 @@ import (
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func Test_OrchestrationMetadata_Serialization(t *testing.T) {
@@ -21,11 +20,13 @@ func Test_OrchestrationMetadata_Serialization(t *testing.T) {
 		"\"World\"",
 		"\"Hello, World!\"",
 		"",
-		&protos.TaskFailureDetails{
-			ErrorType:    "MyError",
-			ErrorMessage: "Kah-BOOOOM!!!",
-			StackTrace:   wrapperspb.String("stack trace"),
-			InnerFailure: &protos.TaskFailureDetails{
+		&api.FailureDetails{
+			ErrorType:      "MyError",
+			ErrorMessage:   "Kah-BOOOOM!!!",
+			StackTrace:     "stack trace",
+			IsNonRetriable: true,
+			Properties:     map[string]any{"attempt": float64(2)},
+			InnerFailure: &api.FailureDetails{
 				ErrorType:    "InnerError",
 				ErrorMessage: "Fuse lit",
 			},
@@ -45,11 +46,13 @@ func Test_OrchestrationMetadata_Serialization(t *testing.T) {
 			if assert.NotNil(t, metadata2.FailureDetails) {
 				assert.Equal(t, metadata.FailureDetails.ErrorType, metadata2.FailureDetails.ErrorType)
 				assert.Equal(t, metadata.FailureDetails.ErrorMessage, metadata2.FailureDetails.ErrorMessage)
-				assert.Equal(t, metadata.FailureDetails.StackTrace.GetValue(), metadata2.FailureDetails.StackTrace.GetValue())
+				assert.Equal(t, metadata.FailureDetails.StackTrace, metadata2.FailureDetails.StackTrace)
+				assert.Equal(t, metadata.FailureDetails.IsNonRetriable, metadata2.FailureDetails.IsNonRetriable)
+				assert.Equal(t, metadata.FailureDetails.Properties, metadata2.FailureDetails.Properties)
 				if assert.NotNil(t, metadata2.FailureDetails.InnerFailure) {
 					assert.Equal(t, metadata.FailureDetails.InnerFailure.ErrorType, metadata2.FailureDetails.InnerFailure.ErrorType)
 					assert.Equal(t, metadata.FailureDetails.InnerFailure.ErrorMessage, metadata2.FailureDetails.InnerFailure.ErrorMessage)
-					assert.Nil(t, metadata2.FailureDetails.InnerFailure.StackTrace)
+					assert.Empty(t, metadata2.FailureDetails.InnerFailure.StackTrace)
 					assert.Nil(t, metadata2.FailureDetails.InnerFailure.InnerFailure)
 				}
 			}
