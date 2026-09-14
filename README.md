@@ -2,6 +2,8 @@
 
 [![Build](https://github.com/microsoft/durabletask-go/actions/workflows/pr-validation.yml/badge.svg)](https://github.com/microsoft/durabletask-go/actions/workflows/pr-validation.yml)
 
+> This SDK is currently in **beta**.
+
 This SDK lets you write reliable business logic in Go. You write the logic as normal Go code. The SDK calls this logic an *orchestration*.
 
 You write the orchestrations, activities, and entities. [Azure Durable Task Scheduler](https://learn.microsoft.com/azure/azure-functions/durable/durable-task-scheduler/durable-task-scheduler) (DTS) keeps the durable state. DTS also dispatches the work and recovers the work after a failure.
