@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,8 +14,10 @@ import (
 	"github.com/microsoft/durabletask-go/api"
 	durabletaskclient "github.com/microsoft/durabletask-go/client"
 	"github.com/microsoft/durabletask-go/durabletaskscheduler"
+	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestDTSRewindRecovery(t *testing.T) {
@@ -140,6 +143,80 @@ func TestDTSRewindRecovery(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDTSRewindRejectsHandledFailure(t *testing.T) {
+	name := "GoRewindHandled_" + uuid.NewString()
+	registry := task.NewTaskRegistry()
+	var calls atomic.Int32
+	for _, activity := range []string{"handled", "good", "terminal"} {
+		require.NoError(t, registry.AddActivityN(name+activity, func(task.ActivityContext) (any, error) {
+			calls.Add(1)
+			if activity != "good" {
+				return nil, errors.New(activity)
+			}
+			return "kept", nil
+		}))
+	}
+	require.NoError(t, registry.AddOrchestratorN(name, func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CallActivity(name + "handled").Await(nil); err == nil {
+			return nil, errors.New("expected the handled failure")
+		}
+		if err := ctx.CallActivity(name + "good").Await(nil); err != nil {
+			return nil, err
+		}
+		return nil, ctx.CallActivity(name + "terminal").Await(nil)
+	}))
+	rejected := make(chan struct{}, 1)
+	options := emulatorOptions(t)
+	options.UnaryInterceptors = []grpc.UnaryClientInterceptor{
+		func(ctx context.Context, method string, request, reply any, connection *grpc.ClientConn, invoke grpc.UnaryInvoker, callOptions ...grpc.CallOption) error {
+			err := invoke(ctx, method, request, reply, connection, callOptions...)
+			if response, ok := request.(*protos.OrchestratorResponse); ok && err == nil {
+				for _, action := range response.Actions {
+					if strings.Contains(action.GetCompleteOrchestration().GetFailureDetails().GetErrorMessage(), "rewind cannot remove an operation failure") {
+						select {
+						case rejected <- struct{}{}:
+						default:
+						}
+					}
+				}
+			}
+			return err
+		},
+	}
+	client, _ := startEmulatorWithOptions(t, options, registry, durabletaskclient.WithAutoWorkItemFilters())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	id := uniqueInstanceID("go-rewind-handled")
+	t.Cleanup(func() { cleanupRewindInstances(t, client, []api.InstanceID{id}) })
+	_, err := client.ScheduleNewOrchestration(ctx, name, api.WithInstanceID(id))
+	require.NoError(t, err)
+	failed, err := client.WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+	require.EqualValues(t, 3, calls.Load())
+	require.NoError(t, client.RewindInstance(ctx, id))
+	select {
+	case <-rejected:
+	case <-ctx.Done():
+		t.Fatal("worker did not report the rejected rewind:", ctx.Err())
+	}
+	history, err := client.GetOrchestrationHistory(ctx, id, api.HistoryQuery{})
+	require.NoError(t, err)
+	require.Equal(t, failed.ExecutionID, history.ExecutionID, "unsupported history must not be replaced")
+	require.EqualValues(t, 3, calls.Load(), "no activity should rerun after rejection")
+	failureCount, successCount := 0, 0
+	for _, event := range history.Events {
+		if event.TaskFailed != nil {
+			failureCount++
+		}
+		if event.TaskCompleted != nil && event.TaskCompleted.SerializedResult == `"kept"` {
+			successCount++
+		}
+	}
+	require.Equal(t, 2, failureCount)
+	require.Equal(t, 1, successCount)
 }
 
 func waitForRewindRecovery(ctx context.Context, client *durabletaskscheduler.Client, id api.InstanceID, oldExecution string) (*api.OrchestrationMetadata, error) {

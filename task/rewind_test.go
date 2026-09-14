@@ -39,25 +39,19 @@ func TestRewindHistoryPreservesSuccessfulWork(t *testing.T) {
 		start,
 		helpers.NewTaskScheduledEvent(0, "good", nil, nil, nil),
 		helpers.NewTaskCompletedEvent(0, wrapperspb.String(`"kept"`)),
-		helpers.NewTaskScheduledEvent(1, "bad", nil, nil, nil),
-		helpers.NewTaskFailedEvent(1, &protos.TaskFailureDetails{ErrorMessage: "failed"}),
-		{EventId: 2, EventType: &protos.HistoryEvent_SubOrchestrationInstanceCreated{
-			SubOrchestrationInstanceCreated: &protos.SubOrchestrationInstanceCreatedEvent{InstanceId: "failed-child", Name: "child"},
-		}},
-		{EventType: &protos.HistoryEvent_SubOrchestrationInstanceFailed{
-			SubOrchestrationInstanceFailed: &protos.SubOrchestrationInstanceFailedEvent{TaskScheduledId: 2},
-		}},
-		{EventId: 3, EventType: &protos.HistoryEvent_SubOrchestrationInstanceCreated{
+		{EventId: 1, EventType: &protos.HistoryEvent_SubOrchestrationInstanceCreated{
 			SubOrchestrationInstanceCreated: &protos.SubOrchestrationInstanceCreatedEvent{InstanceId: "successful-child", Name: "child"},
 		}},
 		{EventType: &protos.HistoryEvent_SubOrchestrationInstanceCompleted{
-			SubOrchestrationInstanceCompleted: &protos.SubOrchestrationInstanceCompletedEvent{TaskScheduledId: 3, Result: wrapperspb.String(`"child-kept"`)},
+			SubOrchestrationInstanceCompleted: &protos.SubOrchestrationInstanceCompletedEvent{TaskScheduledId: 1, Result: wrapperspb.String(`"child-kept"`)},
 		}},
-		helpers.NewTimerCreatedEvent(4, start.Timestamp),
-		{EventType: &protos.HistoryEvent_TimerFired{TimerFired: &protos.TimerFiredEvent{TimerId: 4}}},
+		helpers.NewTimerCreatedEvent(2, start.Timestamp),
+		{EventType: &protos.HistoryEvent_TimerFired{TimerFired: &protos.TimerFiredEvent{TimerId: 2}}},
 		{EventType: &protos.HistoryEvent_GenericEvent{GenericEvent: &protos.GenericEvent{Data: wrapperspb.String("audit")}}},
-		{EventType: &protos.HistoryEvent_OrchestratorCompleted{OrchestratorCompleted: &protos.OrchestratorCompletedEvent{}}},
 		rewindEvent(""),
+		helpers.NewTaskScheduledEvent(3, "bad", nil, nil, nil),
+		helpers.NewTaskFailedEvent(3, &protos.TaskFailureDetails{ErrorMessage: "failed"}),
+		{EventType: &protos.HistoryEvent_OrchestratorCompleted{OrchestratorCompleted: &protos.OrchestratorCompletedEvent{}}},
 		failedCompletionEvent(),
 	}
 	newEvents := []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), rewindEvent("")}
@@ -77,7 +71,9 @@ func TestRewindHistoryPreservesSuccessfulWork(t *testing.T) {
 	action := result.Response.Actions[0]
 	require.EqualValues(t, -1, action.Id)
 	history := action.GetRewindOrchestration().GetNewHistory()
-	want := []*protos.HistoryEvent{old[0], proto.CloneOf(start), old[2], old[3], old[6], old[8], old[9], old[10], old[11], old[12], old[13], old[14], newEvents[0], newEvents[1]}
+	want := append([]*protos.HistoryEvent(nil), old[:10]...)
+	want[1] = proto.CloneOf(start)
+	want = append(want, old[12], newEvents[0], newEvents[1])
 	require.Len(t, history, len(want))
 	newID := history[1].GetExecutionStarted().GetOrchestrationInstance().GetExecutionId().GetValue()
 	require.Len(t, newID, 32)
@@ -169,4 +165,99 @@ func TestRewindMalformedRequests(t *testing.T) {
 	}
 	require.False(t, isRewindRequest([]*protos.HistoryEvent{rewindEvent(""), failedCompletionEvent()}, nil))
 	require.False(t, isRewindRequest(nil, []*protos.HistoryEvent{rewindEvent("")}))
+}
+
+func TestRewindReplacementReplaysSuccessfulPrefix(t *testing.T) {
+	registry := NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("workflow", func(ctx *OrchestrationContext) (any, error) {
+		var good, recovered string
+		if err := ctx.CallActivity("good").Await(&good); err != nil {
+			return nil, err
+		}
+		if err := ctx.CallActivity("bad", WithActivityInput(good)).Await(&recovered); err != nil {
+			return nil, err
+		}
+		return good + ":" + recovered, nil
+	}))
+	executor := NewTaskExecutor(registry)
+	history := []*protos.HistoryEvent{
+		helpers.NewOrchestratorStartedEvent(),
+		helpers.NewExecutionStartedEvent("workflow", "instance", nil, nil, nil, nil),
+		helpers.NewTaskScheduledEvent(0, "good", nil, nil, nil),
+		helpers.NewTaskCompletedEvent(0, wrapperspb.String(`"kept"`)),
+		helpers.NewTaskScheduledEvent(1, "bad", nil, wrapperspb.String(`"kept"`), nil),
+		helpers.NewTaskFailedEvent(1, nil), failedCompletionEvent(),
+	}
+	rewrite, err := executor.ExecuteOrchestrator(context.Background(), "instance", history,
+		[]*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), rewindEvent("")}, nil)
+	require.NoError(t, err)
+	replacement := rewrite.Response.Actions[0].GetRewindOrchestration().GetNewHistory()
+	newEvents := []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), rewindEvent("")}
+	replay, err := executor.ExecuteOrchestrator(context.Background(), "instance", replacement, newEvents, nil)
+	require.NoError(t, err)
+	require.Len(t, replay.Response.Actions, 1)
+	retried := replay.Response.Actions[0]
+	require.EqualValues(t, 1, retried.Id)
+	require.Equal(t, "bad", retried.GetScheduleTask().GetName())
+	require.Equal(t, `"kept"`, retried.GetScheduleTask().GetInput().GetValue())
+	replacement = append(replacement, newEvents...)
+	replacement = append(replacement, helpers.NewTaskScheduledEvent(retried.Id, "bad", nil, retried.GetScheduleTask().Input, nil))
+	completed, err := executor.ExecuteOrchestrator(context.Background(), "instance", replacement,
+		[]*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), helpers.NewTaskCompletedEvent(retried.Id, wrapperspb.String(`"recovered"`))}, nil)
+	require.NoError(t, err)
+	require.Len(t, completed.Response.Actions, 1)
+	require.Equal(t, `"kept:recovered"`, completed.Response.Actions[0].GetCompleteOrchestration().GetResult().GetValue())
+}
+
+func TestRewindRejectsHistoryAfterAFailure(t *testing.T) {
+	firstFailure := helpers.NewTaskFailedEvent(0, &protos.TaskFailureDetails{ErrorMessage: "handled"})
+	for _, test := range []struct {
+		name   string
+		events []*protos.HistoryEvent
+	}{
+		{"handled activity", []*protos.HistoryEvent{
+			helpers.NewTaskScheduledEvent(0, "handled", nil, nil, nil), firstFailure,
+			helpers.NewTaskScheduledEvent(1, "good", nil, nil, nil), helpers.NewTaskCompletedEvent(1, wrapperspb.String(`"kept"`)),
+			helpers.NewTaskScheduledEvent(2, "terminal", nil, nil, nil), helpers.NewTaskFailedEvent(2, nil),
+		}},
+		{"handled child", []*protos.HistoryEvent{
+			{EventId: 0, EventType: &protos.HistoryEvent_SubOrchestrationInstanceCreated{
+				SubOrchestrationInstanceCreated: &protos.SubOrchestrationInstanceCreatedEvent{Name: "child", InstanceId: "child"},
+			}},
+			{EventType: &protos.HistoryEvent_SubOrchestrationInstanceFailed{
+				SubOrchestrationInstanceFailed: &protos.SubOrchestrationInstanceFailedEvent{TaskScheduledId: 0},
+			}},
+			helpers.NewTaskScheduledEvent(1, "good", nil, nil, nil), helpers.NewTaskCompletedEvent(1, wrapperspb.String(`"kept"`)),
+		}},
+		{"handled activity then local error", []*protos.HistoryEvent{
+			helpers.NewTaskScheduledEvent(0, "handled", nil, nil, nil), firstFailure,
+			helpers.NewTaskScheduledEvent(1, "good", nil, nil, nil), helpers.NewTaskCompletedEvent(1, wrapperspb.String(`"kept"`)),
+		}},
+		{"concurrent success after failure", []*protos.HistoryEvent{
+			helpers.NewTaskScheduledEvent(0, "bad", nil, nil, nil), helpers.NewTaskScheduledEvent(1, "good", nil, nil, nil),
+			firstFailure, helpers.NewTaskCompletedEvent(1, wrapperspb.String(`"kept"`)),
+		}},
+		{"multiple failures", []*protos.HistoryEvent{
+			helpers.NewTaskScheduledEvent(0, "bad", nil, nil, nil), helpers.NewTaskScheduledEvent(1, "also-bad", nil, nil, nil),
+			firstFailure, helpers.NewTaskFailedEvent(1, nil),
+		}},
+		{"retry timer", []*protos.HistoryEvent{
+			helpers.NewTaskScheduledEvent(0, "bad", nil, nil, nil), firstFailure,
+			helpers.NewTimerCreatedEvent(1, helpers.NewOrchestratorStartedEvent().Timestamp),
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			history := append([]*protos.HistoryEvent{
+				helpers.NewOrchestratorStartedEvent(),
+				helpers.NewExecutionStartedEvent("workflow", "instance", nil, nil, nil, nil),
+			}, test.events...)
+			history = append(history, failedCompletionEvent())
+			original := proto.CloneOf(&protos.OrchestratorRequest{PastEvents: history})
+			result, err := NewTaskExecutor(NewTaskRegistry()).ExecuteOrchestrator(context.Background(), "instance",
+				history, []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), rewindEvent("")}, nil)
+			require.ErrorIs(t, err, api.ErrFeatureNotSupported)
+			require.Nil(t, result)
+			require.True(t, proto.Equal(original, &protos.OrchestratorRequest{PastEvents: history}))
+		})
+	}
 }

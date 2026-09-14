@@ -247,6 +247,7 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 	}
 	switch {
 	case err != nil:
+		w.logger.Errorf("%s: orchestration execution failed: %v", request.InstanceId, err)
 		response.Actions = []*protos.OrchestratorAction{helpers.NewCompleteOrchestrationAction(
 			-1,
 			protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,

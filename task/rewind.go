@@ -29,19 +29,27 @@ func buildRewindResult(id api.InstanceID, oldEvents, newEvents []*protos.History
 	if len(newEvents) != 2 || newEvents[0].GetOrchestratorStarted() == nil || newEvents[1].GetExecutionRewound() == nil {
 		return nil, fmt.Errorf("rewind requires exactly two new events: orchestrator started and execution rewound")
 	}
+	failedTasks := make(map[int32]struct{})
+	failureSeen := false
+	for _, event := range oldEvents {
+		// ponytail: only lifecycle markers may follow one operation failure;
+		// broader recovery needs dependency-aware history selection.
+		if failureSeen && event.GetOrchestratorStarted() == nil &&
+			event.GetOrchestratorCompleted() == nil && event.GetExecutionCompleted() == nil {
+			return nil, fmt.Errorf("%w: rewind cannot remove an operation failure followed by other durable events (event %d)",
+				api.ErrFeatureNotSupported, event.GetEventId())
+		}
+		if failed := event.GetTaskFailed(); failed != nil {
+			failedTasks[failed.TaskScheduledId] = struct{}{}
+			failureSeen = true
+		} else if event.GetSubOrchestrationInstanceFailed() != nil {
+			failureSeen = true
+		}
+	}
 	rewound := newEvents[1].GetExecutionRewound()
 	executionID, err := uuid.NewRandom()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate rewind execution ID: %w", err)
-	}
-
-	failedTasks := make(map[int32]struct{})
-	for _, events := range [][]*protos.HistoryEvent{oldEvents, newEvents} {
-		for _, event := range events {
-			if failed := event.GetTaskFailed(); failed != nil {
-				failedTasks[failed.TaskScheduledId] = struct{}{}
-			}
-		}
 	}
 
 	history := make([]*protos.HistoryEvent, 0, len(oldEvents)+len(newEvents))

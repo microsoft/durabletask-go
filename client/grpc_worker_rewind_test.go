@@ -99,3 +99,33 @@ func TestWorkerRewindOversizedHistoryFailsExplicitly(t *testing.T) {
 	require.Equal(t, string(api.ErrorTypeOrchestratorResponseTooLarge), completion.GetFailureDetails().GetErrorType())
 	require.True(t, completion.GetFailureDetails().GetIsNonRetriable())
 }
+
+func TestWorkerRewindRejectsHandledFailureWithoutReplacement(t *testing.T) {
+	client := new(fakeSchedulerClient)
+	worker := newFakeWorker(t, client)
+	worker.processOrchestration(context.Background(), client, "token", &protos.OrchestratorRequest{
+		InstanceId: "instance",
+		PastEvents: []*protos.HistoryEvent{
+			helpers.NewExecutionStartedEvent("workflow", "instance", nil, nil, nil, nil),
+			helpers.NewTaskScheduledEvent(0, "handled", nil, nil, nil),
+			helpers.NewTaskFailedEvent(0, nil),
+			helpers.NewTaskScheduledEvent(1, "good", nil, nil, nil),
+			helpers.NewTaskCompletedEvent(1, wrapperspb.String(`"kept"`)),
+			{EventType: &protos.HistoryEvent_ExecutionCompleted{
+				ExecutionCompleted: &protos.ExecutionCompletedEvent{OrchestrationStatus: api.RUNTIME_STATUS_FAILED},
+			}},
+		},
+		NewEvents: []*protos.HistoryEvent{
+			helpers.NewOrchestratorStartedEvent(),
+			{EventType: &protos.HistoryEvent_ExecutionRewound{ExecutionRewound: &protos.ExecutionRewoundEvent{}}},
+		},
+	})
+	require.Zero(t, client.orchestrationAbandons)
+	require.Len(t, client.orchestrationCompletions, 1)
+	response := client.orchestrationCompletions[0]
+	require.Len(t, response.Actions, 1)
+	require.Nil(t, response.Actions[0].GetRewindOrchestration())
+	completion := response.Actions[0].GetCompleteOrchestration()
+	require.Equal(t, api.RUNTIME_STATUS_FAILED, completion.GetOrchestrationStatus())
+	require.Contains(t, completion.GetFailureDetails().GetErrorMessage(), "rewind cannot remove an operation failure")
+}

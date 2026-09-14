@@ -179,9 +179,15 @@ status/output; `WaitForOrchestrationCompletion` can initially return the old
 failed execution. The [runnable sample](../samples/rewind) demonstrates this and
 cleans up only its own instance.
 
-**Limitations:** the pinned Python algorithm retains timer events between
-activity retry attempts. Rewinding an activity that used a retry policy can
-therefore produce a replay nondeterminism error; that case is not supported.
+**Limitations:** the Go worker conservatively rejects replacement history when
+anything other than orchestration lifecycle markers follows the first failed
+activity or child operation. This includes handled failures followed by more
+work, retry timers, and some concurrent executions. Removing those failures
+could prevent retained downstream work from replaying. The worker reports the
+unsupported history in its logs without emitting replacement history; the
+instance may retain its original failure metadata. Enqueue success does not
+imply that this worker-side validation succeeded. This guard is not a
+general proof of replay safety and does not infer whether a failure was handled.
 Rewind does not repair unchanged failing application code. Replacement history
 uses the normal large-payload handling and orchestration response-size bound;
 oversized responses fail explicitly rather than being silently truncated.

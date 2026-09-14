@@ -346,9 +346,10 @@ The SDK does not expose skip-graceful-termination operations.
 enqueues recovery. Observe a **new execution ID** and its final status separately;
 an immediate completion wait can still return the previous failed execution.
 The worker replaces failed history using the same protocol as the Python SDK,
-and DTS recursively rewinds failed children. Activity retry-policy histories
-containing retry timers are not supported by the pinned Python rewind algorithm
-or this implementation. See the [rewind sample](./samples/rewind) and
+and DTS recursively rewinds failed children. The Go worker rejects replacement
+when additional durable events follow a failed activity or child operation;
+handled failures followed by more work, retry timers, and some concurrent
+histories require a new orchestration instead. See the [rewind sample](./samples/rewind) and
 [rewind behavior and limitations](./durabletaskscheduler/README.md#rewind).
 
 To read a long history, use `StreamOrchestrationHistory`. This method reads the history one part at a time. If you buffer the history instead, the SDK applies a validated event cap.
