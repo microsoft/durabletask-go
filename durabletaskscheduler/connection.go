@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/google/uuid"
@@ -262,6 +263,7 @@ func (c *schedulerPerRPCCredentials) RequireTransportSecurity() bool {
 // left empty so credential construction is deterministic and reviewable.
 type credentialSpec struct {
 	authentication             AuthenticationType
+	authorityHost              string
 	clientID                   string
 	tenantID                   string
 	tokenFilePath              string
@@ -298,7 +300,7 @@ func newCredentialSpec(options *Options) (credentialSpec, error) {
 		spec.tokenFilePath = tokenFilePath
 		spec.additionallyAllowedTenants = additionalTenants
 	case AuthenticationEnvironment:
-		// EnvironmentCredential is configured entirely by environment variables.
+		// Identity fields come from the environment; AuthorityHost is set below.
 	case AuthenticationAzureCLI, AuthenticationAzurePowerShell:
 		spec.tenantID = tenantID
 		spec.additionallyAllowedTenants = additionalTenants
@@ -308,6 +310,10 @@ func newCredentialSpec(options *Options) (credentialSpec, error) {
 		spec.additionallyAllowedTenants = additionalTenants
 	default:
 		return credentialSpec{}, fmt.Errorf("unsupported DTS authentication type %q", options.Authentication)
+	}
+	switch options.Authentication {
+	case AuthenticationDefaultAzure, AuthenticationWorkloadIdentity, AuthenticationEnvironment, AuthenticationInteractiveBrowser:
+		spec.authorityHost = strings.TrimSpace(options.AuthorityHost)
 	}
 	return spec, nil
 }
@@ -325,9 +331,14 @@ func normalizeAdditionallyAllowedTenants(tenants []string) []string {
 func newAzureIdentityCredential(spec credentialSpec) (azcore.TokenCredential, error) {
 	var credential azcore.TokenCredential
 	var err error
+	clientOptions := azcore.ClientOptions{}
+	if spec.authorityHost != "" {
+		clientOptions.Cloud = cloud.Configuration{ActiveDirectoryAuthorityHost: spec.authorityHost}
+	}
 	switch spec.authentication {
 	case AuthenticationDefaultAzure:
 		credential, err = azidentity.NewDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{
+			ClientOptions:              clientOptions,
 			TenantID:                   spec.tenantID,
 			AdditionallyAllowedTenants: spec.additionallyAllowedTenants,
 		})
@@ -339,13 +350,16 @@ func newAzureIdentityCredential(spec credentialSpec) (azcore.TokenCredential, er
 		credential, err = azidentity.NewManagedIdentityCredential(credentialOptions)
 	case AuthenticationWorkloadIdentity:
 		credential, err = azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
+			ClientOptions:              clientOptions,
 			ClientID:                   spec.clientID,
 			TenantID:                   spec.tenantID,
 			TokenFilePath:              spec.tokenFilePath,
 			AdditionallyAllowedTenants: spec.additionallyAllowedTenants,
 		})
 	case AuthenticationEnvironment:
-		credential, err = azidentity.NewEnvironmentCredential(nil)
+		credential, err = azidentity.NewEnvironmentCredential(&azidentity.EnvironmentCredentialOptions{
+			ClientOptions: clientOptions,
+		})
 	case AuthenticationAzureCLI:
 		credential, err = azidentity.NewAzureCLICredential(&azidentity.AzureCLICredentialOptions{
 			TenantID:                   spec.tenantID,
@@ -358,6 +372,7 @@ func newAzureIdentityCredential(spec credentialSpec) (azcore.TokenCredential, er
 		})
 	case AuthenticationInteractiveBrowser:
 		credential, err = azidentity.NewInteractiveBrowserCredential(&azidentity.InteractiveBrowserCredentialOptions{
+			ClientOptions:              clientOptions,
 			ClientID:                   spec.clientID,
 			TenantID:                   spec.tenantID,
 			AdditionallyAllowedTenants: spec.additionallyAllowedTenants,
@@ -385,9 +400,15 @@ func resolveCredential(options *Options, factory credentialFactory) (azcore.Toke
 	return factory(spec)
 }
 
-// tokenScope builds the OAuth scope requested for a DTS resource ID.
+// tokenScope normalizes the raw resource ID without modifying Options, so
+// validation and channel recreation cannot strip successive /.default segments.
 func tokenScope(resourceID string) string {
-	return strings.TrimRight(strings.TrimSpace(resourceID), "/") + "/.default"
+	resourceID = strings.TrimRight(strings.TrimSpace(resourceID), "/")
+	const suffix = "/.default"
+	if len(resourceID) >= len(suffix) && strings.EqualFold(resourceID[len(resourceID)-len(suffix):], suffix) {
+		resourceID = strings.TrimRight(resourceID[:len(resourceID)-len(suffix)], "/")
+	}
+	return resourceID + suffix
 }
 
 func prepareOptions(options *Options) (Options, error) {
@@ -412,13 +433,10 @@ func prepareOptionsWith(options *Options, factory credentialFactory) (Options, e
 	if prepared.Authentication == "" {
 		prepared.Authentication = AuthenticationDefaultAzure
 	}
-	// Only an exactly empty resource ID defaults. A whitespace-only value is
-	// left intact so Validate below rejects it as documented instead of
-	// silently collapsing to the default resource.
 	if trimmed := strings.TrimSpace(prepared.ResourceID); trimmed != "" {
 		prepared.ResourceID = trimmed
 	} else if prepared.ResourceID == "" {
-		prepared.ResourceID = DefaultResourceID
+		prepared.ResourceID = defaultResourceID()
 	}
 	if prepared.HelloTimeout == 0 {
 		prepared.HelloTimeout = 30 * time.Second

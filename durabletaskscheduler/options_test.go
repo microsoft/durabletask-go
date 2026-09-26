@@ -10,6 +10,7 @@ import (
 )
 
 func TestNewOptionsFromConnectionString(t *testing.T) {
+	t.Setenv("REGION_NAME", "")
 	tests := []struct {
 		name          string
 		value         string
@@ -392,6 +393,7 @@ func TestNewOptionsFromConnectionStringDoesNotForceInsecureForHTTPS(t *testing.T
 }
 
 func TestNewOptionsDefaults(t *testing.T) {
+	t.Setenv("REGION_NAME", "")
 	options := NewOptions("scheduler.example.com", "hub")
 	require.Equal(t, "scheduler.example.com", options.EndpointAddress)
 	require.Equal(t, "hub", options.TaskHubName)
@@ -506,6 +508,7 @@ func TestOptionsValidateNilReceiver(t *testing.T) {
 }
 
 func TestPrepareOptionsAppliesDefaultsAndCopiesTenants(t *testing.T) {
+	t.Setenv("REGION_NAME", "")
 	options := &Options{
 		EndpointAddress:            "scheduler.example.com",
 		TaskHubName:                "hub",
@@ -527,6 +530,7 @@ func TestPrepareOptionsAppliesDefaultsAndCopiesTenants(t *testing.T) {
 // exactly empty defaults, surrounding whitespace on a real value is trimmed,
 // and a whitespace-only value is rejected instead of collapsing to the default.
 func TestPrepareOptionsResourceIDNormalization(t *testing.T) {
+	t.Setenv("REGION_NAME", "")
 	for _, test := range []struct {
 		name       string
 		resourceID string
@@ -551,9 +555,9 @@ func TestPrepareOptionsResourceIDNormalization(t *testing.T) {
 			want:       "https://custom.example.com",
 			wantScope:  "https://custom.example.com/.default",
 		},
-		{name: "spaces only", resourceID: "   ", wantErr: "resource ID cannot be blank"},
-		{name: "tab only", resourceID: "\t", wantErr: "resource ID cannot be blank"},
-		{name: "newline only", resourceID: "\n", wantErr: "resource ID cannot contain newlines"},
+		{name: "spaces only", resourceID: "   ", wantErr: "resource ID cannot be empty after normalization"},
+		{name: "tab only", resourceID: "\t", wantErr: "resource ID cannot be empty after normalization"},
+		{name: "newline only", resourceID: "\n", wantErr: "resource ID cannot be empty after normalization"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			options := NewOptions("scheduler.example.com", "hub")

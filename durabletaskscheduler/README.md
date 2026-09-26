@@ -48,16 +48,95 @@ fields Azure Identity for Go supports for it:
 | `None` | rejected | rejected | rejected | rejected |
 | `TokenCredential` | rejected | rejected | rejected | rejected |
 
-`Environment` is configured entirely by the `AZURE_*` environment variables, and
+`Environment` gets its identity settings from the `AZURE_*` environment variables, and
 `WorkloadIdentity` falls back to them for any field left unset. Fields are
 trimmed before use and blank `AdditionallyAllowedTenants` entries are dropped.
 `None` and `TokenCredential` construct no Azure Identity credential, so
 supplying identity fields for them fails validation instead of being silently
 ignored.
 
-Access tokens are requested for `Options.ResourceID` (default
-`https://durabletask.io`) with trailing slashes removed and `/.default`
-appended. Token acquisition failures are surfaced as retriable `Unavailable`
+Access tokens are requested for `Options.ResourceID`, also available as the
+`ResourceId` connection-string key. This is a **token audience URI**, not an Azure
+Resource Manager resource path. An explicit nonempty value overrides the default.
+An omitted or exactly empty value selects `https://durabletask.azure.us` when
+`REGION_NAME` starts with `usgov` or `usdod`, case-insensitively; otherwise it
+selects `https://durabletask.io`. This intentionally changes the default for
+government-region hosts. Set `ResourceId=https://durabletask.io` explicitly to
+retain the public audience there. Substring matches such as `notusgov` and
+`notusdod`, and other regions such as `chinaeast2`, retain the public default.
+The service endpoint is never used to infer the audience.
+
+`NewOptions`, `NewOptionsWithCredential`, and `NewOptionsFromConnectionString`
+resolve the default when each options instance is created. A hand-built `Options`
+value, or one whose `ResourceID` is reset to `""`, resolves it when `NewClient` or
+`NewWorker` is called. The selected audience is retained across token refreshes,
+management-channel recreation, worker reconnects, and compatibility listeners.
+Later changes to the environment or caller's options do not change a running
+client or worker.
+
+Normalization trims surrounding whitespace and trailing `/` characters, removes
+**one** existing `/.default` suffix (case-insensitively), then trims trailing `/`
+characters again. The token request appends `/.default`; custom URI casing is
+preserved. For example, `https://durabletask.azure.us//.DEFAULT//` requests
+`https://durabletask.azure.us/.default`, and
+`api://CustomAudience/resource/.DEFAULT/` requests
+`api://CustomAudience/resource/.default`. Whitespace-only values, `///`,
+`/.default`, and `/.DEFAULT///` are rejected, including in connection strings.
+The options retain the input's suffix so validation and reconnects cannot
+accidentally strip meaningful URI segments by normalizing an already-normalized
+value again.
+
+Resource audience, credential authority/cloud, and service endpoint are separate.
+Neither `ResourceID` nor `REGION_NAME` changes the endpoint or authority.
+For SDK-created credentials, optional `Options.AuthorityHost` (or connection-string
+`AuthorityHost`) forwards an HTTPS authority URL through Azure Identity's
+`ClientOptions.Cloud.ActiveDirectoryAuthorityHost`. It is supported by
+`DefaultAzure`, `WorkloadIdentity`, `Environment`, and `InteractiveBrowser`.
+Omission preserves Azure Identity's defaults, including `AZURE_AUTHORITY_HOST`.
+An explicit value overrides that environment setting.
+
+For `Authentication=TokenCredential`, configure authority on the supplied
+credential itself; `GetToken` has no per-request authority override. `None`,
+`TokenCredential`, `ManagedIdentity`, `AzureCLI`, and `AzurePowerShell` reject a
+nonempty `AuthorityHost` instead of silently ignoring it. Managed identity uses
+the hosting environment's identity endpoint, not an Entra authority override.
+Developer-tool credentials require the tool's own cloud configuration (including
+when used within `DefaultAzure`); `AuthorityHost` does not configure those tools.
+
+### Azure Government example
+
+Configure the actual scheduler endpoint separately from the token audience and
+credential authority:
+
+```go
+credential, err := azidentity.NewDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{
+    ClientOptions: azcore.ClientOptions{Cloud: cloud.AzureGovernment},
+})
+if err != nil {
+    return err
+}
+options := durabletaskscheduler.NewOptionsWithCredential(endpoint, taskHub, credential)
+options.ResourceID = durabletaskscheduler.GovernmentResourceID
+// Pass these options to NewClient and NewWorker. Do not set AuthorityHost:
+// the supplied credential already owns its authority configuration.
+```
+
+The Azure imports are `github.com/Azure/azure-sdk-for-go/sdk/azcore`,
+`github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud`, and
+`github.com/Azure/azure-sdk-for-go/sdk/azidentity`. For SDK-created credentials,
+the equivalent connection string is:
+
+```text
+Endpoint=https://<government-scheduler-host>;TaskHub=<hub>;Authentication=DefaultAzure;ResourceId=https://durabletask.azure.us;AuthorityHost=https://login.microsoftonline.us/
+```
+
+The [authentication sample](../samples/authentication) exercises both
+connection-string and caller-created credentials, including government-cloud
+configuration.
+
+### Token and connection lifecycle
+
+Token acquisition failures are surfaced as retriable `Unavailable`
 gRPC errors. Tokens and immutable authorization metadata are cached until the
 credential's `RefreshOn` time (or five minutes before expiry), and concurrent
 refreshes are coalesced. Every RPC carries `taskhub` and `x-user-agent` metadata; worker

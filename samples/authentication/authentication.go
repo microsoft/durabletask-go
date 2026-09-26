@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/durabletaskscheduler"
@@ -43,6 +45,9 @@ func run() error {
 	}
 
 	credential, err := azidentity.NewDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{
+		ClientOptions: azcore.ClientOptions{
+			Cloud: cloud.Configuration{ActiveDirectoryAuthorityHost: options.AuthorityHost},
+		},
 		TenantID: options.TenantID,
 	})
 	if err != nil {
