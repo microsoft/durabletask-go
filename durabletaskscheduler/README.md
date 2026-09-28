@@ -267,6 +267,8 @@ unsupported history in its logs without emitting replacement history; the
 instance may retain its original failure metadata. Enqueue success does not
 imply that this worker-side validation succeeded. This guard is not a
 general proof of replay safety and does not infer whether a failure was handled.
+These history rejections describe a Go SDK limitation, not a lack of rewind
+support in DTS. They retain the `api.ErrFeatureNotSupported` error category.
 Rewind does not repair unchanged failing application code. Replacement history
 uses the normal large-payload handling and orchestration response-size bound;
 oversized responses fail explicitly rather than being silently truncated.
