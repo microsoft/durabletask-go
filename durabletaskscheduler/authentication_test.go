@@ -345,7 +345,7 @@ func TestTokenScope(t *testing.T) {
 func TestOptionsValidateRejectsBlankOrInjectedResourceID(t *testing.T) {
 	options := NewOptions("scheduler.example.com", "hub")
 	options.ResourceID = "   "
-	require.ErrorContains(t, options.Validate(), "resource ID cannot be blank")
+	require.ErrorContains(t, options.Validate(), "resource ID cannot be empty after normalization")
 
 	options.ResourceID = "https://durabletask.io\r\nx"
 	require.ErrorContains(t, options.Validate(), "resource ID cannot contain newlines")
@@ -658,6 +658,7 @@ func TestConnectRejectsCredentialsOnPlaintextTransport(t *testing.T) {
 }
 
 func TestNewOptionsWithCredentialUsesTokenCredentialMode(t *testing.T) {
+	t.Setenv("REGION_NAME", "")
 	credential := stubCredential{name: "explicit"}
 	options := NewOptionsWithCredential("scheduler.example.com", "hub", credential)
 	require.Equal(t, AuthenticationTokenCredential, options.Authentication)

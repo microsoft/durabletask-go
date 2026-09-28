@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `ResourceId` connection-string support for every DTS authentication mode and optional `AuthorityHost` configuration for SDK-created DefaultAzure, WorkloadIdentity, Environment, and InteractiveBrowser credentials. Caller-supplied credentials own their authority; managed identity and developer-tool cloud configuration remain separate.
 - Added a flat catalogue of directly runnable DTS samples with outcome assertions, owned-resource cleanup, and process-level E2E validation selected by sample name using Go's `-run` flag.
 - Added the exported `task.CallActivityOption` type, per-activity tag options, completion-action tag propagation, and distinct activity and sub-orchestration action trace contexts.
 - Added the top-level `durabletaskscheduler` transport package, a dedicated resilient gRPC worker, DTS emulator tests, and an environment-driven sample.
@@ -56,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- DTS token audiences now default per options/client/worker instance to `https://durabletask.azure.us` when `REGION_NAME` starts with `usgov` or `usdod` (case-insensitively), otherwise `https://durabletask.io`. Explicit `Options.ResourceID` or connection-string `ResourceId` overrides the default without changing the endpoint or credential authority. Resource audiences normalize surrounding whitespace, trailing slashes, and one existing `/.default` suffix before token requests; values that normalize to empty are rejected. Audiences remain stable across token refreshes and reconnects. Government-region applications requiring the old audience must explicitly set `https://durabletask.io`.
 - Restore DTS-provided activity trace parents on `ActivityContext.Context()` without emitting duplicate SDK durable spans, preserving trace continuity for application instrumentation.
 - Missing-instance orchestration waits now return `api.ErrInstanceNotFound` immediately instead of retrying `NotFound` until the caller deadline.
 - After a worker has started, it reconnects with bounded backoff after `Unauthenticated` or `PermissionDenied` stream and reconnect-handshake responses so refreshed credentials and propagated RBAC can recover without a process restart. The initial `Hello` remains fail-fast.

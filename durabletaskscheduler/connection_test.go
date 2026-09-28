@@ -30,8 +30,9 @@ import (
 )
 
 type recordingCredential struct {
-	mu      sync.Mutex
-	options []policy.TokenRequestOptions
+	mu        sync.Mutex
+	options   []policy.TokenRequestOptions
+	refreshOn time.Time
 }
 
 type failingCredential struct{}
@@ -118,7 +119,7 @@ func (c *recordingCredential) GetToken(
 	c.mu.Lock()
 	c.options = append(c.options, options)
 	c.mu.Unlock()
-	return azcore.AccessToken{Token: "token", ExpiresOn: time.Now().Add(time.Hour)}, nil
+	return azcore.AccessToken{Token: "token", ExpiresOn: time.Now().Add(time.Hour), RefreshOn: c.refreshOn}, nil
 }
 
 type metadataServer struct {
@@ -826,6 +827,7 @@ func insecureBufconnOptions(t *testing.T, listener *bufconn.Listener) *Options {
 // TestNewPerRPCCredentialsPreservesRoleMetadata pins the metadata each role
 // sends, including the user-agent override and worker identity.
 func TestNewPerRPCCredentialsPreservesRoleMetadata(t *testing.T) {
+	t.Setenv("REGION_NAME", "")
 	tests := []struct {
 		name          string
 		role          connectionRole

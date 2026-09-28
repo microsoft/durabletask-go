@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -17,8 +18,11 @@ import (
 )
 
 const (
-	// DefaultResourceID is the Azure resource used to request DTS access tokens.
+	// DefaultResourceID is the public-cloud token audience for DTS.
 	DefaultResourceID = "https://durabletask.io"
+
+	// GovernmentResourceID is the token audience for DTS in US Government and DoD regions.
+	GovernmentResourceID = "https://durabletask.azure.us"
 
 	// DefaultMaxReceiveMessageSize and DefaultMaxSendMessageSize are the default
 	// per-message gRPC bounds.
@@ -55,11 +59,23 @@ type Options struct {
 	// Credential is required by, and valid only for, AuthenticationTokenCredential.
 	Credential azcore.TokenCredential
 
-	// ResourceID is the DTS resource the access token is requested for. The
-	// requested scope is the resource ID without surrounding whitespace or
-	// trailing slashes plus "/.default". Exactly empty uses DefaultResourceID;
-	// a whitespace-only value is rejected.
+	// ResourceID is a token audience URI, not an Azure Resource Manager path.
+	// Surrounding whitespace, trailing slashes, and one existing "/.default"
+	// suffix (case-insensitive) are removed before appending "/.default".
+	// Exactly empty selects GovernmentResourceID when REGION_NAME starts with
+	// usgov or usdod (case-insensitive), otherwise DefaultResourceID. Constructors
+	// resolve this default per options instance; hand-built or reset-empty
+	// options resolve it when creating a client or worker. Values that normalize
+	// to empty are rejected. This does not configure the endpoint or authority.
 	ResourceID string
+
+	// AuthorityHost optionally configures the Entra authority for SDK-created
+	// DefaultAzure, WorkloadIdentity, Environment, and InteractiveBrowser
+	// credentials. Empty preserves Azure Identity defaults, including
+	// AZURE_AUTHORITY_HOST. Other modes reject a nonempty value: configure an
+	// explicit Credential or developer tool directly; managed identity uses
+	// the hosting environment's identity endpoint.
+	AuthorityHost string
 
 	// ClientID is used by ManagedIdentity, WorkloadIdentity, and
 	// InteractiveBrowser. Other modes ignore it, except None and TokenCredential,
@@ -141,7 +157,7 @@ func NewOptions(endpointAddress, taskHubName string) *Options {
 		EndpointAddress:                 endpointAddress,
 		TaskHubName:                     taskHubName,
 		Authentication:                  AuthenticationDefaultAzure,
-		ResourceID:                      DefaultResourceID,
+		ResourceID:                      defaultResourceID(),
 		HelloTimeout:                    30 * time.Second,
 		MaxReceiveMessageSize:           DefaultMaxReceiveMessageSize,
 		MaxSendMessageSize:              DefaultMaxSendMessageSize,
@@ -151,6 +167,14 @@ func NewOptions(endpointAddress, taskHubName string) *Options {
 		ChannelRecreateFailureThreshold: 5,
 		ChannelRecreateMinInterval:      30 * time.Second,
 	}
+}
+
+func defaultResourceID() string {
+	region := strings.ToLower(os.Getenv("REGION_NAME"))
+	if strings.HasPrefix(region, "usgov") || strings.HasPrefix(region, "usdod") {
+		return GovernmentResourceID
+	}
+	return DefaultResourceID
 }
 
 func NewOptionsWithCredential(endpointAddress, taskHubName string, credential azcore.TokenCredential) *Options {
@@ -166,13 +190,13 @@ func NewOptionsWithCredential(endpointAddress, taskHubName string, credential az
 //
 // Keys and Authentication values are case-insensitive, surrounding whitespace is
 // trimmed, empty segments are skipped, and a repeated key uses its last value.
-// Supported optional keys are ClientID, TenantID, TokenFilePath, and the
-// comma-separated AdditionallyAllowedTenants.
+// Supported optional keys are ResourceId, AuthorityHost, ClientID, TenantID,
+// TokenFilePath, and the comma-separated AdditionallyAllowedTenants. ResourceId
+// follows Options.ResourceID, including rejection of whitespace-only values.
 func NewOptionsFromConnectionString(connectionString string) (*Options, error) {
 	values := make(map[string]string)
 	for _, segment := range strings.Split(connectionString, ";") {
-		segment = strings.TrimSpace(segment)
-		if segment == "" {
+		if strings.TrimSpace(segment) == "" {
 			continue
 		}
 		keyValue := strings.SplitN(segment, "=", 2)
@@ -182,7 +206,11 @@ func NewOptionsFromConnectionString(connectionString string) (*Options, error) {
 		key := strings.ToLower(strings.TrimSpace(keyValue[0]))
 		value := strings.TrimSpace(keyValue[1])
 		switch key {
-		case "endpoint", "taskhub", "authentication", "clientid", "tenantid", "tokenfilepath", "additionallyallowedtenants":
+		case "resourceid":
+			// Preserve the raw value so whitespace-only input is not mistaken
+			// for omission and a meaningful /.default segment is not stripped twice.
+			values[key] = keyValue[1]
+		case "endpoint", "taskhub", "authentication", "authorityhost", "clientid", "tenantid", "tokenfilepath", "additionallyallowedtenants":
 			values[key] = value
 		default:
 			return nil, fmt.Errorf("unsupported connection string key %q", keyValue[0])
@@ -208,6 +236,10 @@ func NewOptionsFromConnectionString(connectionString string) (*Options, error) {
 		return nil, err
 	}
 	options.Authentication = parsedAuthentication
+	if resourceID := values["resourceid"]; resourceID != "" {
+		options.ResourceID = resourceID
+	}
+	options.AuthorityHost = values["authorityhost"]
 	options.ClientID = values["clientid"]
 	options.TenantID = values["tenantid"]
 	options.TokenFilePath = values["tokenfilepath"]
@@ -306,11 +338,11 @@ func (o *Options) Validate() error {
 	if o.ChannelRecreateMinInterval < 0 {
 		return fmt.Errorf("DTS channel recreate minimum interval cannot be negative")
 	}
-	if strings.ContainsAny(o.ResourceID, "\r\n") {
+	if strings.ContainsAny(strings.TrimSpace(o.ResourceID), "\r\n") {
 		return fmt.Errorf("DTS resource ID cannot contain newlines")
 	}
-	if o.ResourceID != "" && strings.TrimSpace(o.ResourceID) == "" {
-		return fmt.Errorf("DTS resource ID cannot be blank")
+	if o.ResourceID != "" && tokenScope(o.ResourceID) == "/.default" {
+		return fmt.Errorf("DTS resource ID cannot be empty after normalization; set ResourceID to a token audience URI or leave it exactly empty to use the default")
 	}
 	if _, err := api.NormalizeLargePayloadOptions(o.LargePayloads); err != nil {
 		return fmt.Errorf("invalid DTS large payload options: %w", err)
@@ -338,6 +370,20 @@ func (o *Options) Validate() error {
 	authentication := o.Authentication
 	if authentication == "" {
 		authentication = AuthenticationDefaultAzure
+	}
+	if o.AuthorityHost != "" {
+		authority, err := url.Parse(strings.TrimSpace(o.AuthorityHost))
+		if err != nil || authority.Scheme != "https" || authority.Hostname() == "" ||
+			authority.User != nil || authority.RawQuery != "" || authority.Fragment != "" ||
+			(authority.Path != "" && authority.Path != "/") {
+			return fmt.Errorf("DTS AuthorityHost must be an HTTPS authority URL without a path, credentials, query, or fragment")
+		}
+		switch authentication {
+		case AuthenticationManagedIdentity:
+			return fmt.Errorf("DTS Authentication ManagedIdentity does not use AuthorityHost; managed identity uses the hosting environment's identity endpoint")
+		case AuthenticationAzureCLI, AuthenticationAzurePowerShell:
+			return fmt.Errorf("DTS Authentication %s does not use AuthorityHost; configure the developer tool's cloud instead", authentication)
+		}
 	}
 	switch authentication {
 	case AuthenticationNone:
@@ -392,6 +438,9 @@ func (o *Options) Validate() error {
 // mode can never consume.
 func (o *Options) identityFieldsInUse() []string {
 	var fields []string
+	if strings.TrimSpace(o.AuthorityHost) != "" {
+		fields = append(fields, "AuthorityHost")
+	}
 	if strings.TrimSpace(o.ClientID) != "" {
 		fields = append(fields, "ClientID")
 	}
