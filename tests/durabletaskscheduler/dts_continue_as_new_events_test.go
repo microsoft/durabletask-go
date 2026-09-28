@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 const (
@@ -192,6 +193,12 @@ func runContinueAsNewEventsScenario(t *testing.T, restartWorker bool) {
 		require.NoError(t, client.RaiseEvent(ctx, instanceID, event.name, api.WithEventPayload(event.payload)))
 	}
 	if restartWorker {
+		// RaiseEvent only acknowledges enqueueing. Drain all six signals into
+		// committed history before closing the stream that can claim them.
+		handoffCtx, cancelHandoff := context.WithTimeout(ctx, 30*time.Second)
+		handoffErr := recorder.waitForCommittedEvents(handoffCtx, "worker-a", events)
+		cancelHandoff()
+		require.NoError(t, handoffErr, "INCONCLUSIVE: signals were not committed before worker handoff")
 		require.NoError(t, stopWorker(worker))
 		startWorker("worker-b")
 	}
@@ -440,6 +447,33 @@ func (r *workItemRecorder) waitForSuspendedTimer(ctx context.Context) error {
 	}
 }
 
+func (r *workItemRecorder) waitForCommittedEvents(ctx context.Context, worker string, events []raisedEvent) error {
+	expected := make([]raisedEvent, len(events))
+	for index, event := range events {
+		raw, err := json.Marshal(event.payload)
+		if err != nil {
+			return fmt.Errorf("failed to serialize expected event: %w", err)
+		}
+		expected[index] = raisedEvent{name: event.name, payload: string(raw)}
+	}
+	_, err := r.waitForWorkerItem(ctx, worker, func(item *observedWorkItem) bool {
+		if !item.Done || item.Err != nil || item.Response.GetNumEventsProcessed() != nil {
+			return false
+		}
+		history := item.history()
+		for _, event := range expected {
+			if !slices.ContainsFunc(history, func(record *protos.HistoryEvent) bool {
+				raised := record.GetEventRaised()
+				return raised.GetName() == event.name && raised.GetInput().GetValue() == event.payload
+			}) {
+				return false
+			}
+		}
+		return true
+	})
+	return err
+}
+
 // requireRegressionCondition returns the work item that continued generation 0
 // as new after proving, from its unmodified history, that it replayed the timer
 // before a trailing work event while the work wait was still pending.
@@ -651,4 +685,78 @@ func protoJSON(message proto.Message) json.RawMessage {
 		return json.RawMessage(fmt.Sprintf("%q", err.Error()))
 	}
 	return content
+}
+
+func TestWorkItemRecorderWaitForCommittedEvents(t *testing.T) {
+	events := []raisedEvent{{name: "work", payload: "one"}, {name: "work", payload: "two"}}
+	history := make([]*protos.HistoryEvent, len(events))
+	for index, event := range events {
+		raw, err := json.Marshal(event.payload)
+		require.NoError(t, err)
+		history[index] = &protos.HistoryEvent{
+			EventType: &protos.HistoryEvent_EventRaised{EventRaised: &protos.EventRaisedEvent{
+				Name: event.name, Input: wrapperspb.String(string(raw)),
+			}},
+		}
+	}
+	tests := []struct {
+		name     string
+		worker   string
+		old      []*protos.HistoryEvent
+		new      []*protos.HistoryEvent
+		streamed bool
+		attempts []error
+		partial  bool
+		ready    bool
+	}{
+		{name: "received but not completed", new: history},
+		{name: "last event still queued", new: history[:1], attempts: []error{nil}},
+		{name: "completion failed", new: history, attempts: []error{errors.New("unavailable")}},
+		{name: "partial completion", new: history, attempts: []error{nil}, partial: true},
+		{name: "different worker", worker: "worker-b", new: history, attempts: []error{nil}},
+		{name: "all events committed", new: history, attempts: []error{nil}, ready: true},
+		{name: "old and new events", old: history[:1], new: history[1:], attempts: []error{nil}, ready: true},
+		{name: "streamed history", old: history[:1], new: history[1:], streamed: true, attempts: []error{nil}, ready: true},
+		{name: "completion retry succeeded", new: history, attempts: []error{errors.New("unavailable"), nil}, ready: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := newWorkItemRecorder("instance")
+			worker := test.worker
+			if worker == "" {
+				worker = "worker-a"
+			}
+			request := &protos.OrchestratorRequest{
+				InstanceId: "instance", PastEvents: test.old, NewEvents: test.new,
+				RequiresHistoryStreaming: test.streamed,
+			}
+			if test.streamed {
+				request.PastEvents = nil
+			}
+			recorder.recordWorkItem(worker, &protos.WorkItem{
+				CompletionToken: "token",
+				Request:         &protos.WorkItem_OrchestratorRequest{OrchestratorRequest: request},
+			})
+			if test.streamed {
+				recorder.recordHistoryChunk(&protos.HistoryChunk{Events: test.old})
+			}
+			for _, err := range test.attempts {
+				response := &protos.OrchestratorResponse{InstanceId: "instance", CompletionToken: "token"}
+				if test.partial {
+					response.NumEventsProcessed = wrapperspb.Int32(1)
+				}
+				recorder.recordCompletion(response, err)
+			}
+			// A canceled context makes an unsatisfied barrier fail immediately;
+			// already acknowledged history can satisfy it without waiting.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			err := recorder.waitForCommittedEvents(ctx, "worker-a", events)
+			if test.ready {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+		})
+	}
 }
