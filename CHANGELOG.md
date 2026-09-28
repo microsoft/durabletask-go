@@ -104,6 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `durabletaskscheduler` token scopes now trim whitespace and all trailing slashes from `Options.ResourceID`. Previously only one trailing slash was removed and untrimmed values produced a malformed scope.
 - The owned DTS management client now observes both unary and streaming RPC outcomes for channel recreation. Caller cancellation, caller deadlines, and expected instance-wait deadlines are neutral and no longer reset or poison an existing transport-failure streak.
 - `TaskHubGrpcClient.ScheduleNewOrchestration` now sends the caller's W3C trace context on `CreateInstanceRequest`, so the service can parent the `create_orchestration` span to it. Previously every orchestration scheduled over gRPC or the Durable Task Scheduler began a disconnected root trace instead of joining the caller's trace.
+- `ContinueAsNew` with `task.WithKeepUnprocessedEvents` no longer drops an external event that arrives in the same work item after the orchestrator returns while a `WaitForSingleEvent` for that name is still pending, such as the loser of a `WhenAny` with a timer. Previously the event completed the unreachable wait and was missing from the next execution. Applications that re-sent such events to work around the loss can now see both copies. A failed or terminated completion no longer carries events forward when `ContinueAsNew` was called earlier in the turn.
 
 ## [v0.6.0] - 2025-02-05
 

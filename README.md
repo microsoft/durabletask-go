@@ -270,6 +270,10 @@ Two rules control the order:
 - If more than one live wait uses the same event name, the newest wait gets the next event. This rule is last in, first out. It agrees with the Durable Task .NET replay contract.
 - If an event arrives before any wait, DTS keeps the event. The orchestration then reads these events in arrival order. This rule is first in, first out.
 
+A wait stays live until it gets an event, times out, or is canceled. This is true even if the wait lost a `WhenAny` race. A live wait that no code awaits still takes the next event with its name. To keep the event for later code, cancel the losing wait with `ctx.WithCancel`. You can also read events with `task.NewEventChannel` and `ctx.Select`. A channel keeps an event until a `Select` case receives it.
+
+With `task.WithKeepUnprocessedEvents`, `ContinueAsNew` moves the undelivered events to the next execution. This includes an event that arrives in the same work item after the orchestrator function returns, even if a wait for that name is still live.
+
 Full sample: [samples/externalevents](./samples/externalevents).
 
 ### Pattern 4: Retries and failure handling

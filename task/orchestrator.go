@@ -84,6 +84,9 @@ type OrchestrationContext struct {
 	eventChannels              map[string]any
 	eventWaiters               map[string]map[*coroutine]struct{}
 	saveBufferedExternalEvents bool
+	// continueAsNewFinalized is true while a successfully built continue-as-new
+	// completion is this execution's pending terminal action.
+	continueAsNewFinalized bool
 
 	criticalSectionID               string
 	criticalSectionLocks            []string
@@ -119,8 +122,11 @@ type SubOrchestratorOption func(*callSubOrchestratorOptions, api.DataConverter) 
 // ContinueAsNewOption is a functional option type for the ContinueAsNew orchestrator method.
 type ContinueAsNewOption func(*OrchestrationContext)
 
-// WithKeepUnprocessedEvents returns a ContinueAsNewOptions struct that instructs the
-// runtime to carry forward any unprocessed external events to the new instance.
+// WithKeepUnprocessedEvents instructs the runtime to carry forward external
+// events that this execution did not deliver. That includes events that arrive
+// after the orchestrator function returns, even if a wait for the same event
+// name is still pending. An event that completed a wait before the function
+// returned was delivered, even if the wait was never awaited.
 func WithKeepUnprocessedEvents() ContinueAsNewOption {
 	return func(ctx *OrchestrationContext) {
 		ctx.saveBufferedExternalEvents = true
@@ -348,6 +354,7 @@ func (ctx *OrchestrationContext) start() (actions []*protos.OrchestratorAction) 
 	ctx.sequenceNumber = 0
 	ctx.newGuidCounter = 0
 	ctx.pendingActions = make(map[int32]*protos.OrchestratorAction)
+	ctx.continueAsNewFinalized = false
 	ctx.pendingTasks = make(map[int32]*completableTask)
 	ctx.pendingEntityTasks = make(map[string]*completableTask)
 	ctx.clearCriticalSection()
@@ -1377,7 +1384,10 @@ func (ctx *OrchestrationContext) onTimerFired(tf *protos.TimerFiredEvent) error 
 func (ctx *OrchestrationContext) onExternalEventRaised(e *protos.HistoryEvent) error {
 	er := e.GetEventRaised()
 	key := strings.ToUpper(er.GetName())
-	if pendingTasks, ok := ctx.pendingExternalEventTasks[key]; ok && pendingTasks.Len() > 0 {
+	// Once continue-as-new is finalized, no waiter of this execution can run
+	// again, so the event is buffered for carryover instead.
+	if pendingTasks, ok := ctx.pendingExternalEventTasks[key]; ok && pendingTasks.Len() > 0 &&
+		!ctx.continueAsNewFinalized {
 		task := pendingTasks.Back().Value.(*completableTask)
 		task.complete([]byte(er.Input.GetValue()))
 		return nil
@@ -1697,6 +1707,7 @@ func (ctx *OrchestrationContext) setHistoryLimitFailed(err error) error {
 }
 
 func (ctx *OrchestrationContext) clearCompletionActions() {
+	ctx.continueAsNewFinalized = false
 	for id, action := range ctx.pendingActions {
 		if action.GetCompleteOrchestration() != nil {
 			delete(ctx.pendingActions, id)
@@ -1760,6 +1771,7 @@ func (ctx *OrchestrationContext) setCompleteInternal(
 		completed.Tags = tagcodec.EncodeUserTags(ctx.orchestrationTags)
 	}
 	ctx.pendingActions[sequenceNumber] = completedAction
+	ctx.continueAsNewFinalized = status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW
 	return nil
 }
 
@@ -1805,10 +1817,11 @@ func (ctx *OrchestrationContext) actions() []*protos.OrchestratorAction {
 			continue
 		}
 		actions = append(actions, a)
-		if ctx.continuedAsNew && ctx.saveBufferedExternalEvents {
-			if co := a.GetCompleteOrchestration(); co != nil {
-				co.CarryoverEvents = append(co.CarryoverEvents, ctx.unprocessedExternalEvents()...)
-			}
+		// ContinueAsNew intent survives a later failure or termination, so check
+		// the completion's actual status before carrying events forward.
+		if co := a.GetCompleteOrchestration(); co != nil && ctx.saveBufferedExternalEvents &&
+			co.GetOrchestrationStatus() == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW {
+			co.CarryoverEvents = append(co.CarryoverEvents, ctx.unprocessedExternalEvents()...)
 		}
 	}
 	return actions
