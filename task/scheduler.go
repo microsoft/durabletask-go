@@ -182,6 +182,10 @@ func (s *coroutineScheduler) shutdown() {
 		return
 	}
 	s.stopping = true
+	engine := s.ctx.engineContext()
+	// Stopping persists while trailing history is processed; unwinding must not.
+	engine.unwinding = true
+	defer func() { engine.unwinding = false }()
 	for _, c := range s.all {
 		c.exit()
 	}

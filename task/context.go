@@ -36,7 +36,8 @@ func (ctx *OrchestrationContext) Context() context.Context {
 	})
 }
 
-// Logger returns a slog logger that suppresses output while replaying history.
+// Logger returns a slog logger that suppresses output while replaying history
+// and while waiting coroutines are forcibly unloaded.
 func (ctx *OrchestrationContext) Logger() *slog.Logger {
 	engine := ctx.engineContext()
 	logger := engine.logger
@@ -46,7 +47,7 @@ func (ctx *OrchestrationContext) Logger() *slog.Logger {
 	handler := &replaySafeHandler{
 		handler: logger.Handler(),
 		replaying: func() bool {
-			return engine.IsReplaying
+			return engine.IsReplaying || engine.unwinding
 		},
 	}
 	return slog.New(handler).With(

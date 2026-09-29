@@ -28,7 +28,7 @@ func NewEventChannel[T any](ctx *OrchestrationContext, name string) *EventChanne
 	if ctx == nil {
 		panic("event channel requires an orchestration context")
 	}
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	key := strings.ToUpper(name)
 	if existing, ok := engine.eventChannels[key]; ok {
 		channel, ok := existing.(*EventChannel[T])
@@ -57,7 +57,7 @@ func (c *EventChannel[T]) Receive(ctx *OrchestrationContext) T {
 // ReceiveErr waits for and consumes the next event value, returning payload
 // decoding and cancellation errors to the orchestrator.
 func (c *EventChannel[T]) ReceiveErr(ctx *OrchestrationContext) (T, error) {
-	if ctx.engineContext() != c.ctx {
+	if ctx.effectContext() != c.ctx {
 		panic("event channel used with a different orchestration context")
 	}
 	var value T
