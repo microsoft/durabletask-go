@@ -271,7 +271,8 @@ func (c *TaskHubGrpcClient) ResumeOrchestration(ctx context.Context, id api.Inst
 // [api.api.ErrInstanceNotFound] is returned if the specified orchestration instance doesn't exist.
 func (c *TaskHubGrpcClient) PurgeOrchestrationState(ctx context.Context, id api.InstanceID, opts ...api.PurgeOptions) error {
 	req := &protos.PurgeInstancesRequest{
-		Request: &protos.PurgeInstancesRequest_InstanceId{InstanceId: string(id)},
+		Request:         &protos.PurgeInstancesRequest_InstanceId{InstanceId: string(id)},
+		IsOrchestration: true,
 	}
 	for _, configure := range opts {
 		if err := configure(req); err != nil {
