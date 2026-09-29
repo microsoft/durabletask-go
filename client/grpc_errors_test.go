@@ -42,6 +42,23 @@ func TestClientRPCErrorMappingsPreserveStatus(t *testing.T) {
 	}
 }
 
+func TestClientRPCUnsupportedFeaturePreservesServiceReason(t *testing.T) {
+	const reason = "server does not expose QueryInstances"
+	err := clientRPCError(context.Background(), "query instances", status.Error(codes.Unimplemented, reason))
+	if !errors.Is(err, api.ErrFeatureNotSupported) {
+		t.Fatalf("error %v does not match ErrFeatureNotSupported", err)
+	}
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("status.Code() = %v, want Unimplemented", status.Code(err))
+	}
+	if !strings.Contains(err.Error(), reason) {
+		t.Fatalf("error lost the service's reason: %v", err)
+	}
+	if strings.Contains(err.Error(), "not supported by Durable Task Scheduler") {
+		t.Fatalf("the shared error category should not attribute the limitation to DTS: %v", err)
+	}
+}
+
 func TestClientRPCErrorPrefersCallerContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -256,6 +256,8 @@ func TestRewindRejectsHistoryAfterAFailure(t *testing.T) {
 			result, err := NewTaskExecutor(NewTaskRegistry()).ExecuteOrchestrator(context.Background(), "instance",
 				history, []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), rewindEvent("")}, nil)
 			require.ErrorIs(t, err, api.ErrFeatureNotSupported)
+			require.ErrorContains(t, err, "Go SDK cannot safely rewind this history")
+			require.NotContains(t, err.Error(), "not supported by Durable Task Scheduler")
 			require.Nil(t, result)
 			require.True(t, proto.Equal(original, &protos.OrchestratorRequest{PastEvents: history}))
 		})

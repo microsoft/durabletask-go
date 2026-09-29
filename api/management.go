@@ -17,7 +17,9 @@ const (
 	DefaultPurgePollInterval     = 100 * time.Millisecond
 )
 
-var ErrFeatureNotSupported = errors.New("feature is not supported by Durable Task Scheduler")
+// ErrFeatureNotSupported identifies a limitation in the SDK or service.
+// The surrounding error describes which operation or history shape is unsupported.
+var ErrFeatureNotSupported = errors.New("feature is not supported")
 
 // OrchestrationQuery describes a bounded query for orchestration instances.
 // ContinuationToken values are opaque and must only be reused with the same query.

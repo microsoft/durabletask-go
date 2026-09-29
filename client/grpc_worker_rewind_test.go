@@ -127,5 +127,6 @@ func TestWorkerRewindRejectsHandledFailureWithoutReplacement(t *testing.T) {
 	require.Nil(t, response.Actions[0].GetRewindOrchestration())
 	completion := response.Actions[0].GetCompleteOrchestration()
 	require.Equal(t, api.RUNTIME_STATUS_FAILED, completion.GetOrchestrationStatus())
-	require.Contains(t, completion.GetFailureDetails().GetErrorMessage(), "rewind cannot remove an operation failure")
+	require.Contains(t, completion.GetFailureDetails().GetErrorMessage(), "Go SDK cannot safely rewind this history")
+	require.NotContains(t, completion.GetFailureDetails().GetErrorMessage(), "not supported by Durable Task Scheduler")
 }

@@ -174,7 +174,7 @@ func TestDTSRewindRejectsHandledFailure(t *testing.T) {
 			err := invoke(ctx, method, request, reply, connection, callOptions...)
 			if response, ok := request.(*protos.OrchestratorResponse); ok && err == nil {
 				for _, action := range response.Actions {
-					if strings.Contains(action.GetCompleteOrchestration().GetFailureDetails().GetErrorMessage(), "rewind cannot remove an operation failure") {
+					if strings.Contains(action.GetCompleteOrchestration().GetFailureDetails().GetErrorMessage(), "Go SDK cannot safely rewind this history") {
 						select {
 						case rejected <- struct{}{}:
 						default:

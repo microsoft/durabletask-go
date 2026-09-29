@@ -36,8 +36,8 @@ func buildRewindResult(id api.InstanceID, oldEvents, newEvents []*protos.History
 		// broader recovery needs dependency-aware history selection.
 		if failureSeen && event.GetOrchestratorStarted() == nil &&
 			event.GetOrchestratorCompleted() == nil && event.GetExecutionCompleted() == nil {
-			return nil, fmt.Errorf("%w: rewind cannot remove an operation failure followed by other durable events (event %d)",
-				api.ErrFeatureNotSupported, event.GetEventId())
+			return nil, fmt.Errorf("Go SDK cannot safely rewind this history: an operation failure is followed by other durable events (event %d): %w",
+				event.GetEventId(), api.ErrFeatureNotSupported)
 		}
 		if failed := event.GetTaskFailed(); failed != nil {
 			failedTasks[failed.TaskScheduledId] = struct{}{}
