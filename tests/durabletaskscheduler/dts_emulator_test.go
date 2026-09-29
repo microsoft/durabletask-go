@@ -559,6 +559,58 @@ func TestDTSEmulatorSequenceMetadataAndPurge(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrInstanceNotFound)
 }
 
+func TestDTSSingleInstancePurge(t *testing.T) {
+	name := string(uniqueInstanceID("DTSSingleInstancePurge"))
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN(name, func(*task.OrchestrationContext) (any, error) {
+		return "done", nil
+	}))
+	managementClient, _, _ := startEmulatorClientAndWorker(t, registry, durabletaskclient.WithAutoWorkItemFilters())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	targetID := uniqueInstanceID("go-single-purge")
+	controlID := uniqueInstanceID("go-single-purge-control")
+	for _, id := range []api.InstanceID{targetID, controlID} {
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			metadata, err := managementClient.FetchOrchestrationMetadata(cleanupCtx, id)
+			if errors.Is(err, api.ErrInstanceNotFound) {
+				return
+			}
+			require.NoError(t, err)
+			if !metadata.IsComplete() {
+				require.NoError(t, managementClient.TerminateOrchestration(cleanupCtx, id, api.WithRecursiveTerminate(false)))
+				_, err = managementClient.WaitForOrchestrationCompletion(cleanupCtx, id)
+				require.NoError(t, err)
+			}
+			_, err = managementClient.PurgeInstances(cleanupCtx, api.PurgeInstancesRequest{InstanceIDs: []api.InstanceID{id}})
+			require.NoError(t, err)
+			metadata, err = managementClient.FetchOrchestrationMetadata(cleanupCtx, id)
+			require.ErrorIs(t, err, api.ErrInstanceNotFound)
+			require.Nil(t, metadata)
+			t.Logf("cleaned up owned orchestration %s", id)
+		})
+		t.Logf("owned orchestration %s", id)
+		_, err := managementClient.ScheduleNewOrchestration(ctx, name, api.WithInstanceID(id))
+		require.NoError(t, err)
+		metadata, err := managementClient.WaitForOrchestrationCompletion(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, api.RUNTIME_STATUS_COMPLETED, metadata.RuntimeStatus)
+	}
+
+	require.NoError(t, managementClient.PurgeOrchestrationState(ctx, targetID))
+	metadata, err := managementClient.FetchOrchestrationMetadata(ctx, targetID)
+	require.ErrorIs(t, err, api.ErrInstanceNotFound)
+	require.Nil(t, metadata)
+	control, err := managementClient.FetchOrchestrationMetadata(ctx, controlID)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, control.RuntimeStatus)
+	require.Equal(t, controlID, control.InstanceID)
+	t.Logf("purged %s; completed control %s remains", targetID, controlID)
+}
+
 func TestDTSEmulatorDurableEntities(t *testing.T) {
 	registry := task.NewTaskRegistry()
 	require.NoError(t, registry.AddEntityN("counter", func(ctx *task.EntityContext) (any, error) {

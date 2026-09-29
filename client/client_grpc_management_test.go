@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ type managementServer struct {
 
 	queryErr error
 	rewind   func(context.Context, *protos.RewindInstanceRequest) (*protos.RewindInstanceResponse, error)
+	purge    func(context.Context, *protos.PurgeInstancesRequest) (*protos.PurgeInstancesResponse, error)
 }
 
 func (s *managementServer) RewindInstance(ctx context.Context, req *protos.RewindInstanceRequest) (*protos.RewindInstanceResponse, error) {
@@ -28,6 +30,13 @@ func (s *managementServer) RewindInstance(ctx context.Context, req *protos.Rewin
 		return nil, status.Error(codes.Unimplemented, "rewind is not implemented")
 	}
 	return s.rewind(ctx, req)
+}
+
+func (s *managementServer) PurgeInstances(ctx context.Context, req *protos.PurgeInstancesRequest) (*protos.PurgeInstancesResponse, error) {
+	if s.purge == nil {
+		return nil, status.Error(codes.Unimplemented, "purge is not implemented")
+	}
+	return s.purge(ctx, req)
 }
 
 func (s *managementServer) QueryInstances(
@@ -91,7 +100,12 @@ func TestTaskHubGrpcManagementErrorsRoundTrip(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			client := startQueryClient(t, &managementServer{queryErr: test.err})
+			client := startQueryClient(t, &managementServer{
+				queryErr: test.err,
+				purge: func(context.Context, *protos.PurgeInstancesRequest) (*protos.PurgeInstancesResponse, error) {
+					return nil, test.err
+				},
+			})
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -99,6 +113,63 @@ func TestTaskHubGrpcManagementErrorsRoundTrip(t *testing.T) {
 			_, err := client.QueryInstances(ctx, api.OrchestrationQuery{PageSize: 10})
 			require.ErrorIs(t, err, test.want)
 			require.Equal(t, status.Code(test.err), status.Code(err))
+
+			err = client.PurgeOrchestrationState(ctx, "instance")
+			require.ErrorIs(t, err, test.want)
+			require.Equal(t, status.Code(test.err), status.Code(err))
 		})
 	}
+}
+
+func TestPurgeOrchestrationStateRequest(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		options   []api.PurgeOptions
+		recursive bool
+	}{
+		{name: "default"},
+		{name: "recursive", options: []api.PurgeOptions{api.WithRecursivePurge(true)}, recursive: true},
+		{name: "nonrecursive", options: []api.PurgeOptions{api.WithRecursivePurge(false)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requests := make(chan *protos.PurgeInstancesRequest, 1)
+			client := startQueryClient(t, &managementServer{
+				purge: func(_ context.Context, req *protos.PurgeInstancesRequest) (*protos.PurgeInstancesResponse, error) {
+					requests <- req
+					return &protos.PurgeInstancesResponse{DeletedInstanceCount: 1}, nil
+				},
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			require.NoError(t, client.PurgeOrchestrationState(ctx, "completed-instance", test.options...))
+			req := <-requests
+			require.IsType(t, &protos.PurgeInstancesRequest_InstanceId{}, req.Request)
+			require.Equal(t, "completed-instance", req.GetInstanceId())
+			require.Equal(t, test.recursive, req.GetRecursive())
+			require.True(t, req.GetIsOrchestration(), "single-instance purge must identify an orchestration")
+		})
+	}
+}
+
+func TestPurgeOrchestrationStateMissingInstance(t *testing.T) {
+	client := startQueryClient(t, &managementServer{
+		purge: func(context.Context, *protos.PurgeInstancesRequest) (*protos.PurgeInstancesResponse, error) {
+			return &protos.PurgeInstancesResponse{}, nil
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	require.ErrorIs(t, client.PurgeOrchestrationState(ctx, "missing-instance"), api.ErrInstanceNotFound)
+}
+
+func TestPurgeOrchestrationStateOptionError(t *testing.T) {
+	client := &TaskHubGrpcClient{}
+	optionErr := errors.New("invalid purge option")
+	err := client.PurgeOrchestrationState(context.Background(), "instance", func(*protos.PurgeInstancesRequest) error {
+		return optionErr
+	})
+	require.ErrorIs(t, err, api.ErrInvalidArgument)
+	require.ErrorIs(t, err, optionErr)
 }
