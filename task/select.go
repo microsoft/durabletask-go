@@ -94,10 +94,10 @@ func (ctx *OrchestrationContext) Select(cases ...SelectCase) {
 }
 
 func (ctx *OrchestrationContext) selectCase(cases []SelectCase) SelectCase {
+	engine := ctx.effectContext()
 	if len(cases) == 0 {
 		panic("Select requires at least one case")
 	}
-	engine := ctx.engineContext()
 	scheduler := engine.scheduler
 	if scheduler == nil {
 		panic("Select called outside orchestrator execution")

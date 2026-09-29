@@ -13,6 +13,8 @@ import (
 // ErrTaskBlocked is not an error, but rather a control flow signal indicating that an orchestrator
 // function has executed as far as it can and that it now needs to unload, dispatch any scheduled tasks,
 // and commit its current execution progress to durable storage.
+// Durable operations also panic with this signal when called by deferred code
+// during forced coroutine unloading, before creating or modifying durable work.
 var ErrTaskBlocked = errors.New("the current task is blocked")
 
 // ErrTaskCanceled is used to indicate that a task was canceled. Tasks can be canceled, for example,
@@ -45,6 +47,7 @@ type completableTask struct {
 }
 
 func newTaskInScope(ctx *OrchestrationContext, scope *cancellationScope) *completableTask {
+	ctx.effectContext()
 	task := &completableTask{
 		orchestrationCtx: ctx,
 		waiters:          make(map[*coroutine]struct{}),
@@ -62,11 +65,13 @@ func newTaskInScope(ctx *OrchestrationContext, scope *cancellationScope) *comple
 //
 // Await will return ErrTaskCanceled if the task was canceled - e.g. due to a timeout.
 //
-// Await may panic with ErrTaskBlocked as the panic value if called on a task that has not yet completed.
+// Await may panic with ErrTaskBlocked as the panic value if called on a task that has not yet completed,
+// or if called while the runtime forcibly unloads the current coroutine.
 // This is normal control flow behavior for orchestrator functions and doesn't actually indicate a failure
 // of any kind. However, orchestrator functions must never attempt to recover from such panics to ensure that
 // the orchestration execution can procede normally.
 func (t *completableTask) Await(v any) error {
+	t.orchestrationCtx.effectContext()
 	for {
 		if t.isCompleted {
 			if t.localErr != nil {
@@ -116,7 +121,6 @@ func (t *completableTask) Await(v any) error {
 			break
 		}
 	}
-	// TODO: Need a rule about using "defer" in orchestrations because planned panics will invoke them unexpectedly
 	panic(ErrTaskBlocked)
 }
 

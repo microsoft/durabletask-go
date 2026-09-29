@@ -33,6 +33,11 @@ type replayEvent struct {
 }
 
 // OrchestrationContext is the parameter type for orchestrator functions.
+//
+// Deferred functions can issue and await durable work when their coroutine
+// returns normally. When the runtime forcibly unloads a waiting coroutine,
+// durable operations instead panic with ErrTaskBlocked before changing state.
+// Applications must not recover that control-flow signal.
 type OrchestrationContext struct {
 	ID             api.InstanceID
 	Name           string
@@ -75,6 +80,7 @@ type OrchestrationContext struct {
 	converter                api.DataConverter
 	entitiesSupported        bool
 	scheduler                *coroutineScheduler
+	unwinding                bool
 	root                     *OrchestrationContext
 	scope                    *cancellationScope
 	derived                  []*OrchestrationContext
@@ -129,6 +135,7 @@ type ContinueAsNewOption func(*OrchestrationContext)
 // returned was delivered, even if the wait was never awaited.
 func WithKeepUnprocessedEvents() ContinueAsNewOption {
 	return func(ctx *OrchestrationContext) {
+		ctx.effectContext()
 		ctx.saveBufferedExternalEvents = true
 	}
 }
@@ -136,6 +143,7 @@ func WithKeepUnprocessedEvents() ContinueAsNewOption {
 // WithContinueAsNewVersion migrates the next execution to a new orchestration version.
 func WithContinueAsNewVersion(version string) ContinueAsNewOption {
 	return func(ctx *OrchestrationContext) {
+		ctx.effectContext()
 		if version != "" && strings.TrimSpace(version) == "" {
 			ctx.continuedAsNewVersion = nil
 			return
@@ -295,6 +303,15 @@ func (ctx *OrchestrationContext) engineContext() *OrchestrationContext {
 	return ctx
 }
 
+// effectContext stops forced-unwind defers before they can mutate durable state.
+func (ctx *OrchestrationContext) effectContext() *OrchestrationContext {
+	engine := ctx.engineContext()
+	if engine.unwinding {
+		panic(ErrTaskBlocked)
+	}
+	return engine
+}
+
 func (ctx *OrchestrationContext) syncDerivedContexts() {
 	active := ctx.derived[:0]
 	for _, derived := range ctx.derived {
@@ -316,8 +333,10 @@ func (ctx *OrchestrationContext) syncDerivedContexts() {
 // WithCancel creates a child orchestration context whose tasks, nested scopes,
 // and coroutines are canceled together at the next scheduler step.
 // A child of an already-canceled scope is canceled immediately.
+// Await cleanup from an uncanceled wrapper, cancel only its body operations,
+// and join the wrapper before returning.
 func (ctx *OrchestrationContext) WithCancel() (*OrchestrationContext, func()) {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	if engine.scheduler == nil {
 		panic("cancellation scope created outside orchestrator execution")
 	}
@@ -590,12 +609,12 @@ func (ctx *OrchestrationContext) processEvent(e *protos.HistoryEvent) error {
 // SetCustomStatus stores a raw, pre-serialized custom status string.
 // Use SetCustomStatusValue to apply the configured data converter.
 func (octx *OrchestrationContext) SetCustomStatus(cs string) {
-	octx.engineContext().customStatus = cs
+	octx.effectContext().customStatus = cs
 }
 
 // SetCustomStatusValue serializes and stores a typed custom status value.
 func (octx *OrchestrationContext) SetCustomStatusValue(value any) error {
-	engine := octx.engineContext()
+	engine := octx.effectContext()
 	payload, err := api.SerializeData(engine.converter, value)
 	if err != nil {
 		return fmt.Errorf("failed to serialize custom status: %w", err)
@@ -606,14 +625,14 @@ func (octx *OrchestrationContext) SetCustomStatusValue(value any) error {
 
 // SetRawCustomStatus stores a pre-serialized custom status value.
 func (octx *OrchestrationContext) SetRawCustomStatus(payload string) {
-	octx.engineContext().customStatus = payload
+	octx.effectContext().customStatus = payload
 }
 
 var guidNamespace = uuid.MustParse("9e952958-5e33-4daf-827f-2fa12937b875")
 
 // NewGuid returns a deterministic UUID that is stable across orchestration replay.
 func (ctx *OrchestrationContext) NewGuid() string {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	timestamp := engine.CurrentTimeUtc.UTC().Format("2006-01-02T15:04:05.0000000Z")
 	name := fmt.Sprintf("%s_%s_%d", engine.ID, timestamp, engine.newGuidCounter)
 	engine.newGuidCounter++
@@ -630,7 +649,7 @@ func (octx *OrchestrationContext) GetInput(v any) error {
 // parameter can be either the name of an activity as a string or can be a pointer to the function
 // that implements the activity, in which case the name is obtained via reflection.
 func (ctx *OrchestrationContext) CallActivity(activity any, opts ...CallActivityOption) Task {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	options := new(callActivityOptions)
 	for _, configure := range opts {
 		if err := configure(options, engine.converter); err != nil {
@@ -666,6 +685,7 @@ func (ctx *OrchestrationContext) newFailedTask(engine *OrchestrationContext, err
 // Go starts a coroutine that is cooperatively scheduled with the orchestration.
 // Only one orchestration coroutine runs at a time, in monotonically increasing ID order.
 // A callback whose scope is canceled before it starts is not invoked.
+// Join children explicitly when their cleanup must finish before the root returns.
 func (ctx *OrchestrationContext) Go(fn func(ctx *OrchestrationContext)) {
 	if fn == nil {
 		panic("orchestration coroutine function must be non-nil")
@@ -719,7 +739,7 @@ func (ctx *OrchestrationContext) internalScheduleActivity(
 }
 
 func (ctx *OrchestrationContext) CallSubOrchestrator(orchestrator any, opts ...SubOrchestratorOption) Task {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	if engine.criticalSectionID != "" {
 		return ctx.newFailedTask(engine, fmt.Errorf("sub-orchestrations cannot be started while holding entity locks"))
 	}
@@ -909,7 +929,7 @@ func computeNextDelay(currentTimeUtc time.Time, policy RetryPolicy, attempt int,
 
 // CreateTimer schedules a durable timer that expires after the specified delay.
 func (ctx *OrchestrationContext) CreateTimer(delay time.Duration) Task {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	if ctx.scope.isCanceled() {
 		return newTaskInScope(engine, ctx.scope)
 	}
@@ -933,7 +953,7 @@ func (ctx *OrchestrationContext) createTimerInternal(
 
 	var scheduleNextChunk func()
 	scheduleNextChunk = func() {
-		if logicalTimer.isCompleted {
+		if logicalTimer.isCompleted || (ctx.scheduler != nil && ctx.scheduler.isStopping()) {
 			return
 		}
 
@@ -995,7 +1015,7 @@ func (ctx *OrchestrationContext) createTimerAction(
 //
 // Note that event names are case-insensitive.
 func (ctx *OrchestrationContext) WaitForSingleEvent(eventName string, timeout time.Duration) Task {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	task := newTaskInScope(engine, ctx.scope)
 	if ctx.scope.isCanceled() {
 		return task
@@ -1030,7 +1050,7 @@ func (ctx *OrchestrationContext) WaitForSingleEvent(eventName string, timeout ti
 
 // CallEntity sends an operation request to an entity and waits for its response.
 func (ctx *OrchestrationContext) CallEntity(entityID api.EntityID, operationName string, opts ...callEntityOption) Task {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	if engine.isTerminated || ctx.scope.isCanceled() {
 		task := newTaskInScope(engine, ctx.scope)
 		task.cancel()
@@ -1093,7 +1113,7 @@ func (ctx *OrchestrationContext) CallEntity(entityID api.EntityID, operationName
 
 // SignalEntity sends a fire-and-forget entity operation.
 func (ctx *OrchestrationContext) SignalEntity(entityID api.EntityID, operationName string, opts ...signalEntityOption) error {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	if engine.isTerminated || ctx.scope.isCanceled() {
 		return ErrTaskCanceled
 	}
@@ -1135,7 +1155,7 @@ func (ctx *OrchestrationContext) SignalEntity(entityID api.EntityID, operationNa
 // If cancellation follows a committed request, critical-section restrictions
 // remain in effect until the eventual grant is received and automatically released.
 func (ctx *OrchestrationContext) LockEntities(entityIDs ...api.EntityID) (func(), error) {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	if engine.isTerminated || ctx.scope.isCanceled() {
 		return nil, ErrTaskCanceled
 	}
@@ -1218,8 +1238,9 @@ func (ctx *OrchestrationContext) IsInCriticalSection() bool {
 	return ctx.engineContext().criticalSectionID != ""
 }
 
+// ContinueAsNew requests a new execution when the root coroutine finishes.
 func (ctx *OrchestrationContext) ContinueAsNew(newInput any, options ...ContinueAsNewOption) {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	engine.continuedAsNew = true
 	engine.continuedAsNewInput = newInput
 	for _, option := range options {
@@ -1230,7 +1251,7 @@ func (ctx *OrchestrationContext) ContinueAsNew(newInput any, options ...Continue
 // SendEvent sends an event to another orchestration instance as part of the
 // current durable orchestration transaction.
 func (ctx *OrchestrationContext) SendEvent(instanceID api.InstanceID, eventName string, payload any) error {
-	engine := ctx.engineContext()
+	engine := ctx.effectContext()
 	raw, err := marshalData(engine.converter, payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event payload: %w", err)
@@ -1436,6 +1457,7 @@ func (ctx *OrchestrationContext) peekBufferedEvent(key string) (*bufferedEvent, 
 }
 
 func (ctx *OrchestrationContext) takeBufferedEvent(key string) (*bufferedEvent, bool) {
+	ctx.effectContext()
 	eventList, ok := ctx.bufferedExternalEvents[key]
 	if !ok || eventList.Len() == 0 {
 		return nil, false
@@ -1800,6 +1822,7 @@ func (ctx *OrchestrationContext) clearCriticalSection() {
 }
 
 func (ctx *OrchestrationContext) getNextSequenceNumber() int32 {
+	ctx.effectContext()
 	current := ctx.sequenceNumber
 	ctx.sequenceNumber++
 	return current

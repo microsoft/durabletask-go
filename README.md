@@ -311,6 +311,63 @@ Obey these rules when you write a retry handler:
 
 Full sample: [samples/retries](./samples/retries).
 
+### Deferred work and cooperative cleanup
+
+A root or child coroutine's defers can schedule and await durable work during
+normal return, error return, or an application panic. A deferred `Await` can
+span turns: replay resumes the cleanup before that coroutine completes.
+
+Forced unloading is different. At the end of a waiting turn, or when the
+orchestration ends with waiting children, Go unwinds their stacks. Durable
+operations in those defers panic with `task.ErrTaskBlocked` before changing
+durable state. Never recover this signal. The rest of that deferred function
+is skipped, but other defers still run. Termination does not run business cleanup.
+
+`ctx.Logger()` suppresses replay and forced-unload output without changing
+`ctx.IsReplaying`. Other local defers, such as metrics or `span.End`, can run
+every turn. Keep local-resource cleanup separate from durable cleanup.
+
+To finish child cleanup before completion, run the child on the uncanceled
+root, cancel only its body operations, and join it. A coroutine canceled before
+it starts is skipped, so do not rely on a `Done` deferred inside `child.Go`.
+
+```go
+func CleanupOrchestrator(ctx *task.OrchestrationContext) (any, error) {
+	work, cancel := ctx.WithCancel()
+	group := ctx.NewWaitGroup()
+	var childErr error
+	group.Add(1)
+	ctx.Go(func(cleanup *task.OrchestrationContext) {
+		defer group.Done()
+		defer func() {
+			childErr = errors.Join(childErr, cleanup.CallActivity("Cleanup").Await(nil))
+		}()
+		childErr = work.WaitForSingleEvent("work", -1).Await(nil)
+		if childErr == task.ErrTaskCanceled {
+			childErr = nil // The body cancellation is expected; cleanup errors are not.
+		}
+	})
+	if err := ctx.WaitForSingleEvent("stop", -1).Await(nil); err != nil {
+		return nil, err
+	}
+	cancel()
+	group.Wait(ctx)
+	return nil, childErr
+}
+```
+
+The `Cleanup` activity must act only on resources this workflow owns and must
+be idempotent, since activity delivery is at least once. For multiple children,
+keep separate error slots and combine them after joining.
+
+Unlike `Await`, `Select` and `WaitGroup.Wait` panic on cancellation; wrap those
+body operations with a handler that recovers only the exact
+`task.ErrTaskCanceled` value and re-panics everything else.
+
+Use a deferred function when scheduling itself should be deferred.
+`defer ctx.CallActivity("Cleanup").Await(nil)` schedules the activity immediately
+and defers only the await.
+
 ### Orchestration management
 
 Use a `TaskRegistry` to register your orchestrator, activity, and entity functions. Then use the client from `durabletaskscheduler.NewClient` to control the orchestrations.

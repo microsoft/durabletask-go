@@ -85,6 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Forced coroutine unloading no longer leaks durable actions or custom status from application defers: durable operations panic with `ErrTaskBlocked` before changing state. Normal-return defers remain awaitable across replay, and orchestration loggers suppress forced-unload output.
+- Long durable timers no longer schedule another chunk when a trailing timer event is processed after the orchestration has finalized.
 - DTS authentication now caches access tokens and immutable gRPC metadata, honors credential `RefreshOn` guidance, and coalesces concurrent refreshes and failures. Previously credentials such as `AzureCLICredential` were invoked for every RPC, serializing high-throughput workers behind external token acquisition.
 - Disabled large-payload handling no longer builds transform closures, maps, and goroutines for ordinary payloads. Reserved payload-reference prefixes are still rejected when no store and resolver are configured.
 - Worker completion and abandon RPCs no longer retry `NotFound` responses ten times. A completion whose work item is already unavailable is dropped for normal DTS redelivery without a second, guaranteed-failing abandon RPC.

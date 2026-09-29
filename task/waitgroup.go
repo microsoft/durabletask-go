@@ -2,6 +2,9 @@ package task
 
 // WaitGroup coordinates orchestration coroutines. It behaves like sync.WaitGroup,
 // but Wait yields to the deterministic orchestration scheduler.
+// Do not pair Add with a Done deferred only inside a coroutine that can be skipped
+// before starting because its scope was canceled. Use an uncanceled wrapper and
+// a separate cancellation scope for its body operations instead.
 type WaitGroup interface {
 	Add(delta int)
 	Done()
@@ -41,7 +44,7 @@ func (wg *orchestrationWaitGroup) Done() {
 }
 
 func (wg *orchestrationWaitGroup) Wait(ctx *OrchestrationContext) {
-	if ctx.engineContext().scheduler != wg.scheduler {
+	if ctx.effectContext().scheduler != wg.scheduler {
 		panic("task.WaitGroup belongs to a different orchestration")
 	}
 	for wg.count > 0 {

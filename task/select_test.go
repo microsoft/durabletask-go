@@ -389,9 +389,10 @@ func executeOrchestrationTurn(
 	instanceID api.InstanceID,
 	oldEvents []*protos.HistoryEvent,
 	newEvents []*protos.HistoryEvent,
+	options ...TaskExecutorOption,
 ) *protos.OrchestratorResponse {
 	t.Helper()
-	result, err := NewTaskExecutor(registry).ExecuteOrchestrator(
+	result, err := NewTaskExecutor(registry, options...).ExecuteOrchestrator(
 		context.Background(),
 		instanceID,
 		oldEvents,
