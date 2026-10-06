@@ -96,7 +96,7 @@ func newWorkerCompletionTransport(
 		case isNilWorkerTransport(cc):
 			err = fmt.Errorf("gRPC worker connection factory returned a nil connection")
 		case isNilWorkerTransport(closer):
-			err = fmt.Errorf("completion connections require an owning factory with a closer for every connection")
+			err = fmt.Errorf("owned worker connections require a factory that returns a closer for every connection, including intake")
 		case ctx.Err() != nil:
 			err = ctx.Err()
 		}

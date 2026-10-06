@@ -802,7 +802,7 @@ func TestWorkerCompletionConnectionsValidation(t *testing.T) {
 		func(context.Context) (grpc.ClientConnInterface, io.Closer, error) { return borrowed, nil, nil },
 		task.NewTaskRegistry(), nil)
 	require.NoError(t, err)
-	require.ErrorContains(t, worker.Start(context.Background()), "require an owning factory")
+	require.ErrorContains(t, worker.Start(context.Background()), "require a factory that returns a closer")
 	require.Zero(t, borrowed.closes.Load(), "missing ownership must not close the caller's channel")
 }
 

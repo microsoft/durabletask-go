@@ -196,18 +196,14 @@ stream or reconnect-handshake responses are retried with backoff so token
 refresh and RBAC propagation can recover without restarting the worker. See
 `client.NewTaskHubGrpcWorker` for the full ownership contract.
 
-#### Required completion isolation (unpublished local draft)
+#### Completion isolation
 
 Workers use one intake connection and a separate bounded group for completion
 and abandonment. Owned workers default to three completion connections, plus
 intake. `client.WithWorkerCompletionConnections(n)` tunes that budget from 1
-through 8; zero is invalid and there is no shared-transport mode. The shared
-connection exists only in a private regression baseline.
-
-The required architecture is user-approved for this local draft. The exact
-public surface, initial budget of three, and upper bound of eight remain subject
-to final review before publication. Three is a measured starting point, not a
-universal optimum or a guarantee of higher persisted throughput.
+through 8; zero is invalid and there is no shared-transport mode. Three is a
+starting point, not a universal optimum or a guarantee of higher persisted
+throughput.
 
 ```go
 // One logical worker, one intake, three completion connections by default.
