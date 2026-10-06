@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added required completion-transport isolation to gRPC workers: one intake and three dedicated completion/abandon connections by default, with a configurable 1–8 completion budget and bounded generation-safe retirement. `WithWorkerCompletionConnections(0)` is invalid. Borrowed workers and client listeners require separate caller-owned channels via `WithWorkerCompletionTransports`; owning factories must return distinct connections and non-nil closers for every invocation.
 - Added `ResourceId` connection-string support for every DTS authentication mode and optional `AuthorityHost` configuration for SDK-created DefaultAzure, WorkloadIdentity, Environment, and InteractiveBrowser credentials. Caller-supplied credentials own their authority; managed identity and developer-tool cloud configuration remain separate.
 - Added a flat catalogue of directly runnable DTS samples with outcome assertions, owned-resource cleanup, and process-level E2E validation selected by sample name using Go's `-run` flag.
 - Added the exported `task.CallActivityOption` type, per-activity tag options, completion-action tag propagation, and distinct activity and sub-orchestration action trace contexts.
@@ -85,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Graceful worker shutdown and run-context cancellation now preserve the intake stream until accepted work and acknowledgements drain, instead of releasing their server leases early. New dispatch is rejected after intake stop; deadline cancellation and genuine lease-loss handling remain unchanged.
 - Forced coroutine unloading no longer leaks durable actions or custom status from application defers: durable operations panic with `ErrTaskBlocked` before changing state. Normal-return defers remain awaitable across replay, and orchestration loggers suppress forced-unload output.
 - Long durable timers no longer schedule another chunk when a trailing timer event is processed after the orchestration has finalized.
 - DTS authentication now caches access tokens and immutable gRPC metadata, honors credential `RefreshOn` guidance, and coalesces concurrent refreshes and failures. Previously credentials such as `AzureCLICredential` were invoked for every RPC, serializing high-throughput workers behind external token acquisition.

@@ -24,9 +24,33 @@ import (
 )
 
 func (w *TaskHubGrpcWorker) consumeConnection(run *grpcWorkerRun, connection *grpcWorkerConnection) (bool, error) {
+	stopWatcher, watcherDone := make(chan struct{}), make(chan struct{})
+	waitAccepted := func() {
+		// Synchronize with the last dispatch that raced logical intake stop.
+		run.dispatchMu.Lock()
+		run.dispatchMu.Unlock()
+		connection.pending.Wait()
+	}
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-run.intakeCtx.Done():
+			waitAccepted()
+			connection.cancelStream()
+		case <-stopWatcher:
+		}
+	}()
+	defer func() {
+		if run.intakeCtx.Err() != nil {
+			waitAccepted()
+		}
+		close(stopWatcher)
+		<-watcherDone
+	}()
+
 	observedMessage := false
 	for {
-		workItem, err := w.receiveWorkItem(connection)
+		workItem, err := w.receiveWorkItem(run, connection)
 		if err != nil {
 			return observedMessage, err
 		}
@@ -62,8 +86,15 @@ func (w *TaskHubGrpcWorker) consumeConnection(run *grpcWorkerRun, connection *gr
 	}
 }
 
-func (w *TaskHubGrpcWorker) receiveWorkItem(connection *grpcWorkerConnection) (*protos.WorkItem, error) {
-	workItem, err := recvBeforeSilenceTimeout(connection.stream.Recv, connection.cancelStream, w.options.silentDisconnectTimeout)
+func (w *TaskHubGrpcWorker) receiveWorkItem(run *grpcWorkerRun, connection *grpcWorkerConnection) (*protos.WorkItem, error) {
+	cancelOnSilence := func() {
+		// No new work is expected during a graceful drain. Keep leases alive
+		// until pending acknowledgements finish rather than timing intake out.
+		if run.intakeCtx.Err() == nil {
+			connection.cancelStream()
+		}
+	}
+	workItem, err := recvBeforeSilenceTimeout(connection.stream.Recv, cancelOnSilence, w.options.silentDisconnectTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -169,8 +200,16 @@ func (w *TaskHubGrpcWorker) dispatch(
 		return run.intakeCtx.Err()
 	}
 
+	run.dispatchMu.Lock()
+	if err := run.intakeCtx.Err(); err != nil {
+		run.dispatchMu.Unlock()
+		<-slots
+		abandon(run.processingCtx)
+		return err
+	}
 	run.pending.Add(1)
 	connection.pending.Add(1)
+	run.dispatchMu.Unlock()
 	go func() {
 		defer func() {
 			<-slots

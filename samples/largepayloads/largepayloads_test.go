@@ -78,6 +78,7 @@ func TestStorageCleanupWaitsForAcceptedUploads(t *testing.T) {
 			require.NoError(t, err)
 			items := make(chan *protos.WorkItem, 1)
 			intakeStopped := make(chan struct{})
+			cleanupStarted := make(chan struct{})
 			server := grpc.NewServer(
 				grpc.UnaryInterceptor(func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 					switch request := request.(type) {
@@ -116,6 +117,7 @@ func TestStorageCleanupWaitsForAcceptedUploads(t *testing.T) {
 						return &protos.TerminateResponse{}, nil
 					case *protos.PurgeInstancesRequest:
 						purged.Store(true)
+						close(cleanupStarted)
 						return &protos.PurgeInstancesResponse{DeletedInstanceCount: 1}, nil
 					case *protos.ActivityResponse:
 						completed.Store(true)
@@ -136,6 +138,9 @@ func TestStorageCleanupWaitsForAcceptedUploads(t *testing.T) {
 						return nil
 					}
 					<-stream.Context().Done()
+					if !shutdownTimesOut && !completed.Load() {
+						t.Error("intake released its lease before the accepted upload was acknowledged")
+					}
 					close(intakeStopped)
 					return nil
 				}),
@@ -161,12 +166,12 @@ func TestStorageCleanupWaitsForAcceptedUploads(t *testing.T) {
 				}
 			})
 			select {
-			case <-intakeStopped:
+			case <-cleanupStarted:
 			case <-time.After(5 * time.Second):
 				t.Fatal("sample did not reach worker shutdown with an accepted upload")
 			}
 			require.True(t, purged.Load())
-			require.False(t, deleted.Load(), "intake cancellation alone does not drain accepted uploads")
+			require.False(t, deleted.Load(), "orchestration cleanup alone does not drain accepted uploads")
 			if !shutdownTimesOut {
 				release()
 			}
@@ -185,6 +190,11 @@ func TestStorageCleanupWaitsForAcceptedUploads(t *testing.T) {
 				}
 			case <-time.After(35 * time.Second):
 				t.Fatal("sample did not bound worker shutdown")
+			}
+			select {
+			case <-intakeStopped:
+			case <-time.After(5 * time.Second):
+				t.Fatal("worker intake did not close after drain or deadline cancellation")
 			}
 			release()
 			select {

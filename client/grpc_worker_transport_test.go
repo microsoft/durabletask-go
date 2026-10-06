@@ -901,10 +901,12 @@ func TestBorrowedConnectionIsReusedAcrossReconnectsAndNeverClosed(t *testing.T) 
 	connection := &fakeClientConn{items: []*protos.WorkItem{{
 		Request: &protos.WorkItem_HealthPing{HealthPing: &protos.HealthPing{}},
 	}}}
+	completion := &fakeClientConn{}
 	worker, err := NewTaskHubGrpcWorker(
 		connection,
 		task.NewTaskRegistry(),
 		api.DefaultLogger(),
+		WithWorkerCompletionTransports(completion),
 		WithWorkerHelloTimeout(time.Second),
 		WithWorkerSilentDisconnectTimeout(time.Second),
 		WithWorkerReconnectBackoff(time.Millisecond, 5*time.Millisecond),
@@ -925,5 +927,7 @@ func TestBorrowedConnectionIsReusedAcrossReconnectsAndNeverClosed(t *testing.T) 
 	// the connection-factory worker, which durabletaskscheduler.NewWorker uses,
 	// can obtain a fresh channel and close the retired one.
 	require.Zero(t, connection.closes.Load(), "the worker must never close a borrowed connection")
+	require.Zero(t, completion.closes.Load(), "completion ownership also remains with the caller")
+	require.Zero(t, completion.streamCount(), "completion channels must never receive intake")
 	require.GreaterOrEqual(t, connection.streamCount(), 2)
 }

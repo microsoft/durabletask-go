@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -540,10 +541,16 @@ func TestClientCloseStopsCompatibilityListener(t *testing.T) {
 	managementClient, err := NewClient(context.Background(), options, api.DefaultLogger())
 	require.NoError(t, err)
 	<-server.metadata
-	require.NoError(t, managementClient.StartWorkItemListener(context.Background(), task.NewTaskRegistry()))
+	completion, err := connect(options, clientRole, "")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, completion.Close()) }()
+	require.ErrorContains(t, managementClient.StartWorkItemListener(context.Background(), task.NewTaskRegistry()), "require separate connections")
+	require.NoError(t, managementClient.StartWorkItemListener(context.Background(), task.NewTaskRegistry(),
+		durabletaskclient.WithWorkerCompletionTransports(completion)))
 	<-server.metadata
 	<-server.metadata
 	require.NoError(t, managementClient.Close())
+	require.NotEqual(t, connectivity.Shutdown, completion.GetState(), "the listener must not close borrowed completion ownership")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
