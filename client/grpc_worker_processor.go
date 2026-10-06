@@ -191,6 +191,7 @@ func (w *TaskHubGrpcWorker) dispatchEntity(
 // dispatch reserves a concurrency slot and runs process in the background under
 // the processing context, so a graceful drain can still complete in-flight work.
 // If intake is canceled before a slot is free, the work item is abandoned instead.
+// Received work remains pending until execution or abandonment returns.
 func (w *TaskHubGrpcWorker) dispatch(
 	run *grpcWorkerRun,
 	connection *grpcWorkerConnection,
@@ -198,9 +199,19 @@ func (w *TaskHubGrpcWorker) dispatch(
 	abandon func(context.Context),
 	process func(context.Context),
 ) error {
+	run.dispatchMu.Lock()
+	run.pending.Add(1)
+	connection.pending.Add(1)
+	run.dispatchMu.Unlock()
+	finish := func() {
+		connection.pending.Done()
+		run.pending.Done()
+	}
+
 	select {
 	case slots <- struct{}{}:
 	case <-run.intakeCtx.Done():
+		defer finish()
 		abandon(run.processingCtx)
 		return run.intakeCtx.Err()
 	}
@@ -209,17 +220,15 @@ func (w *TaskHubGrpcWorker) dispatch(
 	if err := run.intakeCtx.Err(); err != nil {
 		run.dispatchMu.Unlock()
 		<-slots
+		defer finish()
 		abandon(run.processingCtx)
 		return err
 	}
-	run.pending.Add(1)
-	connection.pending.Add(1)
 	run.dispatchMu.Unlock()
 	go func() {
 		defer func() {
 			<-slots
-			connection.pending.Done()
-			run.pending.Done()
+			finish()
 		}()
 		process(run.processingCtx)
 	}()

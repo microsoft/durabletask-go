@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -18,10 +19,13 @@ import (
 
 type leaseAwareSchedulerClient struct {
 	*fakeSchedulerClient
-	acknowledged atomic.Int32
-	expired      atomic.Int32
-	ackStarted   chan struct{}
-	releaseAck   chan struct{}
+	acknowledged   atomic.Int32
+	expired        atomic.Int32
+	ackStarted     chan struct{}
+	releaseAck     chan struct{}
+	abandoned      atomic.Int32
+	abandonStarted chan struct{}
+	releaseAbandon chan struct{}
 }
 
 func (c *leaseAwareSchedulerClient) CompleteActivityTask(
@@ -46,6 +50,177 @@ func (c *leaseAwareSchedulerClient) CompleteActivityTask(
 		c.acknowledged.Add(1)
 	}
 	return result, err
+}
+
+func (c *leaseAwareSchedulerClient) AbandonTaskActivityWorkItem(
+	ctx context.Context,
+	request *protos.AbandonActivityTaskRequest,
+	options ...grpc.CallOption,
+) (*protos.AbandonActivityTaskResponse, error) {
+	if c.abandonStarted != nil {
+		close(c.abandonStarted)
+		select {
+		case <-c.releaseAbandon:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if c.stream.ctx.Err() != nil {
+		c.expired.Add(1)
+		return nil, status.Error(codes.NotFound, "intake ended and released the work item lease")
+	}
+	result, err := c.fakeSchedulerClient.AbandonTaskActivityWorkItem(ctx, request, options...)
+	if err == nil {
+		c.abandoned.Add(1)
+	}
+	return result, err
+}
+
+func TestWorkerCanceledDispatchWaitsForAbandonment(t *testing.T) {
+	for _, phase := range []string{"waiting for slot", "slot reserved"} {
+		t.Run(phase, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				worker := newFakeWorker(t, &fakeSchedulerClient{})
+				run := newRunLoopTestRun()
+				defer run.cancelIntake()
+				defer run.cancelProcessing()
+				connection := &grpcWorkerConnection{}
+				slots := make(chan struct{})
+				if phase == "waiting for slot" {
+					slots = make(chan struct{}, 1)
+					slots <- struct{}{}
+				}
+				started, release := make(chan struct{}), make(chan struct{})
+				var releaseOnce sync.Once
+				t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+				dispatchDone := make(chan error, 1)
+				go func() {
+					dispatchDone <- worker.dispatch(run, connection, slots,
+						func(context.Context) {
+							close(started)
+							<-release
+						},
+						func(context.Context) { t.Error("work was executed after logical intake stop") })
+				}()
+				synctest.Wait()
+				if phase == "slot reserved" {
+					run.dispatchMu.Lock()
+					<-slots
+					run.cancelIntake()
+					run.dispatchMu.Unlock()
+					// Return the admission token so the rejected dispatch can
+					// release its slot after observing cancellation.
+					slots <- struct{}{}
+				} else {
+					run.cancelIntake()
+				}
+				awaitCompletionTest(t, started)
+
+				runDrained, connectionDrained := make(chan struct{}), make(chan struct{})
+				go func() {
+					run.pending.Wait()
+					close(runDrained)
+				}()
+				go func() {
+					connection.pending.Wait()
+					close(connectionDrained)
+				}()
+				synctest.Wait()
+				for _, drained := range []<-chan struct{}{runDrained, connectionDrained} {
+					select {
+					case <-drained:
+						t.Error("drain finished before the abandonment returned")
+					default:
+					}
+				}
+
+				releaseOnce.Do(func() { close(release) })
+				require.ErrorIs(t, awaitCompletionTest(t, dispatchDone), context.Canceled)
+				awaitCompletionTest(t, runDrained)
+				awaitCompletionTest(t, connectionDrained)
+				if phase == "waiting for slot" {
+					<-slots
+				}
+				require.Empty(t, slots)
+			})
+		})
+	}
+}
+
+func TestWorkerGracefulStopKeepsRejectedItemLeaseUntilAbandoned(t *testing.T) {
+	for _, stop := range []string{"shutdown", "run context", "shutdown deadline"} {
+		t.Run(stop, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				client := &leaseAwareSchedulerClient{
+					fakeSchedulerClient: &fakeSchedulerClient{stream: newFakeWorkItemStream(0)},
+					abandonStarted:      make(chan struct{}),
+					releaseAbandon:      make(chan struct{}),
+				}
+				worker := newFakeWorker(t, client.fakeSchedulerClient, WithMaxConcurrentActivityWorkItems(1))
+				closer := &countingCloser{}
+				worker.clientFactory = func(context.Context) (protos.TaskHubSidecarServiceClient, io.Closer, error) {
+					return client, closer, nil
+				}
+				executionStarted, releaseExecution := make(chan struct{}), make(chan struct{})
+				worker.executor = &recordingExecutor{
+					executeActivity: func(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error) {
+						close(executionStarted)
+						<-releaseExecution
+						return &protos.HistoryEvent{EventType: &protos.HistoryEvent_TaskCompleted{
+							TaskCompleted: &protos.TaskCompletedEvent{},
+						}}, nil
+					},
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				var executionOnce, abandonOnce sync.Once
+				t.Cleanup(func() {
+					executionOnce.Do(func() { close(releaseExecution) })
+					abandonOnce.Do(func() { close(client.releaseAbandon) })
+					cancel()
+					shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+					defer stopShutdown()
+					require.NoError(t, worker.Shutdown(shutdownCtx))
+					require.NoError(t, worker.Wait(shutdownCtx))
+				})
+				require.NoError(t, worker.Start(ctx))
+				client.stream.results <- completionTestActivity("accepted")
+				awaitCompletionTest(t, executionStarted)
+				client.stream.results <- completionTestActivity("rejected")
+				synctest.Wait()
+
+				stopped := make(chan error, 1)
+				if stop == "run context" {
+					cancel()
+					go func() { stopped <- worker.Wait(context.Background()) }()
+				} else {
+					go func() { stopped <- worker.Shutdown(context.Background()) }()
+				}
+				awaitCompletionTest(t, client.abandonStarted)
+				executionOnce.Do(func() { close(releaseExecution) })
+				synctest.Wait()
+				require.EqualValues(t, 1, client.acknowledged.Load())
+				require.NoError(t, client.stream.ctx.Err(), "the rejected item's lease must remain alive during abandonment")
+				require.Zero(t, closer.closes.Load())
+				require.True(t, worker.Running())
+
+				if stop == "shutdown deadline" {
+					shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), time.Second)
+					defer stopShutdown()
+					require.ErrorIs(t, worker.Shutdown(shutdownCtx), context.DeadlineExceeded)
+				} else {
+					abandonOnce.Do(func() { close(client.releaseAbandon) })
+				}
+				require.NoError(t, awaitCompletionTest(t, stopped))
+				require.EqualValues(t, 1, closer.closes.Load())
+				require.Zero(t, client.expired.Load())
+				if stop == "shutdown deadline" {
+					require.Zero(t, client.abandoned.Load())
+				} else {
+					require.EqualValues(t, 1, client.abandoned.Load())
+				}
+			})
+		})
+	}
 }
 
 func TestWorkerGracefulDrainKeepsPendingAcknowledgementAndSilentIntakeAlive(t *testing.T) {

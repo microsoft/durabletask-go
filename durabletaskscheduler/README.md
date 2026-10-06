@@ -250,7 +250,9 @@ or abandonment finishes. At most two groups (active and draining) are live:
 repeated disconnects wait for the older group to drain before creating another.
 This can delay recovery when old work is slow. Shutdown stops new dispatch but
 keeps the lease-owning intake stream alive until accepted work and
-acknowledgements drain. Silence does not terminate intake after a graceful stop.
+acknowledgements drain. Received items still waiting for an execution slot are
+abandoned before their intake lease is released. Silence does not terminate
+intake after a graceful stop.
 Only then is the stream canceled and its group retired; a real stream failure
 can still invalidate leases. The shutdown deadline cancels processing and
 completion RPCs. As before,

@@ -951,7 +951,7 @@ func (w *TaskHubGrpcWorker) Run(ctx context.Context) error {
 }
 
 // Shutdown stops new dispatch and keeps the lease-owning intake stream open
-// until accepted execution and acknowledgements finish. If ctx expires,
+// until received work completes or is abandoned. If ctx expires,
 // in-flight execution and completion RPCs are canceled.
 func (w *TaskHubGrpcWorker) Shutdown(ctx context.Context) error {
 	w.mu.Lock()
