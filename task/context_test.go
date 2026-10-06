@@ -67,7 +67,7 @@ func TestOrchestrationContextPropagatesOnlyPersistedIdentityAndFields(t *testing
 		nil,
 		wrapperspb.String("v2"),
 	)
-	started.GetExecutionStarted().Tags = contextprop.Encode(nil, fields)
+	started.GetExecutionStarted().Tags = contextprop.Encode(fields, nil)
 	fields["tenant"] = "mutated"
 	events := []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), started}
 
@@ -164,7 +164,7 @@ func TestActivityContextPropagatesIdentityFieldsAndLogger(t *testing.T) {
 	}
 }
 
-func TestActivityContextDecodesDurableContextTags(t *testing.T) {
+func TestActivityContextDecodesDurableContextFields(t *testing.T) {
 	registry := NewTaskRegistry()
 	if err := registry.AddActivityN("inspect-tags", func(ctx ActivityContext) (any, error) {
 		orchestration, _ := api.OrchestrationContextInfoFromContext(ctx.Context())
@@ -180,14 +180,7 @@ func TestActivityContextDecodesDurableContextTags(t *testing.T) {
 	}
 
 	event := helpers.NewTaskScheduledEvent(4, "inspect-tags", nil, nil, nil)
-	event.GetTaskScheduled().Tags = map[string]string{
-		"__durabletask.context.encoding":              "1",
-		"__durabletask.context.instance_id":           "tagged-instance",
-		"__durabletask.context.orchestration_name":    "tagged-parent",
-		"__durabletask.context.orchestration_version": "v4",
-		"__durabletask.context.parent_instance_id":    "root",
-		"__durabletask.context.field.tenant":          "tagged",
-	}
+	event.GetTaskScheduled().Tags = contextprop.Encode(api.ContextFields{"tenant": "tagged"}, nil)
 	response, err := NewTaskExecutor(registry).ExecuteActivity(
 		context.Background(),
 		"tagged-instance",
@@ -204,9 +197,7 @@ func TestActivityContextDecodesDurableContextTags(t *testing.T) {
 	if err := json.Unmarshal([]byte(response.GetTaskCompleted().GetResult().GetValue()), &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.Orchestration.Name != "tagged-parent" ||
-		output.Orchestration.Version != "v4" ||
-		output.Orchestration.ParentInstanceID != "root" {
+	if output.Orchestration != (api.OrchestrationContextInfo{InstanceID: "tagged-instance"}) {
 		t.Fatalf("unexpected orchestration identity: %+v", output.Orchestration)
 	}
 	if output.Fields["tenant"] != "tagged" {

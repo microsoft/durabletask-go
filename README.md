@@ -518,29 +518,17 @@ The SDK does not save the identity of the converter. A new converter must contin
 Use `api.WithTags`, `task.WithActivityTags`, and `task.WithSubOrchestrationTags` to attach user tags. An activity and a sub-orchestration inherit the tags of the parent orchestration. A tag on the action has priority over an inherited tag. The completion actions carry the current tags, so ContinueAsNew keeps them.
 
 Activities, sub-orchestrations, and ContinueAsNew do not add owning-orchestration
-identity tags by default. Without caller tags or context fields, their tag maps
+identity tags. Without caller tags or context fields, their tag maps
 are absent on the wire, matching .NET's default automatic-tag behavior. Go keeps
 its user-tag inheritance and immutable context-field propagation; when either is
-present, the encoding marker separates user tags from legacy plain context fields.
+present, the encoding marker separates user tags from context fields.
 Distributed trace context remains a separate protocol field.
 
-**Migration:** newly scheduled activities always retain their own name, version,
-and task ID in `api.ActivityContextInfo`, and their owning instance ID in
-`api.OrchestrationContextInfo`. The owning orchestration's name, version, and parent
-instance ID are no longer supplied automatically to activity contexts. If an
-activity needs that richer Go identity, add the deterministic per-call option:
-
-```go
-ctx.CallActivity("Inspect", task.WithActivityOrchestrationIdentity())
-```
-
-This option persists the identity for every attempt, including retries and
-recovery. Previously scheduled activities still decode their historical identity
-tags, and explicitly supplied executor context remains supported. Orchestrator
-contexts retain their complete persisted identity, including after sub-orchestration
-starts and ContinueAsNew version changes. No protocol or server change is required:
-these identities already have native orchestration fields, whereas activity work
-items only carry the owning instance ID.
+Activity contexts expose the activity's own name, version, and task ID in
+`api.ActivityContextInfo`, and the owning instance ID in
+`api.OrchestrationContextInfo`. Orchestrator contexts obtain their full identity
+from native history fields, including after sub-orchestration starts and
+ContinueAsNew version changes.
 
 The client sends the sampled caller trace context when it schedules an orchestration or signals an entity. The worker adds separate action trace contexts for the service-owned activity and sub-orchestration spans. The worker does not emit duplicate local Durable Task spans. V2 entity requests do not carry per-operation trace context, so entity-emitted actions cannot inherit it.
 

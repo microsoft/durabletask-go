@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
-	"github.com/microsoft/durabletask-go/internal/contextprop"
 	"github.com/microsoft/durabletask-go/internal/failure"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/microsoft/durabletask-go/internal/tagcodec"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -187,23 +187,10 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 	}
 	ctx = api.ContextWithFields(ctx, te.contextFields)
 	ctx = helpers.ContextWithTraceContext(ctx, ts.GetParentTraceContext())
-	tagInfo, tagFields := contextprop.Decode(ts.GetTags())
-	ctx = api.ContextWithFields(ctx, tagFields)
+	ctx = api.ContextWithFields(ctx, api.ContextFields(tagcodec.DecodeContextFields(ts.GetTags())))
 	orchestrationInfo, _ := api.OrchestrationContextInfoFromContext(ctx)
-	if orchestrationInfo.Name == "" {
-		orchestrationInfo.Name = tagInfo.Name
-	}
-	if orchestrationInfo.Version == "" {
-		orchestrationInfo.Version = tagInfo.Version
-	}
-	if orchestrationInfo.ParentInstanceID == "" {
-		orchestrationInfo.ParentInstanceID = tagInfo.ParentInstanceID
-	}
 	if orchestrationInfo.InstanceID == "" {
-		orchestrationInfo.InstanceID = tagInfo.InstanceID
-		if orchestrationInfo.InstanceID == "" {
-			orchestrationInfo.InstanceID = id
-		}
+		orchestrationInfo.InstanceID = id
 	}
 	ctx = api.WithOrchestrationContextInfo(ctx, orchestrationInfo)
 	ctx = api.WithActivityContextInfo(ctx, api.ActivityContextInfo{

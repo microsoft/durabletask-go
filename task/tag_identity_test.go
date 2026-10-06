@@ -28,77 +28,66 @@ func scheduledActivityAction(t testing.TB, response *protos.OrchestratorResponse
 	return nil
 }
 
-func TestScheduledActivityIdentityIsOptIn(t *testing.T) {
+func TestActivityIdentityUsesWorkItem(t *testing.T) {
 	for _, version := range []string{"", "v1"} {
-		for _, includeIdentity := range []bool{false, true} {
-			for _, withCallerData := range []bool{false, true} {
-				t.Run(version+"/identity="+boolName(includeIdentity)+"/caller="+boolName(withCallerData), func(t *testing.T) {
-					registry := NewTaskRegistry()
-					options := []CallActivityOption{
-						WithActivityVersion("a2"),
-						WithRawActivityInput(`"input"`),
-					}
-					if includeIdentity {
-						options = append(options, WithActivityOrchestrationIdentity())
-					}
-					var fields api.ContextFields
-					var tags map[string]string
-					if withCallerData {
-						fields = api.ContextFields{"tenant": "persisted", "empty": ""}
-						tags = map[string]string{"tenant": "user", "scope": "parent", "empty": ""}
-						options = append(options, WithActivityTags(map[string]string{"scope": "activity"}))
-					}
-					require.NoError(t, registry.AddOrchestratorNVersion("parent", version, func(ctx *OrchestrationContext) (any, error) {
-						ctx.CallActivity("inspect", options...)
-						return nil, nil
-					}))
-					started := helpers.NewExecutionStartedEvent("parent", "instance", nil,
-						helpers.NewParentInfo(7, "root", "root-instance"), nil, nil, wrapperspb.String(version))
-					started.GetExecutionStarted().Tags = contextprop.Encode(nil, fields, tags)
-					response := executeOrchestrationTurn(t, registry, "instance", nil, []*protos.HistoryEvent{started})
-					action := scheduledActivityAction(t, response)
-					scheduled := action.GetScheduleTask()
-					require.EqualValues(t, 0, action.Id)
-					require.Equal(t, `"input"`, scheduled.GetInput().GetValue())
-					require.Equal(t, "a2", scheduled.GetVersion().GetValue())
-					info, persistedFields := contextprop.Decode(scheduled.Tags)
-					wantInfo := api.OrchestrationContextInfo{InstanceID: "instance"}
-					if includeIdentity {
-						wantInfo.Name, wantInfo.Version, wantInfo.ParentInstanceID = "parent", version, "root-instance"
-						require.Equal(t, wantInfo, info)
-					} else {
-						require.Equal(t, api.OrchestrationContextInfo{}, info)
-						if !withCallerData {
-							require.Nil(t, scheduled.Tags)
-						}
-					}
-					require.Equal(t, fields, persistedFields)
-					if withCallerData {
-						require.Equal(t, map[string]string{
-							"tenant": "user", "scope": "activity", "empty": "",
-						}, tagcodec.DecodeUserTagsOrPlain(scheduled.Tags))
-					}
-					require.NoError(t, registry.AddActivityNVersion("inspect", "a2", func(ctx ActivityContext) (any, error) {
-						orchestration, ok := api.OrchestrationContextInfoFromContext(ctx.Context())
-						require.True(t, ok)
-						require.Equal(t, wantInfo, orchestration)
-						activity, ok := api.ActivityContextInfoFromContext(ctx.Context())
-						require.True(t, ok)
-						require.Equal(t, api.ActivityContextInfo{
-							InstanceID: "instance", Name: "inspect", Version: "a2", TaskID: 0,
-						}, activity)
-						require.Equal(t, fields, api.ContextFieldsFromContext(ctx.Context()))
-						var input string
-						require.NoError(t, ctx.GetInput(&input))
-						return input, nil
-					}))
-					event := helpers.NewTaskScheduledEvent(action.Id, scheduled.Name, scheduled.Version, scheduled.Input, nil)
-					event.GetTaskScheduled().Tags = contextprop.Clone(scheduled.Tags)
-					result, err := NewTaskExecutor(registry).ExecuteActivity(context.Background(), "instance", event)
-					require.NoError(t, err)
-					require.Equal(t, `"input"`, result.GetTaskCompleted().GetResult().GetValue())
-				})
-			}
+		for _, withCallerData := range []bool{false, true} {
+			t.Run(version+"/caller="+boolName(withCallerData), func(t *testing.T) {
+				registry := NewTaskRegistry()
+				options := []CallActivityOption{
+					WithActivityVersion("a2"),
+					WithRawActivityInput(`"input"`),
+				}
+				var fields api.ContextFields
+				var tags map[string]string
+				if withCallerData {
+					fields = api.ContextFields{"tenant": "persisted", "empty": ""}
+					tags = map[string]string{"tenant": "user", "scope": "parent", "empty": ""}
+					options = append(options, WithActivityTags(map[string]string{"scope": "activity"}))
+				}
+				require.NoError(t, registry.AddOrchestratorNVersion("parent", version, func(ctx *OrchestrationContext) (any, error) {
+					ctx.CallActivity("inspect", options...)
+					return nil, nil
+				}))
+				started := helpers.NewExecutionStartedEvent("parent", "instance", nil,
+					helpers.NewParentInfo(7, "root", "root-instance"), nil, nil, wrapperspb.String(version))
+				started.GetExecutionStarted().Tags = contextprop.Encode(fields, tags)
+				response := executeOrchestrationTurn(t, registry, "instance", nil, []*protos.HistoryEvent{started})
+				action := scheduledActivityAction(t, response)
+				scheduled := action.GetScheduleTask()
+				require.EqualValues(t, 0, action.Id)
+				require.Equal(t, `"input"`, scheduled.GetInput().GetValue())
+				require.Equal(t, "a2", scheduled.GetVersion().GetValue())
+				persistedFields := api.ContextFields(tagcodec.DecodeContextFields(scheduled.Tags))
+				wantInfo := api.OrchestrationContextInfo{InstanceID: "instance"}
+				if !withCallerData {
+					require.Nil(t, scheduled.Tags)
+				}
+				require.Equal(t, fields, persistedFields)
+				if withCallerData {
+					require.Equal(t, map[string]string{
+						"tenant": "user", "scope": "activity", "empty": "",
+					}, tagcodec.DecodeUserTagsOrPlain(scheduled.Tags))
+				}
+				require.NoError(t, registry.AddActivityNVersion("inspect", "a2", func(ctx ActivityContext) (any, error) {
+					orchestration, ok := api.OrchestrationContextInfoFromContext(ctx.Context())
+					require.True(t, ok)
+					require.Equal(t, wantInfo, orchestration)
+					activity, ok := api.ActivityContextInfoFromContext(ctx.Context())
+					require.True(t, ok)
+					require.Equal(t, api.ActivityContextInfo{
+						InstanceID: "instance", Name: "inspect", Version: "a2", TaskID: 0,
+					}, activity)
+					require.Equal(t, fields, api.ContextFieldsFromContext(ctx.Context()))
+					var input string
+					require.NoError(t, ctx.GetInput(&input))
+					return input, nil
+				}))
+				event := helpers.NewTaskScheduledEvent(action.Id, scheduled.Name, scheduled.Version, scheduled.Input, nil)
+				event.GetTaskScheduled().Tags = contextprop.Clone(scheduled.Tags)
+				result, err := NewTaskExecutor(registry).ExecuteActivity(context.Background(), "instance", event)
+				require.NoError(t, err)
+				require.Equal(t, `"input"`, result.GetTaskCompleted().GetResult().GetValue())
+			})
 		}
 	}
 }
@@ -110,17 +99,7 @@ func boolName(value bool) string {
 	return "no"
 }
 
-func legacyIdentityTags() map[string]string {
-	return map[string]string{
-		"__durabletask.context.encoding":              "1",
-		"__durabletask.context.instance_id":           "instance",
-		"__durabletask.context.orchestration_name":    "parent",
-		"__durabletask.context.orchestration_version": "v1",
-		"__durabletask.context.parent_instance_id":    "root-instance",
-	}
-}
-
-func TestLegacyActivityTagsReplayWithNewWriter(t *testing.T) {
+func TestActivityTagsReplay(t *testing.T) {
 	registry := NewTaskRegistry()
 	require.NoError(t, registry.AddOrchestratorNVersion("parent", "v1", func(ctx *OrchestrationContext) (any, error) {
 		var output string
@@ -130,15 +109,14 @@ func TestLegacyActivityTagsReplayWithNewWriter(t *testing.T) {
 		canceled, cancel := ctx.WithCancel()
 		cancel()
 		require.ErrorIs(t, canceled.WaitForSingleEvent("never", -1).Await(nil), ErrTaskCanceled)
-		canceled.CallActivity("never", WithActivityOrchestrationIdentity())
+		canceled.CallActivity("never")
 		return nil, ctx.CallActivity("next", WithActivityInput(output)).Await(nil)
 	}))
 	started := helpers.NewExecutionStartedEvent("parent", "instance", nil, nil, nil, nil, wrapperspb.String("v1"))
-	started.GetExecutionStarted().Tags = legacyIdentityTags()
-	started.GetExecutionStarted().Tags["user"] = "retained"
-	started.GetExecutionStarted().Tags[tagcodec.ContextFieldPrefix+"tenant"] = "retained"
+	started.GetExecutionStarted().Tags = contextprop.Encode(api.ContextFields{"tenant": "retained"},
+		map[string]string{"user": "retained"})
 	scheduled := helpers.NewTaskScheduledEvent(0, "first", wrapperspb.String("v1"), wrapperspb.String(`"original"`), nil)
-	scheduled.GetTaskScheduled().Tags = legacyIdentityTags()
+	scheduled.GetTaskScheduled().Tags = contextprop.Clone(started.GetExecutionStarted().Tags)
 	old := []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), started, scheduled}
 	delivered := []*protos.HistoryEvent{helpers.NewTaskCompletedEvent(0, wrapperspb.String(`"output"`))}
 	first := executeOrchestrationTurn(t, registry, "instance", old, delivered)
@@ -156,72 +134,62 @@ func TestLegacyActivityTagsReplayWithNewWriter(t *testing.T) {
 	}, next.GetScheduleTask().Tags)
 }
 
-func TestActivityIdentityChoiceSurvivesRetryAndRedelivery(t *testing.T) {
-	for _, includeIdentity := range []bool{false, true} {
-		t.Run(boolName(includeIdentity), func(t *testing.T) {
-			registry := NewTaskRegistry()
-			require.NoError(t, registry.AddOrchestratorNVersion("parent", "v1", func(ctx *OrchestrationContext) (any, error) {
-				options := []CallActivityOption{
-					WithActivityRetryPolicy(&RetryPolicy{MaxAttempts: 2, InitialRetryInterval: time.Second}),
-					WithRawActivityInput(`"retry"`),
-					WithActivityTags(map[string]string{"scope": "activity"}),
-				}
-				if includeIdentity {
-					options = append(options, WithActivityOrchestrationIdentity())
-				}
-				return nil, ctx.CallActivity("flaky", options...).Await(nil)
-			}))
-			now := time.Unix(1_700_000_000, 0).UTC()
-			turn := helpers.NewOrchestratorStartedEvent()
-			turn.Timestamp = timestamppb.New(now)
-			started := helpers.NewExecutionStartedEvent("parent", "instance", nil,
-				helpers.NewParentInfo(7, "root", "root-instance"), nil, nil, wrapperspb.String("v1"))
-			started.GetExecutionStarted().Tags = contextprop.Encode(nil, api.ContextFields{"tenant": "persisted"},
-				map[string]string{"scope": "parent", "user": "retained"})
-			initial := executeOrchestrationTurn(t, registry, "instance", nil, []*protos.HistoryEvent{turn, started})
-			firstAction := scheduledActivityAction(t, initial)
-			scheduled := helpers.NewTaskScheduledEvent(0, "flaky", wrapperspb.String("v1"), wrapperspb.String(`"retry"`), nil)
-			scheduled.GetTaskScheduled().Tags = contextprop.Clone(firstAction.GetScheduleTask().Tags)
-			failure := helpers.NewTaskFailedEvent(0, &protos.TaskFailureDetails{ErrorType: "Transient", ErrorMessage: "retry"})
-			history := []*protos.HistoryEvent{turn, started, scheduled, failure}
-			timerResponse := executeOrchestrationTurn(t, registry, "instance", history, nil)
-			require.Len(t, timerResponse.Actions, 1)
-			timer := timerResponse.Actions[0]
-			require.EqualValues(t, 1, timer.Id)
-			require.NotNil(t, timer.GetCreateTimer())
-			history = append(history, helpers.NewTimerCreatedEvent(timer.Id, timer.GetCreateTimer().FireAt))
-			retryTurn := helpers.NewOrchestratorStartedEvent()
-			retryTurn.Timestamp = timer.GetCreateTimer().FireAt
-			delivered := []*protos.HistoryEvent{retryTurn, helpers.NewTimerFiredEvent(timer.Id, timer.GetCreateTimer().FireAt, nil)}
-			retryResponse := executeOrchestrationTurn(t, registry, "instance", history, delivered,
-				WithContextFields(api.ContextFields{"host": "first"}))
-			replayed := executeOrchestrationTurn(t, registry, "instance", append(history, delivered...), nil,
-				WithContextFields(api.ContextFields{"host": "second"}))
-			require.True(t, proto.Equal(retryResponse, replayed))
-			retry := scheduledActivityAction(t, retryResponse)
-			require.EqualValues(t, 2, retry.Id)
-			require.True(t, proto.Equal(firstAction.GetScheduleTask(), retry.GetScheduleTask()))
-			retryEvent := helpers.NewTaskScheduledEvent(retry.Id, "flaky", wrapperspb.String("v1"), wrapperspb.String(`"retry"`), nil)
-			retryEvent.GetTaskScheduled().Tags = contextprop.Clone(retry.GetScheduleTask().Tags)
-			require.NoError(t, registry.AddActivityNVersion("flaky", "v1", func(ctx ActivityContext) (any, error) {
-				info, _ := api.OrchestrationContextInfoFromContext(ctx.Context())
-				want := api.OrchestrationContextInfo{InstanceID: "instance"}
-				if includeIdentity {
-					want.Name, want.Version, want.ParentInstanceID = "parent", "v1", "root-instance"
-				}
-				require.Equal(t, want, info)
-				require.Equal(t, api.ContextFields{"tenant": "persisted"}, api.ContextFieldsFromContext(ctx.Context()))
-				return "recovered", nil
-			}))
-			completed, err := NewTaskExecutor(registry).ExecuteActivity(context.Background(), "instance", retryEvent)
-			require.NoError(t, err)
-			require.Equal(t, `"recovered"`, completed.GetTaskCompleted().GetResult().GetValue())
-			finished := executeOrchestrationTurn(t, registry, "instance",
-				append(append(history, delivered...), retryEvent), []*protos.HistoryEvent{completed})
-			require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
-				completionAction(t, finished).OrchestrationStatus)
-		})
-	}
+func TestActivityTagsSurviveRetryAndRedelivery(t *testing.T) {
+	registry := NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorNVersion("parent", "v1", func(ctx *OrchestrationContext) (any, error) {
+		options := []CallActivityOption{
+			WithActivityRetryPolicy(&RetryPolicy{MaxAttempts: 2, InitialRetryInterval: time.Second}),
+			WithRawActivityInput(`"retry"`),
+			WithActivityTags(map[string]string{"scope": "activity"}),
+		}
+		return nil, ctx.CallActivity("flaky", options...).Await(nil)
+	}))
+	now := time.Unix(1_700_000_000, 0).UTC()
+	turn := helpers.NewOrchestratorStartedEvent()
+	turn.Timestamp = timestamppb.New(now)
+	started := helpers.NewExecutionStartedEvent("parent", "instance", nil,
+		helpers.NewParentInfo(7, "root", "root-instance"), nil, nil, wrapperspb.String("v1"))
+	started.GetExecutionStarted().Tags = contextprop.Encode(api.ContextFields{"tenant": "persisted"},
+		map[string]string{"scope": "parent", "user": "retained"})
+	initial := executeOrchestrationTurn(t, registry, "instance", nil, []*protos.HistoryEvent{turn, started})
+	firstAction := scheduledActivityAction(t, initial)
+	scheduled := helpers.NewTaskScheduledEvent(0, "flaky", wrapperspb.String("v1"), wrapperspb.String(`"retry"`), nil)
+	scheduled.GetTaskScheduled().Tags = contextprop.Clone(firstAction.GetScheduleTask().Tags)
+	failure := helpers.NewTaskFailedEvent(0, &protos.TaskFailureDetails{ErrorType: "Transient", ErrorMessage: "retry"})
+	history := []*protos.HistoryEvent{turn, started, scheduled, failure}
+	timerResponse := executeOrchestrationTurn(t, registry, "instance", history, nil)
+	require.Len(t, timerResponse.Actions, 1)
+	timer := timerResponse.Actions[0]
+	require.EqualValues(t, 1, timer.Id)
+	require.NotNil(t, timer.GetCreateTimer())
+	history = append(history, helpers.NewTimerCreatedEvent(timer.Id, timer.GetCreateTimer().FireAt))
+	retryTurn := helpers.NewOrchestratorStartedEvent()
+	retryTurn.Timestamp = timer.GetCreateTimer().FireAt
+	delivered := []*protos.HistoryEvent{retryTurn, helpers.NewTimerFiredEvent(timer.Id, timer.GetCreateTimer().FireAt, nil)}
+	retryResponse := executeOrchestrationTurn(t, registry, "instance", history, delivered,
+		WithContextFields(api.ContextFields{"host": "first"}))
+	replayed := executeOrchestrationTurn(t, registry, "instance", append(history, delivered...), nil,
+		WithContextFields(api.ContextFields{"host": "second"}))
+	require.True(t, proto.Equal(retryResponse, replayed))
+	retry := scheduledActivityAction(t, retryResponse)
+	require.EqualValues(t, 2, retry.Id)
+	require.True(t, proto.Equal(firstAction.GetScheduleTask(), retry.GetScheduleTask()))
+	retryEvent := helpers.NewTaskScheduledEvent(retry.Id, "flaky", wrapperspb.String("v1"), wrapperspb.String(`"retry"`), nil)
+	retryEvent.GetTaskScheduled().Tags = contextprop.Clone(retry.GetScheduleTask().Tags)
+	require.NoError(t, registry.AddActivityNVersion("flaky", "v1", func(ctx ActivityContext) (any, error) {
+		info, _ := api.OrchestrationContextInfoFromContext(ctx.Context())
+		want := api.OrchestrationContextInfo{InstanceID: "instance"}
+		require.Equal(t, want, info)
+		require.Equal(t, api.ContextFields{"tenant": "persisted"}, api.ContextFieldsFromContext(ctx.Context()))
+		return "recovered", nil
+	}))
+	completed, err := NewTaskExecutor(registry).ExecuteActivity(context.Background(), "instance", retryEvent)
+	require.NoError(t, err)
+	require.Equal(t, `"recovered"`, completed.GetTaskCompleted().GetResult().GetValue())
+	finished := executeOrchestrationTurn(t, registry, "instance",
+		append(append(history, delivered...), retryEvent), []*protos.HistoryEvent{completed})
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED,
+		completionAction(t, finished).OrchestrationStatus)
 }
 
 func TestSubOrchestrationAndContinueAsNewUseNativeIdentity(t *testing.T) {
@@ -249,10 +217,8 @@ func TestSubOrchestrationAndContinueAsNewUseNativeIdentity(t *testing.T) {
 		return state{info, api.ContextFieldsFromContext(ctx.Context())}, nil
 	}))
 	started := helpers.NewExecutionStartedEvent("parent", "instance", nil, nil, nil, nil, wrapperspb.String("v1"))
-	started.GetExecutionStarted().Tags = legacyIdentityTags()
-	started.GetExecutionStarted().Tags["scope"] = "parent"
-	started.GetExecutionStarted().Tags["user"] = "retained"
-	started.GetExecutionStarted().Tags[tagcodec.ContextFieldPrefix+"tenant"] = "parent"
+	started.GetExecutionStarted().Tags = contextprop.Encode(api.ContextFields{"tenant": "parent"},
+		map[string]string{"scope": "parent", "user": "retained"})
 	response := executeOrchestrationTurn(t, registry, "instance", nil, []*protos.HistoryEvent{started})
 	var child *protos.CreateSubOrchestrationAction
 	for _, action := range response.Actions {
@@ -295,7 +261,7 @@ func TestSubOrchestrationAndContinueAsNewUseNativeIdentity(t *testing.T) {
 	}, completionAction(t, next).Tags)
 }
 
-func TestLegacySubOrchestrationTagsReplayAndRetry(t *testing.T) {
+func TestSubOrchestrationTagsReplayAndRetry(t *testing.T) {
 	registry := NewTaskRegistry()
 	require.NoError(t, registry.AddOrchestratorNVersion("parent", "v1", func(ctx *OrchestrationContext) (any, error) {
 		var output string
@@ -311,11 +277,12 @@ func TestLegacySubOrchestrationTagsReplayAndRetry(t *testing.T) {
 	turn := helpers.NewOrchestratorStartedEvent()
 	turn.Timestamp = timestamppb.New(time.Unix(1_700_000_000, 0).UTC())
 	started := helpers.NewExecutionStartedEvent("parent", "instance", nil, nil, nil, nil, wrapperspb.String("v1"))
-	started.GetExecutionStarted().Tags = contextprop.Encode(nil, api.ContextFields{"tenant": "parent"},
+	started.GetExecutionStarted().Tags = contextprop.Encode(api.ContextFields{"tenant": "parent"},
 		map[string]string{"scope": "parent", "user": ""})
 	created := helpers.NewSubOrchestrationCreatedEvent(0, "child", wrapperspb.String("c1"),
 		wrapperspb.String(`"input"`), "instance:0000", nil)
-	created.GetSubOrchestrationInstanceCreated().Tags = legacyIdentityTags()
+	created.GetSubOrchestrationInstanceCreated().Tags = contextprop.Encode(api.ContextFields{"tenant": "child"},
+		map[string]string{"scope": "child", "user": ""})
 	failed := &protos.HistoryEvent{EventType: &protos.HistoryEvent_SubOrchestrationInstanceFailed{
 		SubOrchestrationInstanceFailed: &protos.SubOrchestrationInstanceFailedEvent{
 			TaskScheduledId: 0, FailureDetails: &protos.TaskFailureDetails{ErrorType: "Transient", ErrorMessage: "retry"},
@@ -367,7 +334,7 @@ func TestUntaggedLifecycleActionsHaveNoIdentityTags(t *testing.T) {
 		return nil, nil
 	}))
 	started := helpers.NewExecutionStartedEvent("parent", "instance", nil, nil, nil, nil)
-	for _, tags := range []map[string]string{nil, {}, legacyIdentityTags()} {
+	for _, tags := range []map[string]string{nil, {}} {
 		started.GetExecutionStarted().Tags = tags
 		response := executeOrchestrationTurn(t, registry, "instance", nil, []*protos.HistoryEvent{started})
 		require.Len(t, response.Actions, 3)
@@ -386,24 +353,23 @@ func TestUntaggedLifecycleActionsHaveNoIdentityTags(t *testing.T) {
 	}
 }
 
-func TestActivityExplicitContextOverridesHistoricalIdentity(t *testing.T) {
+func TestActivityExplicitContextIdentityIsPreserved(t *testing.T) {
 	registry := NewTaskRegistry()
 	require.NoError(t, registry.AddActivityN("inspect", func(ctx ActivityContext) (any, error) {
 		info, _ := api.OrchestrationContextInfoFromContext(ctx.Context())
 		require.Equal(t, api.OrchestrationContextInfo{
-			InstanceID: "explicit-instance", Name: "explicit-name", Version: "v1", ParentInstanceID: "root-instance",
+			InstanceID: "explicit-instance", Name: "explicit-name", Version: "explicit-version", ParentInstanceID: "explicit-parent",
 		}, info)
 		require.Equal(t, api.ContextFields{"tenant": "durable", "worker": "local"},
 			api.ContextFieldsFromContext(ctx.Context()))
 		return "retained", nil
 	}))
 	base := api.WithOrchestrationContextInfo(context.Background(), api.OrchestrationContextInfo{
-		InstanceID: "explicit-instance", Name: "explicit-name",
+		InstanceID: "explicit-instance", Name: "explicit-name", Version: "explicit-version", ParentInstanceID: "explicit-parent",
 	})
 	event := helpers.NewTaskScheduledEvent(4, "inspect", nil, nil, nil)
-	event.GetTaskScheduled().Tags = legacyIdentityTags()
-	event.GetTaskScheduled().Tags[tagcodec.ContextFieldPrefix+"tenant"] = "durable"
-	event.GetTaskScheduled().Tags["user"] = "not a context field"
+	event.GetTaskScheduled().Tags = contextprop.Encode(api.ContextFields{"tenant": "durable"},
+		map[string]string{"user": "not a context field"})
 	response, err := NewTaskExecutor(registry, WithContextFields(api.ContextFields{
 		"tenant": "worker", "worker": "local",
 	})).ExecuteActivity(base, "instance", event)

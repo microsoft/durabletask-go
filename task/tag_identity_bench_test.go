@@ -13,15 +13,17 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-func activityIdentityWireMessages(t testing.TB, includeIdentity bool) []proto.Message {
+type activityWireSizeCase struct {
+	name     string
+	current  proto.Message
+	previous proto.Message
+}
+
+func activityIdentityWireMessages(t testing.TB) []activityWireSizeCase {
 	t.Helper()
 	registry := NewTaskRegistry()
 	require.NoError(t, registry.AddOrchestratorNVersion("parent", "v1", func(ctx *OrchestrationContext) (any, error) {
-		options := []CallActivityOption{WithRawActivityInput(`"input"`)}
-		if includeIdentity {
-			options = append(options, WithActivityOrchestrationIdentity())
-		}
-		ctx.CallActivity("inspect", options...)
+		ctx.CallActivity("inspect", WithRawActivityInput(`"input"`))
 		return nil, nil
 	}))
 	started := helpers.NewExecutionStartedEvent("parent", "instance", nil,
@@ -30,11 +32,7 @@ func activityIdentityWireMessages(t testing.TB, includeIdentity bool) []proto.Me
 		[]*protos.HistoryEvent{started}, nil)
 	require.NoError(t, err)
 	action := scheduledActivityAction(t, result.Response).GetScheduleTask()
-	if includeIdentity {
-		require.Equal(t, legacyIdentityTags(), action.Tags, "opt-in must reproduce the legacy identity payload")
-	} else {
-		require.Nil(t, action.Tags)
-	}
+	require.Nil(t, action.Tags)
 	trace := &protos.TraceContext{TraceParent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"}
 	action.ParentTraceContext = trace
 	event := helpers.NewTaskScheduledEvent(0, action.Name, action.Version, action.Input, trace)
@@ -45,29 +43,49 @@ func activityIdentityWireMessages(t testing.TB, includeIdentity bool) []proto.Me
 		OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: "instance"},
 		ParentTraceContext:    trace, Tags: action.Tags,
 	}
-	return []proto.Message{action, event, request}
+	previousTags := map[string]string{
+		"__durabletask.context.encoding":              "1",
+		"__durabletask.context.instance_id":           "instance",
+		"__durabletask.context.orchestration_name":    "parent",
+		"__durabletask.context.orchestration_version": "v1",
+		"__durabletask.context.parent_instance_id":    "root-instance",
+	}
+	previousAction := proto.Clone(action).(*protos.ScheduleTaskAction)
+	previousAction.Tags = previousTags
+	previousEvent := proto.Clone(event).(*protos.HistoryEvent)
+	previousEvent.GetTaskScheduled().Tags = previousTags
+	previousRequest := proto.Clone(request).(*protos.ActivityRequest)
+	previousRequest.Tags = previousTags
+	return []activityWireSizeCase{
+		{"action", action, previousAction},
+		{"history", event, previousEvent},
+		{"request", request, previousRequest},
+	}
 }
 
 func TestActivityIdentitySerializedSize(t *testing.T) {
-	defaultMessages := activityIdentityWireMessages(t, false)
-	legacyMessages := activityIdentityWireMessages(t, true)
-	for index, name := range []string{"action", "history", "request"} {
-		defaultBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(defaultMessages[index])
+	for _, test := range activityIdentityWireMessages(t) {
+		currentBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(test.current)
 		require.NoError(t, err)
-		legacyBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(legacyMessages[index])
+		previousBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(test.previous)
 		require.NoError(t, err)
-		require.Less(t, len(defaultBytes), len(legacyBytes))
-		t.Logf("%s: default=%d legacy/opt-in=%d delta=%d protobuf bytes",
-			name, len(defaultBytes), len(legacyBytes), len(legacyBytes)-len(defaultBytes))
+		require.Less(t, len(currentBytes), len(previousBytes))
+		t.Logf("%s: current=%d previous=%d delta=%d protobuf bytes",
+			test.name, len(currentBytes), len(previousBytes), len(previousBytes)-len(currentBytes))
 	}
 }
 
 func BenchmarkActivityIdentityWireSize(b *testing.B) {
-	for _, includeIdentity := range []bool{false, true} {
-		messages := activityIdentityWireMessages(b, includeIdentity)
-		for index, name := range []string{"action", "history", "request"} {
-			b.Run(name+"/identity="+boolName(includeIdentity), func(b *testing.B) {
-				message := messages[index]
+	for _, test := range activityIdentityWireMessages(b) {
+		for _, variant := range []struct {
+			name    string
+			message proto.Message
+		}{
+			{"current", test.current},
+			{"previous", test.previous},
+		} {
+			b.Run(test.name+"/"+variant.name, func(b *testing.B) {
+				message := variant.message
 				b.ReportAllocs()
 				for b.Loop() {
 					_, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
