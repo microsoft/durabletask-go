@@ -566,7 +566,9 @@ func TestWorkerCompletionTransportRoutesExactMethodsAndPreservesCallOptions(t *t
 			if err := grpc.SendHeader(ctx, metadata.Pairs("test-response", "header")); err != nil {
 				return nil, err
 			}
-			grpc.SetTrailer(ctx, metadata.Pairs("test-response", "trailer"))
+			if err := grpc.SetTrailer(ctx, metadata.Pairs("test-response", "trailer")); err != nil {
+				return nil, err
+			}
 			return handler(ctx, request)
 		}))
 	ctx := metadata.AppendToOutgoingContext(context.Background(), "test-context", "preserved")

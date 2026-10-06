@@ -23,12 +23,17 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+// awaitDispatchBarrier synchronizes with any dispatch that raced logical intake
+// stop, so its pending count is visible before callers wait on it.
+func (run *grpcWorkerRun) awaitDispatchBarrier() {
+	run.dispatchMu.Lock()
+	defer run.dispatchMu.Unlock()
+}
+
 func (w *TaskHubGrpcWorker) consumeConnection(run *grpcWorkerRun, connection *grpcWorkerConnection) (bool, error) {
 	stopWatcher, watcherDone := make(chan struct{}), make(chan struct{})
 	waitAccepted := func() {
-		// Synchronize with the last dispatch that raced logical intake stop.
-		run.dispatchMu.Lock()
-		run.dispatchMu.Unlock()
+		run.awaitDispatchBarrier()
 		connection.pending.Wait()
 	}
 	go func() {
