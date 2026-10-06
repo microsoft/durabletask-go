@@ -76,6 +76,16 @@ func (c *leaseAwareSchedulerClient) AbandonTaskActivityWorkItem(
 	return result, err
 }
 
+type cancelOnIntakeCheckContext struct {
+	context.Context
+	cancel context.CancelFunc
+}
+
+func (c cancelOnIntakeCheckContext) Err() error {
+	c.cancel()
+	return c.Context.Err()
+}
+
 func TestWorkerCanceledDispatchWaitsForAbandonment(t *testing.T) {
 	for _, phase := range []string{"waiting for slot", "slot reserved"} {
 		t.Run(phase, func(t *testing.T) {
@@ -85,10 +95,13 @@ func TestWorkerCanceledDispatchWaitsForAbandonment(t *testing.T) {
 				defer run.cancelIntake()
 				defer run.cancelProcessing()
 				connection := &grpcWorkerConnection{}
-				slots := make(chan struct{})
+				slots := make(chan struct{}, 1)
 				if phase == "waiting for slot" {
-					slots = make(chan struct{}, 1)
 					slots <- struct{}{}
+				} else {
+					// Cancel at the post-admission check, after the only
+					// ready select case has reserved the free slot.
+					run.intakeCtx = cancelOnIntakeCheckContext{run.intakeCtx, run.cancelIntake}
 				}
 				started, release := make(chan struct{}), make(chan struct{})
 				var releaseOnce sync.Once
@@ -103,15 +116,7 @@ func TestWorkerCanceledDispatchWaitsForAbandonment(t *testing.T) {
 						func(context.Context) { t.Error("work was executed after logical intake stop") })
 				}()
 				synctest.Wait()
-				if phase == "slot reserved" {
-					run.dispatchMu.Lock()
-					<-slots
-					run.cancelIntake()
-					run.dispatchMu.Unlock()
-					// Return the admission token so the rejected dispatch can
-					// release its slot after observing cancellation.
-					slots <- struct{}{}
-				} else {
+				if phase == "waiting for slot" {
 					run.cancelIntake()
 				}
 				awaitCompletionTest(t, started)
@@ -145,6 +150,43 @@ func TestWorkerCanceledDispatchWaitsForAbandonment(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestWorkerGracefulStopRacingBufferedReceive(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		for range 300 {
+			client := &fakeSchedulerClient{stream: newFakeWorkItemStream(1)}
+			worker := newFakeWorker(t, client)
+			started, release := make(chan struct{}), make(chan struct{})
+			worker.executor = &recordingExecutor{
+				executeActivity: func(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error) {
+					close(started)
+					<-release
+					return &protos.HistoryEvent{EventType: &protos.HistoryEvent_TaskCompleted{
+						TaskCompleted: &protos.TaskCompletedEvent{},
+					}}, nil
+				},
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			require.NoError(t, worker.Start(ctx))
+			client.stream.results <- completionTestActivity("accepted")
+			awaitCompletionTest(t, started)
+			cancel()
+			synctest.Wait()
+			// Deliver a final buffered item as the previously accepted work
+			// drains the count to zero and wakes the stop watcher.
+			close(release)
+			client.stream.results <- completionTestActivity("raced-intake-stop")
+			synctest.Wait()
+			require.NoError(t, worker.Shutdown(context.Background()))
+			require.False(t, worker.Running())
+			client.mu.Lock()
+			completed, abandoned := len(client.activityCompletions), client.activityAbandons
+			client.mu.Unlock()
+			require.Equal(t, 1, completed)
+			require.LessOrEqual(t, abandoned, 1)
+		}
+	})
 }
 
 func TestWorkerGracefulStopKeepsRejectedItemLeaseUntilAbandoned(t *testing.T) {

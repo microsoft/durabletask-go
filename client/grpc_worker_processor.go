@@ -23,31 +23,24 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-// awaitDispatchBarrier synchronizes with any dispatch that raced logical intake
-// stop, so its pending count is visible before callers wait on it.
-func (run *grpcWorkerRun) awaitDispatchBarrier() {
-	run.dispatchMu.Lock()
-	defer run.dispatchMu.Unlock()
-}
-
 func (w *TaskHubGrpcWorker) consumeConnection(run *grpcWorkerRun, connection *grpcWorkerConnection) (bool, error) {
 	stopWatcher, watcherDone := make(chan struct{}), make(chan struct{})
-	waitAccepted := func() {
-		run.awaitDispatchBarrier()
-		connection.pending.Wait()
-	}
 	go func() {
 		defer close(watcherDone)
 		select {
 		case <-run.intakeCtx.Done():
-			waitAccepted()
+			// Fence registration through cancellation: a final receive may
+			// race the drain, including when the pending count was zero.
+			run.dispatchMu.Lock()
+			connection.pending.Wait()
 			connection.cancelStream()
+			run.dispatchMu.Unlock()
 		case <-stopWatcher:
 		}
 	}()
 	defer func() {
 		if run.intakeCtx.Err() != nil {
-			waitAccepted()
+			connection.pending.Wait()
 		}
 		close(stopWatcher)
 		<-watcherDone
@@ -202,7 +195,6 @@ func (w *TaskHubGrpcWorker) dispatch(
 	run.dispatchMu.Lock()
 	run.pending.Add(1)
 	connection.pending.Add(1)
-	run.dispatchMu.Unlock()
 	finish := func() {
 		connection.pending.Done()
 		run.pending.Done()
@@ -211,12 +203,12 @@ func (w *TaskHubGrpcWorker) dispatch(
 	select {
 	case slots <- struct{}{}:
 	case <-run.intakeCtx.Done():
+		run.dispatchMu.Unlock()
 		defer finish()
 		abandon(run.processingCtx)
 		return run.intakeCtx.Err()
 	}
 
-	run.dispatchMu.Lock()
 	if err := run.intakeCtx.Err(); err != nil {
 		run.dispatchMu.Unlock()
 		<-slots
