@@ -12,6 +12,10 @@ const ReservedContextFieldPrefix = "__durabletask.context."
 type ContextFields map[string]string
 
 // OrchestrationContextInfo identifies the orchestration associated with a task context.
+// Orchestrator contexts contain the full persisted identity. In activities, only
+// InstanceID is guaranteed by default; Name, Version, and ParentInstanceID require
+// task.WithActivityOrchestrationIdentity, historical identity tags, or an explicitly
+// supplied executor context. The activity's own identity is in ActivityContextInfo.
 type OrchestrationContextInfo struct {
 	InstanceID       InstanceID
 	Name             string

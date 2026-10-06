@@ -16,10 +16,11 @@ import (
 type CallActivityOption func(*callActivityOptions, api.DataConverter) error
 
 type callActivityOptions struct {
-	rawInput    *wrapperspb.StringValue
-	version     *wrapperspb.StringValue
-	retryPolicy *RetryPolicy
-	tags        map[string]string
+	rawInput                     *wrapperspb.StringValue
+	version                      *wrapperspb.StringValue
+	retryPolicy                  *RetryPolicy
+	tags                         map[string]string
+	includeOrchestrationIdentity bool
 }
 
 func (options *callActivityOptions) versionOrInherited(inheritedVersion string) *wrapperspb.StringValue {
@@ -129,6 +130,17 @@ func WithActivityTags(tags map[string]string) CallActivityOption {
 			return err
 		}
 		opt.tags = maps.Clone(tags)
+		return nil
+	}
+}
+
+// WithActivityOrchestrationIdentity persists the owning orchestration's name,
+// version, and parent instance ID for OrchestrationContextInfoFromContext in the
+// activity. Without this option, only the owning instance ID is guaranteed.
+// Activity identity, caller context fields, user tags, and tracing are unaffected.
+func WithActivityOrchestrationIdentity() CallActivityOption {
+	return func(opt *callActivityOptions, _ api.DataConverter) error {
+		opt.includeOrchestrationIdentity = true
 		return nil
 	}
 }

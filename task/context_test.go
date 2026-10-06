@@ -67,7 +67,7 @@ func TestOrchestrationContextPropagatesOnlyPersistedIdentityAndFields(t *testing
 		nil,
 		wrapperspb.String("v2"),
 	)
-	started.GetExecutionStarted().Tags = contextprop.Encode(api.OrchestrationContextInfo{}, fields)
+	started.GetExecutionStarted().Tags = contextprop.Encode(nil, fields)
 	fields["tenant"] = "mutated"
 	events := []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), started}
 
@@ -180,12 +180,14 @@ func TestActivityContextDecodesDurableContextTags(t *testing.T) {
 	}
 
 	event := helpers.NewTaskScheduledEvent(4, "inspect-tags", nil, nil, nil)
-	event.GetTaskScheduled().Tags = contextprop.Encode(api.OrchestrationContextInfo{
-		InstanceID:       "tagged-instance",
-		Name:             "tagged-parent",
-		Version:          "v4",
-		ParentInstanceID: "root",
-	}, api.ContextFields{"tenant": "tagged"})
+	event.GetTaskScheduled().Tags = map[string]string{
+		"__durabletask.context.encoding":              "1",
+		"__durabletask.context.instance_id":           "tagged-instance",
+		"__durabletask.context.orchestration_name":    "tagged-parent",
+		"__durabletask.context.orchestration_version": "v4",
+		"__durabletask.context.parent_instance_id":    "root",
+		"__durabletask.context.field.tenant":          "tagged",
+	}
 	response, err := NewTaskExecutor(registry).ExecuteActivity(
 		context.Background(),
 		"tagged-instance",

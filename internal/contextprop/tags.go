@@ -14,15 +14,19 @@ const (
 	parentInstanceIDTag = api.ReservedContextFieldPrefix + "parent_instance_id"
 )
 
-// Encode returns a new tag map containing immutable fields and orchestration identity.
+// Encode returns a new tag map containing caller fields and user tags.
+// A non-nil info opts into the owning orchestration's identity.
 func Encode(
-	info api.OrchestrationContextInfo,
+	info *api.OrchestrationContextInfo,
 	fields api.ContextFields,
 	userTags ...map[string]string,
 ) map[string]string {
 	tags := tagcodec.EncodeContextFields(fields)
 	if len(userTags) > 0 {
 		tags = tagcodec.Merge(tags, tagcodec.EncodeUserTags(userTags[0]))
+	}
+	if info == nil {
+		return tags
 	}
 	if tags == nil {
 		tags = make(map[string]string, 5)
