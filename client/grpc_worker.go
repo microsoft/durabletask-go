@@ -1159,9 +1159,12 @@ func (w *TaskHubGrpcWorker) connect(ctx context.Context) (*grpcWorkerConnection,
 	if err := ctx.Err(); err != nil {
 		return nil, closeOnError(fmt.Errorf("worker intake stopped before opening the stream: %w", status.FromContextError(err).Err()))
 	}
-	// Ending the stream releases server-side leases, so logical intake stop
-	// must not cancel it until accepted work has acknowledged or abandoned.
+	// Ending an established stream releases its server-side leases, so logical
+	// intake stop must not cancel it until accepted work has acknowledged or
+	// abandoned. While the stream is still opening nothing is leased, so intake
+	// stop must be able to interrupt a blocked open.
 	streamCtx, cancelStream := context.WithCancel(context.WithoutCancel(ctx))
+	stopOpenCancel := context.AfterFunc(ctx, cancelStream)
 	stream, err := client.GetWorkItems(streamCtx, &protos.GetWorkItemsRequest{
 		MaxConcurrentOrchestrationWorkItems: int32(w.options.maxConcurrentOrchestrations),
 		MaxConcurrentActivityWorkItems:      int32(w.options.maxConcurrentActivities),
@@ -1169,6 +1172,14 @@ func (w *TaskHubGrpcWorker) connect(ctx context.Context) (*grpcWorkerConnection,
 		Capabilities:                        slices.Clone(w.options.capabilities),
 		WorkItemFilters:                     workItemFiltersToProto(w.options.workItemFilters),
 	})
+	if !stopOpenCancel() {
+		// Intake stopped during the open; the stream was or is being cancelled.
+		cancelStream()
+		if err == nil {
+			err = status.FromContextError(ctx.Err()).Err()
+		}
+		return nil, closeOnError(fmt.Errorf("worker intake stopped while opening the stream: %w", err))
+	}
 	if err != nil {
 		cancelStream()
 		return nil, closeOnError(fmt.Errorf("failed to open gRPC work item stream: %w", err))

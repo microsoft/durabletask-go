@@ -164,3 +164,78 @@ func TestWorkerGracefulDrainPreservesIntakeLeaseUntilAcknowledged(t *testing.T) 
 		})
 	}
 }
+
+// openingSchedulerClient lets a test control how GetWorkItems establishes its
+// stream, such as blocking at a saturated HTTP/2 stream limit.
+type openingSchedulerClient struct {
+	*fakeSchedulerClient
+	open func(context.Context) (protos.TaskHubSidecarService_GetWorkItemsClient, error)
+}
+
+func (c *openingSchedulerClient) GetWorkItems(
+	ctx context.Context,
+	_ *protos.GetWorkItemsRequest,
+	_ ...grpc.CallOption,
+) (protos.TaskHubSidecarService_GetWorkItemsClient, error) {
+	return c.open(ctx)
+}
+
+func TestWorkerIntakeStopInterruptsStreamOpen(t *testing.T) {
+	for _, stop := range []string{"shutdown", "run context"} {
+		t.Run(stop, func(t *testing.T) {
+			opening := make(chan struct{})
+			client := &openingSchedulerClient{
+				fakeSchedulerClient: &fakeSchedulerClient{stream: newFakeWorkItemStream(0)},
+				open: func(ctx context.Context) (protos.TaskHubSidecarService_GetWorkItemsClient, error) {
+					close(opening)
+					<-ctx.Done()
+					return nil, status.FromContextError(ctx.Err()).Err()
+				},
+			}
+			worker := newFakeWorker(t, client.fakeSchedulerClient)
+			closer := &countingCloser{}
+			worker.clientFactory = func(context.Context) (protos.TaskHubSidecarServiceClient, io.Closer, error) {
+				return client, closer, nil
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			startDone := make(chan error, 1)
+			go func() { startDone <- worker.Start(ctx) }()
+			awaitCompletionTest(t, opening)
+
+			if stop == "run context" {
+				cancel()
+			} else {
+				shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+				defer stopShutdown()
+				_ = worker.Shutdown(shutdownCtx)
+			}
+			require.Error(t, awaitCompletionTest(t, startDone))
+			require.False(t, worker.Running())
+			require.EqualValues(t, 1, closer.closes.Load())
+		})
+	}
+}
+
+func TestWorkerIntakeStopRacingStreamOpenDoesNotEstablishCancelledStream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var streamCtx context.Context
+	client := &openingSchedulerClient{fakeSchedulerClient: &fakeSchedulerClient{stream: newFakeWorkItemStream(0)}}
+	client.open = func(ctx context.Context) (protos.TaskHubSidecarService_GetWorkItemsClient, error) {
+		streamCtx = ctx
+		// The stop lands after the open succeeded but before connect returns.
+		cancel()
+		return client.stream, nil
+	}
+	worker := newFakeWorker(t, client.fakeSchedulerClient)
+	closer := &countingCloser{}
+	worker.clientFactory = func(context.Context) (protos.TaskHubSidecarServiceClient, io.Closer, error) {
+		return client, closer, nil
+	}
+
+	require.Error(t, worker.Start(ctx))
+	require.False(t, worker.Running())
+	require.EqualValues(t, 1, closer.closes.Load())
+	awaitCompletionTest(t, streamCtx.Done())
+}
