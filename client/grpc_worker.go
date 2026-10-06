@@ -537,7 +537,6 @@ type grpcWorkerRun struct {
 	orchestrationSlots chan struct{}
 	activitySlots      chan struct{}
 	entitySlots        chan struct{}
-	dispatchMu         sync.Mutex
 	pending            sync.WaitGroup
 	retired            sync.WaitGroup
 	err                error
@@ -549,7 +548,54 @@ type grpcWorkerConnection struct {
 	cancelStream context.CancelFunc
 	closer       io.Closer
 
-	pending sync.WaitGroup
+	pendingMu        sync.Mutex
+	pendingChanged   *sync.Cond
+	pendingWorkItems int
+	intakeClosed     bool
+}
+
+func (c *grpcWorkerConnection) registerWorkItem(run *grpcWorkerRun) bool {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	if c.intakeClosed {
+		return false
+	}
+	c.pendingWorkItems++
+	run.pending.Add(1)
+	return true
+}
+
+func (c *grpcWorkerConnection) finishWorkItem(run *grpcWorkerRun) {
+	c.pendingMu.Lock()
+	c.pendingWorkItems--
+	if c.pendingWorkItems == 0 && c.pendingChanged != nil {
+		c.pendingChanged.Broadcast()
+	}
+	c.pendingMu.Unlock()
+	run.pending.Done()
+}
+
+func (c *grpcWorkerConnection) waitForWorkItemsLocked() {
+	if c.pendingWorkItems > 0 && c.pendingChanged == nil {
+		c.pendingChanged = sync.NewCond(&c.pendingMu)
+	}
+	for c.pendingWorkItems > 0 {
+		c.pendingChanged.Wait()
+	}
+}
+
+func (c *grpcWorkerConnection) waitForWorkItems() {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	c.waitForWorkItemsLocked()
+}
+
+func (c *grpcWorkerConnection) stopIntake() {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	c.waitForWorkItemsLocked()
+	c.intakeClosed = true
+	c.cancelStream()
 }
 
 // NewTaskHubGrpcWorker borrows intake and requires separate caller-owned
@@ -1352,7 +1398,7 @@ func (w *TaskHubGrpcWorker) retireConnection(run *grpcWorkerRun, connection *grp
 	go func() {
 		defer run.retired.Done()
 		defer close(done)
-		connection.pending.Wait()
+		connection.waitForWorkItems()
 		if connection.closer != nil {
 			if err := connection.closer.Close(); err != nil {
 				w.logger.Warnf("failed to close retired gRPC worker connection: %v", err)

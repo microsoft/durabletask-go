@@ -95,6 +95,7 @@ func TestWorkerCanceledDispatchWaitsForAbandonment(t *testing.T) {
 				defer run.cancelIntake()
 				defer run.cancelProcessing()
 				connection := &grpcWorkerConnection{}
+				require.True(t, connection.registerWorkItem(run))
 				slots := make(chan struct{}, 1)
 				if phase == "waiting for slot" {
 					slots <- struct{}{}
@@ -127,7 +128,7 @@ func TestWorkerCanceledDispatchWaitsForAbandonment(t *testing.T) {
 					close(runDrained)
 				}()
 				go func() {
-					connection.pending.Wait()
+					connection.waitForWorkItems()
 					close(connectionDrained)
 				}()
 				synctest.Wait()
@@ -155,8 +156,11 @@ func TestWorkerCanceledDispatchWaitsForAbandonment(t *testing.T) {
 func TestWorkerGracefulStopRacingBufferedReceive(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		for range 300 {
-			client := &fakeSchedulerClient{stream: newFakeWorkItemStream(1)}
-			worker := newFakeWorker(t, client)
+			client := &leaseAwareSchedulerClient{fakeSchedulerClient: &fakeSchedulerClient{stream: newFakeWorkItemStream(1)}}
+			worker := newFakeWorker(t, client.fakeSchedulerClient)
+			worker.clientFactory = func(context.Context) (protos.TaskHubSidecarServiceClient, io.Closer, error) {
+				return client, nil, nil
+			}
 			started, release := make(chan struct{}), make(chan struct{})
 			worker.executor = &recordingExecutor{
 				executeActivity: func(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error) {
@@ -185,8 +189,91 @@ func TestWorkerGracefulStopRacingBufferedReceive(t *testing.T) {
 			client.mu.Unlock()
 			require.Equal(t, 1, completed)
 			require.LessOrEqual(t, abandoned, 1)
+			require.Zero(t, client.expired.Load(), "no acknowledgement may use a lease released by shutdown")
 		}
 	})
+}
+
+func TestWorkerReceiveHandoffPreservesLeaseUntilAbandoned(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := &leaseAwareSchedulerClient{
+			fakeSchedulerClient: &fakeSchedulerClient{stream: newFakeWorkItemStream(1)},
+			abandonStarted:      make(chan struct{}),
+			releaseAbandon:      make(chan struct{}),
+		}
+		run := newRunLoopTestRun()
+		defer run.cancelIntake()
+		defer run.cancelProcessing()
+		streamCtx, cancelStream := context.WithCancel(context.Background())
+		defer cancelStream()
+		client.stream.ctx = streamCtx
+		connection := &grpcWorkerConnection{client: client, stream: client.stream, cancelStream: cancelStream}
+		worker := newFakeWorker(t, client.fakeSchedulerClient)
+		var releaseOnce sync.Once
+		dispatched := false
+		t.Cleanup(func() {
+			releaseOnce.Do(func() { close(client.releaseAbandon) })
+			if !dispatched {
+				connection.pendingMu.Lock()
+				registered := connection.pendingWorkItems > 0
+				connection.pendingMu.Unlock()
+				if registered {
+					connection.finishWorkItem(run)
+				}
+			}
+		})
+		client.stream.results <- completionTestActivity("receive-handoff")
+		item, err := worker.receiveWorkItem(run, connection)
+		require.NoError(t, err)
+
+		// Pause after successful receipt, before entering dispatch at all.
+		run.cancelIntake()
+		stopped := make(chan struct{})
+		go func() {
+			connection.stopIntake()
+			close(stopped)
+		}()
+		synctest.Wait()
+		require.NoError(t, streamCtx.Err(), "receipt must already be registered before dispatch")
+
+		dispatchDone := make(chan error, 1)
+		dispatched = true
+		go func() {
+			dispatchDone <- worker.dispatchActivity(run, connection, item.GetCompletionToken(), item.GetActivityRequest())
+		}()
+		awaitCompletionTest(t, client.abandonStarted)
+		synctest.Wait()
+		require.NoError(t, streamCtx.Err(), "the abandonment must retain the received item's lease")
+		releaseOnce.Do(func() { close(client.releaseAbandon) })
+		require.ErrorIs(t, awaitCompletionTest(t, dispatchDone), context.Canceled)
+		awaitCompletionTest(t, stopped)
+		run.pending.Wait()
+		require.EqualValues(t, 1, client.abandoned.Load())
+		require.Zero(t, client.expired.Load())
+	})
+}
+
+func TestWorkerStoppedIntakeRejectsUnregisteredDelivery(t *testing.T) {
+	run := newRunLoopTestRun()
+	defer run.cancelIntake()
+	defer run.cancelProcessing()
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	defer cancelStream()
+	stream := &racingStream{ctx: streamCtx, item: completionTestActivity("late-delivery").item}
+	client := &fakeSchedulerClient{}
+	connection := &grpcWorkerConnection{client: client, stream: stream, cancelStream: cancelStream}
+	worker := newFakeWorker(t, client)
+	run.cancelIntake()
+	connection.stopIntake()
+
+	// Recv returns buffered work even though cancellation already released its lease.
+	item, err := worker.receiveWorkItem(run, connection)
+	require.Equal(t, codes.Canceled, status.Code(err))
+	require.Nil(t, item)
+	connection.waitForWorkItems()
+	run.pending.Wait()
+	require.Empty(t, client.activityCompletions)
+	require.Zero(t, client.activityAbandons)
 }
 
 func TestWorkerGracefulStopKeepsRejectedItemLeaseUntilAbandoned(t *testing.T) {
@@ -317,8 +404,10 @@ func TestWorkerStoppedDispatchDoesNotExecuteEvenWithFreeSlot(t *testing.T) {
 	for range 100 {
 		run := newRunLoopTestRun()
 		run.cancelIntake()
+		connection := &grpcWorkerConnection{}
+		require.True(t, connection.registerWorkItem(run))
 		var abandoned bool
-		err := worker.dispatch(run, &grpcWorkerConnection{}, run.activitySlots,
+		err := worker.dispatch(run, connection, run.activitySlots,
 			func(context.Context) { abandoned = true },
 			func(context.Context) { t.Error("work was executed after logical intake stop") })
 		require.ErrorIs(t, err, context.Canceled)
