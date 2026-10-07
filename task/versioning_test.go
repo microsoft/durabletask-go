@@ -350,6 +350,7 @@ func TestActivityTagsRejectReservedAndEmptyKeys(t *testing.T) {
 	for _, tags := range []map[string]string{
 		{"": "value"},
 		{api.ReservedContextFieldPrefix + "tenant": "value"},
+		{"__durabletask.tags.tenant": "value"},
 	} {
 		if err := WithActivityTags(tags)(new(callActivityOptions), api.DefaultDataConverter()); err == nil {
 			t.Fatalf("WithActivityTags(%#v) succeeded", tags)
@@ -407,8 +408,11 @@ func TestContinueAsNewCarriesTagsAndNextVersion(t *testing.T) {
 	if completed.GetTags()["__durabletask.context.field.correlation_id"] != "42" {
 		t.Fatalf("continue-as-new context tags = %#v", completed.GetTags())
 	}
-	if completed.GetTags()["__durabletask.context.orchestration_version"] != "v2" {
-		t.Fatalf("continue-as-new version tag = %#v", completed.GetTags())
+	if completed.GetNewVersion().GetValue() != "v2" {
+		t.Fatalf("continue-as-new version = %q", completed.GetNewVersion().GetValue())
+	}
+	if _, ok := completed.GetTags()["__durabletask.context.orchestration_version"]; ok {
+		t.Fatalf("continue-as-new identity tags = %#v", completed.GetTags())
 	}
 }
 

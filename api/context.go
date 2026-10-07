@@ -5,13 +5,15 @@ import (
 	"maps"
 )
 
-// ReservedContextFieldPrefix is reserved for Durable Task runtime identity tags.
+// ReservedContextFieldPrefix is reserved for Durable Task context metadata.
 const ReservedContextFieldPrefix = "__durabletask.context."
 
 // ContextFields are immutable caller-supplied values propagated into task contexts.
 type ContextFields map[string]string
 
 // OrchestrationContextInfo identifies the orchestration associated with a task context.
+// Orchestrator contexts contain the full persisted identity. Activity work items
+// supply only InstanceID; the activity's own identity is in ActivityContextInfo.
 type OrchestrationContextInfo struct {
 	InstanceID       InstanceID
 	Name             string

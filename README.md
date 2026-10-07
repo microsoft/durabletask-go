@@ -517,6 +517,19 @@ The SDK does not save the identity of the converter. A new converter must contin
 
 Use `api.WithTags`, `task.WithActivityTags`, and `task.WithSubOrchestrationTags` to attach user tags. An activity and a sub-orchestration inherit the tags of the parent orchestration. A tag on the action has priority over an inherited tag. The completion actions carry the current tags, so ContinueAsNew keeps them.
 
+Activities, sub-orchestrations, and ContinueAsNew do not add owning-orchestration
+identity tags. Without caller tags or context fields, their tag maps
+are absent on the wire, matching .NET's default automatic-tag behavior. Go keeps
+its user-tag inheritance and immutable context-field propagation; when either is
+present, the encoding marker separates user tags from context fields.
+Distributed trace context remains a separate protocol field.
+
+Activity contexts expose the activity's own name, version, and task ID in
+`api.ActivityContextInfo`, and the owning instance ID in
+`api.OrchestrationContextInfo`. Orchestrator contexts obtain their full identity
+from native history fields, including after sub-orchestration starts and
+ContinueAsNew version changes.
+
 The client sends the sampled caller trace context when it schedules an orchestration or signals an entity. The worker adds separate action trace contexts for the service-owned activity and sub-orchestration spans. The worker does not emit duplicate local Durable Task spans. V2 entity requests do not carry per-operation trace context, so entity-emitted actions cannot inherit it.
 
 Use `task.OrchestrationOptions.MaxEventsPerTurn` to limit the new events in one turn. If the worker uses only part of a batch, it sets `numEventsProcessed`. DTS then keeps the remaining events for the next replay. This count obeys the DTS work-item rules. The orchestration control markers do not count against the limit.

@@ -721,12 +721,8 @@ func (ctx *OrchestrationContext) internalScheduleActivity(
 		helpers.GetTaskFunctionName(activity),
 		options.rawInput,
 		options.versionOrInherited(ctx.Version))
-	scheduleTaskAction.GetScheduleTask().Tags = contextprop.Encode(api.OrchestrationContextInfo{
-		InstanceID:       ctx.ID,
-		Name:             ctx.Name,
-		Version:          ctx.Version,
-		ParentInstanceID: ctx.parentInstanceID,
-	}, ctx.contextFields, mergeStringMaps(ctx.orchestrationTags, options.tags))
+	scheduleTaskAction.GetScheduleTask().Tags = contextprop.Encode(
+		ctx.contextFields, mergeStringMaps(ctx.orchestrationTags, options.tags))
 
 	ctx.pendingActions[scheduleTaskAction.Id] = scheduleTaskAction
 
@@ -783,12 +779,6 @@ func (ctx *OrchestrationContext) internalCallSubOrchestrator(
 		options.versionOrDefault(ctx.defaultVersion),
 	)
 	createSubOrchestrationAction.GetCreateSubOrchestration().Tags = contextprop.Encode(
-		api.OrchestrationContextInfo{
-			InstanceID:       ctx.ID,
-			Name:             ctx.Name,
-			Version:          ctx.Version,
-			ParentInstanceID: ctx.parentInstanceID,
-		},
 		mergeStringMaps(ctx.contextFields, options.contextFields),
 		mergeStringMaps(ctx.orchestrationTags, options.tags),
 	)
@@ -1277,7 +1267,7 @@ func (ctx *OrchestrationContext) onExecutionStarted(es *protos.ExecutionStartedE
 	ctx.Name = es.Name
 	ctx.Version = es.GetVersion().GetValue()
 	ctx.executionID = es.GetOrchestrationInstance().GetExecutionId().GetValue()
-	_, fields := contextprop.Decode(es.GetTags())
+	fields := api.ContextFields(tagcodec.DecodeContextFields(es.GetTags()))
 	ctx.contextFields = mergeStringMaps(ctx.contextFields, fields)
 	ctx.orchestrationTags = tagcodec.DecodeUserTagsOrPlain(es.GetTags())
 	if parent := es.GetParentInstance(); parent != nil {
@@ -1779,16 +1769,7 @@ func (ctx *OrchestrationContext) setCompleteInternal(
 	completed := completedAction.GetCompleteOrchestration()
 	if status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW {
 		completed.NewVersion = ctx.continuedAsNewVersion
-		version := ctx.Version
-		if ctx.continuedAsNewVersion != nil {
-			version = ctx.continuedAsNewVersion.GetValue()
-		}
-		completed.Tags = contextprop.Encode(api.OrchestrationContextInfo{
-			InstanceID:       ctx.ID,
-			Name:             ctx.Name,
-			Version:          version,
-			ParentInstanceID: ctx.parentInstanceID,
-		}, ctx.contextFields, ctx.orchestrationTags)
+		completed.Tags = contextprop.Encode(ctx.contextFields, ctx.orchestrationTags)
 	} else {
 		completed.Tags = tagcodec.EncodeUserTags(ctx.orchestrationTags)
 	}

@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Activities, sub-orchestrations, and ContinueAsNew do not add owning-orchestration identity tags, aligning automatic tags with .NET. Activity work items supply the owning instance ID and the activity's own identity; orchestrator contexts use native history fields. User-tag inheritance, immutable context fields, namespace markers, and distributed tracing are preserved.
 - DTS token audiences now default per options/client/worker instance to `https://durabletask.azure.us` when `REGION_NAME` starts with `usgov` or `usdod` (case-insensitively), otherwise `https://durabletask.io`. Explicit `Options.ResourceID` or connection-string `ResourceId` overrides the default without changing the endpoint or credential authority. Resource audiences normalize surrounding whitespace, trailing slashes, and one existing `/.default` suffix before token requests; values that normalize to empty are rejected. Audiences remain stable across token refreshes and reconnects. Government-region applications requiring the old audience must explicitly set `https://durabletask.io`.
 - Restore DTS-provided activity trace parents on `ActivityContext.Context()` without emitting duplicate SDK durable spans, preserving trace continuity for application instrumentation.
 - Missing-instance orchestration waits now return `api.ErrInstanceNotFound` immediately instead of retrying `NotFound` until the caller deadline.
