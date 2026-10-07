@@ -22,8 +22,9 @@ go run ./samples/worker
   the orchestration continuation after the drained activity completes after
   restart.
 - `Run` blocks until its context is canceled and exits cleanly.
-- The compatibility listener on a management client demonstrates the borrowed
-  connection contract; new applications should prefer owned workers.
+- An owned worker can use a smaller completion budget (one dedicated completion
+  connection) independently of its activity-execution limit. Completion isolation
+  is required; the normal worker default is three completion connections.
 
 Activities are at-least-once, so the drain scenario uses an idempotent output
 and does not assert an exact delivery count. The recovery scenario is limited to

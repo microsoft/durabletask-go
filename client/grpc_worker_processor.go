@@ -24,9 +24,29 @@ import (
 )
 
 func (w *TaskHubGrpcWorker) consumeConnection(run *grpcWorkerRun, connection *grpcWorkerConnection) (bool, error) {
+	stopWatcher, watcherDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-run.intakeCtx.Done():
+			connection.stopIntake()
+		case <-stopWatcher:
+		}
+	}()
+	defer func() {
+		if run.intakeCtx.Err() != nil {
+			connection.waitForWorkItems()
+		}
+		close(stopWatcher)
+		<-watcherDone
+	}()
+
 	observedMessage := false
 	for {
-		workItem, err := w.receiveWorkItem(connection)
+		if err := run.intakeCtx.Err(); err != nil {
+			return observedMessage, err
+		}
+		workItem, err := w.receiveWorkItem(run, connection)
 		if err != nil {
 			return observedMessage, err
 		}
@@ -34,6 +54,7 @@ func (w *TaskHubGrpcWorker) consumeConnection(run *grpcWorkerRun, connection *gr
 
 		switch request := workItem.Request.(type) {
 		case *protos.WorkItem_HealthPing:
+			connection.finishWorkItem(run)
 			continue
 		case *protos.WorkItem_OrchestratorRequest:
 			if err := w.dispatchOrchestration(run, connection, workItem.GetCompletionToken(), request.OrchestratorRequest); err != nil {
@@ -58,17 +79,31 @@ func (w *TaskHubGrpcWorker) consumeConnection(run *grpcWorkerRun, connection *gr
 			}
 		default:
 			w.logger.Warnf("received unknown work item type with completion token present=%t", workItem.GetCompletionToken() != "")
+			connection.finishWorkItem(run)
 		}
 	}
 }
 
-func (w *TaskHubGrpcWorker) receiveWorkItem(connection *grpcWorkerConnection) (*protos.WorkItem, error) {
-	workItem, err := recvBeforeSilenceTimeout(connection.stream.Recv, connection.cancelStream, w.options.silentDisconnectTimeout)
+func (w *TaskHubGrpcWorker) receiveWorkItem(run *grpcWorkerRun, connection *grpcWorkerConnection) (*protos.WorkItem, error) {
+	cancelOnSilence := func() {
+		// No new work is expected during a graceful drain. Keep leases alive
+		// until pending acknowledgements finish rather than timing intake out.
+		if run.intakeCtx.Err() == nil {
+			connection.cancelStream()
+		}
+	}
+	workItem, err := recvBeforeSilenceTimeout(connection.stream.Recv, cancelOnSilence, w.options.silentDisconnectTimeout)
 	if err != nil {
 		return nil, err
 	}
 	if workItem == nil {
 		return nil, status.Error(codes.Internal, "received a nil work item")
+	}
+	if !connection.registerWorkItem(run) {
+		// Cancellation won the receipt boundary; closing intake already
+		// releases this unregistered delivery's lease on the server.
+		w.logger.Debug("work item delivery raced closed intake; its lease was released with the stream")
+		return nil, status.Error(codes.Canceled, "worker intake closed before work item registration")
 	}
 	return workItem, nil
 }
@@ -155,6 +190,7 @@ func (w *TaskHubGrpcWorker) dispatchEntity(
 // dispatch reserves a concurrency slot and runs process in the background under
 // the processing context, so a graceful drain can still complete in-flight work.
 // If intake is canceled before a slot is free, the work item is abandoned instead.
+// The receive path registers work before exposing it to dispatch.
 func (w *TaskHubGrpcWorker) dispatch(
 	run *grpcWorkerRun,
 	connection *grpcWorkerConnection,
@@ -165,17 +201,21 @@ func (w *TaskHubGrpcWorker) dispatch(
 	select {
 	case slots <- struct{}{}:
 	case <-run.intakeCtx.Done():
+		defer connection.finishWorkItem(run)
 		abandon(run.processingCtx)
 		return run.intakeCtx.Err()
 	}
 
-	run.pending.Add(1)
-	connection.pending.Add(1)
+	if err := run.intakeCtx.Err(); err != nil {
+		<-slots
+		defer connection.finishWorkItem(run)
+		abandon(run.processingCtx)
+		return err
+	}
 	go func() {
 		defer func() {
 			<-slots
-			connection.pending.Done()
-			run.pending.Done()
+			connection.finishWorkItem(run)
 		}()
 		process(run.processingCtx)
 	}()

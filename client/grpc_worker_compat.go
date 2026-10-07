@@ -7,8 +7,9 @@ import (
 	"github.com/microsoft/durabletask-go/task"
 )
 
-// StartWorkItemListener preserves the original client API. New applications
-// should create a dedicated TaskHubGrpcWorker, ideally with its own connection.
+// StartWorkItemListener starts a worker borrowing the client's intake
+// connection. WithWorkerCompletionTransports must supply separate caller-owned
+// completion channels. Prefer a dedicated owned worker for DTS applications.
 //
 // The listener borrows the client's connection, so it inherits the connection
 // ownership limitations documented on [NewTaskHubGrpcWorker].

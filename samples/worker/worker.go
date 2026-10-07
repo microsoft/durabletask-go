@@ -65,8 +65,8 @@ func run() (err error) {
 	drainID := dtssample.NewInstanceID("worker-drain")
 	restartID := dtssample.NewInstanceID("worker-restart")
 	runID := dtssample.NewInstanceID("worker-run")
-	borrowedID := dtssample.NewInstanceID("worker-borrowed")
-	ids = append(ids, drainID, restartID, runID, borrowedID)
+	budgetID := dtssample.NewInstanceID("worker-budget")
+	ids = append(ids, drainID, restartID, runID, budgetID)
 
 	if err := verifyStartConcurrencyAndDrain(ctx, options, client, registry, concurrencyIDs, drainID); err != nil {
 		return err
@@ -77,7 +77,7 @@ func run() (err error) {
 	if err := verifyRun(ctx, options, client, registry, runID); err != nil {
 		return err
 	}
-	if err := verifyBorrowedConnectionListener(ctx, client, registry, borrowedID); err != nil {
+	if err := verifyCompletionBudget(ctx, options, client, registry, budgetID); err != nil {
 		return err
 	}
 	return nil
@@ -253,35 +253,39 @@ func verifyRun(
 	return nil
 }
 
-func verifyBorrowedConnectionListener(
+func verifyCompletionBudget(
 	ctx context.Context,
+	options *durabletaskscheduler.Options,
 	client *durabletaskscheduler.Client,
 	registry *task.TaskRegistry,
 	id api.InstanceID,
-) error {
-	if err := client.StartWorkItemListener(ctx, registry,
+) (err error) {
+	worker, err := durabletaskscheduler.NewWorker(options, registry, api.DefaultLogger(),
 		durabletaskclient.WithAutoWorkItemFilters(),
-		durabletaskclient.WithMaxConcurrentActivityWorkItems(1)); err != nil {
+		durabletaskclient.WithMaxConcurrentActivityWorkItems(1),
+		durabletaskclient.WithWorkerCompletionConnections(1))
+	if err != nil {
+		return err
+	}
+	if err := worker.Start(ctx); err != nil {
 		return err
 	}
 	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = client.StopWorkItemListener(shutdownCtx)
+		err = errors.Join(err, shutdownWorker(worker))
 	}()
 	if _, err := client.ScheduleNewOrchestration(ctx, "SampleWorkerEcho",
-		api.WithInstanceID(id), api.WithInput("borrowed")); err != nil {
+		api.WithInstanceID(id), api.WithInput("budget")); err != nil {
 		return err
 	}
-	if err := waitForWorkerOutput(ctx, client, id, "echo:borrowed"); err != nil {
+	if err := waitForWorkerOutput(ctx, client, id, "echo:budget"); err != nil {
 		return err
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := client.StopWorkItemListener(shutdownCtx); err != nil {
+	if err := worker.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
-	fmt.Println("verified borrowed connection compatibility listener")
+	fmt.Println("verified worker with one dedicated completion connection")
 	return nil
 }
 
