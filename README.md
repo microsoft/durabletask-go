@@ -10,7 +10,7 @@ You write the orchestrations, activities, and entities. [Azure Durable Task Sche
 
 DTS is the only supported runtime. This SDK does not include a storage backend.
 
-The SDK gives you two connections:
+The SDK provides two roles:
 
 - A **management client** starts orchestrations and reads their state.
 - A **worker** runs your registered orchestrators, activities, and entities.
@@ -82,7 +82,7 @@ This project needs Go 1.25 or later.
 
 ## Connection to DTS
 
-The [`durabletaskscheduler`](./durabletaskscheduler) package is the integration surface. The package validates your connection string and supplies Azure token credentials. It also owns the management connection and the worker connection separately. The worker stream recovers after a network failure.
+The [`durabletaskscheduler`](./durabletaskscheduler) package is the integration surface. The package validates your connection string and supplies Azure token credentials. It owns the management connection separately from the worker's connection group. Each worker has one intake connection and three dedicated completion connections by default, while retaining one identity and executor. Use `durabletaskclient.WithWorkerCompletionConnections(n)` to tune the completion budget from 1 to 8; isolation cannot be disabled. The worker stream recovers after a network failure.
 
 ```go
 options, err := durabletaskscheduler.NewOptionsFromConnectionString(

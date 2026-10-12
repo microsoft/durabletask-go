@@ -188,13 +188,80 @@ A hand-built `Options` value with a zero failure threshold disables recreation.
 caller's `grpc.ClientConnInterface`; they never replace or close it.
 `NewWorker` owns its channels, recreates them after transient disconnects, and
 closes retired channels after their in-flight completions drain.
-`client.NewTaskHubGrpcWorkerWithConnectionFactory` provides the same lifecycle
-when its factory returns a non-nil closer, which transfers ownership to the
-worker. Use an owning configuration to recover from a permanently wedged
+`client.NewTaskHubGrpcWorkerWithConnectionFactory` provides the same lifecycle.
+Its factory must return distinct connections with non-nil ownership closers.
+Use an owning configuration to recover from a permanently wedged
 channel. After a worker has started, `Unauthenticated` and `PermissionDenied`
 stream or reconnect-handshake responses are retried with backoff so token
 refresh and RBAC propagation can recover without restarting the worker. See
 `client.NewTaskHubGrpcWorker` for the full ownership contract.
+
+#### Completion isolation
+
+Workers use one intake connection and a separate bounded group for completion
+and abandonment. Owned workers default to three completion connections, plus
+intake. `client.WithWorkerCompletionConnections(n)` tunes that budget from 1
+through 8; zero is invalid and there is no shared-transport mode. Three is a
+starting point, not a universal optimum or a guarantee of higher persisted
+throughput.
+
+```go
+// One logical worker, one intake, three completion connections by default.
+worker, err := durabletaskscheduler.NewWorker(options, registry, logger)
+// A smaller transport budget does not change execution limits.
+worker, err = durabletaskscheduler.NewWorker(options, registry, logger,
+    durabletaskclient.WithWorkerCompletionConnections(1))
+```
+
+The worker still has one identity, executor, Hello handshake, and GetWorkItems
+stream per generation. Only the three completion RPCs and three abandon RPCs
+are round-robin routed to the additional connections; all other calls, including
+streamed history, stay on intake. Execution limits, retry policies, terminal
+NotFound handling, and large-payload processing do not change.
+
+Every DTS connection uses the same prepared options, credential, worker ID,
+TLS, token audience, metadata, interceptors, and message limits. DTS connections
+must become transport-ready within the group setup
+timeout (`WithWorkerHelloTimeout`); only intake performs Hello, with its existing
+Hello timeout. This readiness stage now applies to every owned worker.
+Completion-channel authentication failures are reported by the RPC, not
+hidden by falling back to intake. A custom factory must honor cancellation and
+return a distinct connection with a distinct non-nil ownership closer for each call.
+Custom connection wrappers are responsible for their own transport readiness.
+
+`client.NewTaskHubGrpcWorker` and `TaskHubGrpcClient.StartWorkItemListener`
+require `client.WithWorkerCompletionTransports(completionConnections...)`.
+The supplied 1–8 transports must be separate from intake and each other, with
+equivalent authentication and worker metadata. The caller owns readiness,
+recovery, and closing; the worker neither constructs nor closes these channels.
+Their explicit count determines the borrowed worker's budget. If
+`WithWorkerCompletionConnections(n)` is also supplied, it must match that count.
+Borrowed transport slices are snapshotted. Owning factories reject this borrowed
+option rather than silently ignoring it.
+
+```go
+// All connections are created/configured/closed by the caller.
+worker, err := durabletaskclient.NewTaskHubGrpcWorker(intake, registry, logger,
+    durabletaskclient.WithWorkerCompletionTransports(completion1, completion2))
+```
+
+Accepted work retains its original generation's connections until completion
+or abandonment finishes. At most two groups (active and draining) are live:
+repeated disconnects wait for the older group to drain before creating another.
+This can delay recovery when old work is slow. Shutdown stops new dispatch but
+keeps the lease-owning intake stream alive until accepted work and
+acknowledgements drain. Received items still waiting for an execution slot are
+abandoned before their intake lease is released. Silence does not terminate
+intake after a graceful stop. Receipt is registered before work is passed to
+dispatch. A delivery racing closed intake is not dispatched or abandoned again:
+closing the stream releases its lease on the server.
+Only then is the stream canceled and its group retired; a real stream failure
+can still invalidate leases. The shutdown deadline cancels processing and
+completion RPCs. As before,
+entity abandonment uses its independent, bounded retry context. `Wait` joins
+processing and retirement after a timed-out shutdown. Factories and application
+handlers must cooperate with cancellation, and ownership closers must return
+promptly.
 
 Reconnect and RPC retry delays are deterministic and always stay within
 `[baseDelay, maxDelay]`. A stream that delivers at least one message before it

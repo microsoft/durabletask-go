@@ -40,7 +40,10 @@ type workItemsStream interface {
 type grpcWorkerClientFactory func(context.Context) (protos.TaskHubSidecarServiceClient, io.Closer, error)
 
 // TaskHubGrpcWorkerConnectionFactory creates a gRPC connection for a worker
-// stream generation. A non-nil closer transfers ownership to the worker.
+// stream generation. Each generation requests one intake connection and the
+// configured completion budget. Every call must return a distinct connection
+// and a distinct non-nil closer transferring ownership. Factories must honor cancellation;
+// closers must return promptly.
 type TaskHubGrpcWorkerConnectionFactory func(context.Context) (grpc.ClientConnInterface, io.Closer, error)
 
 type TaskHubGrpcWorkerOption func(*taskHubGrpcWorkerOptions) error
@@ -65,6 +68,10 @@ const (
 	// orchestration-completion message limit.
 	DefaultMaxOrchestratorCompletionBytes = 4_089_446
 	minOrchestratorCompletionBytes        = 64 * 1024
+
+	// DefaultWorkerCompletionConnections is the owned worker's completion budget,
+	// excluding its intake connection.
+	DefaultWorkerCompletionConnections = 3
 )
 
 type WorkItemFilter struct {
@@ -82,32 +89,35 @@ type WorkItemFilters struct {
 }
 
 type taskHubGrpcWorkerOptions struct {
-	maxConcurrentOrchestrations    int
-	maxConcurrentActivities        int
-	maxConcurrentEntities          int
-	helloTimeout                   time.Duration
-	silentDisconnectTimeout        time.Duration
-	rpcTimeout                     time.Duration
-	reconnectBaseDelay             time.Duration
-	reconnectMaxDelay              time.Duration
-	transientRetryMaxAttempts      int
-	transientRetryBaseDelay        time.Duration
-	transientRetryMaxDelay         time.Duration
-	maxStreamedHistoryEvents       int
-	maxStreamedHistoryBytes        int64
-	maxOrchestratorCompletionBytes int
-	maximumTimerInterval           *time.Duration
-	taskExecutorOptions            []task.TaskExecutorOption
-	versioning                     *task.VersioningOptions
-	capabilities                   []WorkerCapability
-	workItemFilters                *WorkItemFilters
-	workItemFiltersConfigured      bool
-	autoWorkItemFilters            bool
-	largePayloads                  *api.LargePayloadOptions
-	converter                      api.DataConverter
-	unversionedOrchestrators       map[string]struct{}
-	unversionedActivities          map[string]struct{}
-	reconnectRandom                randomInt64N
+	maxConcurrentOrchestrations     int
+	maxConcurrentActivities         int
+	maxConcurrentEntities           int
+	completionConnections           int
+	completionConnectionsConfigured bool
+	borrowedCompletionTransports    []grpc.ClientConnInterface
+	helloTimeout                    time.Duration
+	silentDisconnectTimeout         time.Duration
+	rpcTimeout                      time.Duration
+	reconnectBaseDelay              time.Duration
+	reconnectMaxDelay               time.Duration
+	transientRetryMaxAttempts       int
+	transientRetryBaseDelay         time.Duration
+	transientRetryMaxDelay          time.Duration
+	maxStreamedHistoryEvents        int
+	maxStreamedHistoryBytes         int64
+	maxOrchestratorCompletionBytes  int
+	maximumTimerInterval            *time.Duration
+	taskExecutorOptions             []task.TaskExecutorOption
+	versioning                      *task.VersioningOptions
+	capabilities                    []WorkerCapability
+	workItemFilters                 *WorkItemFilters
+	workItemFiltersConfigured       bool
+	autoWorkItemFilters             bool
+	largePayloads                   *api.LargePayloadOptions
+	converter                       api.DataConverter
+	unversionedOrchestrators        map[string]struct{}
+	unversionedActivities           map[string]struct{}
+	reconnectRandom                 randomInt64N
 	// waitFn overrides every delay the worker imposes on itself: reconnect
 	// backoff, transient RPC retry backoff, and work-item abandon delays. It is
 	// only set by tests so the deterministic delay schedule can be observed
@@ -121,6 +131,7 @@ func defaultTaskHubGrpcWorkerOptions() taskHubGrpcWorkerOptions {
 		maxConcurrentOrchestrations:    defaultConcurrency,
 		maxConcurrentActivities:        defaultConcurrency,
 		maxConcurrentEntities:          defaultConcurrency,
+		completionConnections:          DefaultWorkerCompletionConnections,
 		helloTimeout:                   30 * time.Second,
 		silentDisconnectTimeout:        2 * time.Minute,
 		rpcTimeout:                     30 * time.Second,
@@ -164,6 +175,40 @@ func WithMaxConcurrentEntityWorkItems(n int) TaskHubGrpcWorkerOption {
 			return err
 		}
 		options.maxConcurrentEntities = n
+		return nil
+	}
+}
+
+// WithWorkerCompletionConnections sets the dedicated completion/abandon budget
+// per generation, excluding intake. The default is 3; valid values are 1 through
+// 8. Isolation cannot be disabled. For a borrowed worker, an explicitly set
+// budget must match the transports supplied by WithWorkerCompletionTransports.
+func WithWorkerCompletionConnections(n int) TaskHubGrpcWorkerOption {
+	return func(options *taskHubGrpcWorkerOptions) error {
+		if err := validateWorkerCompletionBudget(n); err != nil {
+			return err
+		}
+		options.completionConnections = n
+		options.completionConnectionsConfigured = true
+		return nil
+	}
+}
+
+// WithWorkerCompletionTransports supplies a borrowed worker's dedicated
+// completion connections. They must be distinct from intake and one another,
+// use equivalent authentication/worker metadata, and number between 1 and 8.
+// The caller retains ownership and is responsible for readiness and recovery.
+// This option is not valid with an owning connection factory.
+func WithWorkerCompletionTransports(connections ...grpc.ClientConnInterface) TaskHubGrpcWorkerOption {
+	snapshot := slices.Clone(connections)
+	return func(options *taskHubGrpcWorkerOptions) error {
+		if err := validateWorkerCompletionBudget(len(snapshot)); err != nil {
+			return err
+		}
+		if err := validateWorkerCompletionTransports(nil, snapshot); err != nil {
+			return err
+		}
+		options.borrowedCompletionTransports = slices.Clone(snapshot)
 		return nil
 	}
 }
@@ -503,14 +548,62 @@ type grpcWorkerConnection struct {
 	cancelStream context.CancelFunc
 	closer       io.Closer
 
-	pending sync.WaitGroup
+	pendingMu        sync.Mutex
+	pendingChanged   *sync.Cond
+	pendingWorkItems int
+	intakeClosed     bool
 }
 
-// NewTaskHubGrpcWorker creates a worker that borrows a caller-owned connection.
+func (c *grpcWorkerConnection) registerWorkItem(run *grpcWorkerRun) bool {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	if c.intakeClosed {
+		return false
+	}
+	c.pendingWorkItems++
+	run.pending.Add(1)
+	return true
+}
+
+func (c *grpcWorkerConnection) finishWorkItem(run *grpcWorkerRun) {
+	c.pendingMu.Lock()
+	c.pendingWorkItems--
+	if c.pendingWorkItems == 0 && c.pendingChanged != nil {
+		c.pendingChanged.Broadcast()
+	}
+	c.pendingMu.Unlock()
+	run.pending.Done()
+}
+
+func (c *grpcWorkerConnection) waitForWorkItemsLocked() {
+	if c.pendingWorkItems > 0 && c.pendingChanged == nil {
+		c.pendingChanged = sync.NewCond(&c.pendingMu)
+	}
+	for c.pendingWorkItems > 0 {
+		c.pendingChanged.Wait()
+	}
+}
+
+func (c *grpcWorkerConnection) waitForWorkItems() {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	c.waitForWorkItemsLocked()
+}
+
+func (c *grpcWorkerConnection) stopIntake() {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	c.waitForWorkItemsLocked()
+	c.intakeClosed = true
+	c.cancelStream()
+}
+
+// NewTaskHubGrpcWorker borrows intake and requires separate caller-owned
+// completion connections supplied by WithWorkerCompletionTransports.
 //
-// The worker never closes or replaces the supplied connection: a reconnect only
-// recreates the work-item stream on that same connection. Recovery is therefore
-// limited to what the caller's connection can do on its own. A connection that
+// The worker never closes or replaces the supplied connections: reconnect only
+// recreates the stream on the same intake. Recovery is limited to what the
+// caller's connections can do on their own. A connection that
 // is permanently wedged (for example one whose credentials expired, or one whose
 // endpoint moved) keeps producing poisoned streams and the worker keeps retrying
 // on the escalating reconnect schedule without ever obtaining a fresh channel.
@@ -522,17 +615,34 @@ func NewTaskHubGrpcWorker(
 	logger api.Logger,
 	opts ...TaskHubGrpcWorkerOption,
 ) (*TaskHubGrpcWorker, error) {
-	if cc == nil {
+	if isNilWorkerTransport(cc) {
 		return nil, fmt.Errorf("gRPC connection is required")
 	}
-	return newTaskHubGrpcWorker(
+	var completions []grpc.ClientConnInterface
+	worker, err := newTaskHubGrpcWorker(
 		func(context.Context) (protos.TaskHubSidecarServiceClient, io.Closer, error) {
-			return protos.NewTaskHubSidecarServiceClient(cc), nil, nil
+			group := &workerCompletionTransport{intake: cc, completions: completions}
+			return protos.NewTaskHubSidecarServiceClient(group), nil, nil
 		},
 		registry,
 		logger,
 		opts...,
 	)
+	if err != nil {
+		return nil, err
+	}
+	completions = worker.options.borrowedCompletionTransports
+	if len(completions) == 0 {
+		return nil, fmt.Errorf("borrowed workers require separate connections via WithWorkerCompletionTransports")
+	}
+	if err := validateWorkerCompletionTransports(cc, completions); err != nil {
+		return nil, err
+	}
+	if worker.options.completionConnectionsConfigured && worker.options.completionConnections != len(completions) {
+		return nil, fmt.Errorf("worker completion budget must match the number of borrowed completion transports")
+	}
+	worker.options.completionConnections = len(completions)
+	return worker, nil
 }
 
 // NewTaskHubGrpcWorkerWithConnectionFactory creates a worker whose connection
@@ -547,24 +657,29 @@ func NewTaskHubGrpcWorkerWithConnectionFactory(
 	if factory == nil {
 		return nil, fmt.Errorf("gRPC worker connection factory is required")
 	}
-	return newTaskHubGrpcWorker(
+	var worker *TaskHubGrpcWorker
+	var err error
+	worker, err = newTaskHubGrpcWorker(
 		func(ctx context.Context) (protos.TaskHubSidecarServiceClient, io.Closer, error) {
-			cc, closer, err := factory(ctx)
+			ctx, cancel := context.WithTimeout(ctx, worker.options.helloTimeout)
+			defer cancel()
+			group, err := newWorkerCompletionTransport(ctx, factory, worker.options.completionConnections)
 			if err != nil {
 				return nil, nil, err
 			}
-			if cc == nil {
-				if closer != nil {
-					_ = closer.Close()
-				}
-				return nil, nil, fmt.Errorf("gRPC worker connection factory returned a nil connection")
-			}
-			return protos.NewTaskHubSidecarServiceClient(cc), closer, nil
+			return protos.NewTaskHubSidecarServiceClient(group), group, nil
 		},
 		registry,
 		logger,
 		opts...,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if len(worker.options.borrowedCompletionTransports) != 0 {
+		return nil, fmt.Errorf("owning worker factories cannot use WithWorkerCompletionTransports")
+	}
+	return worker, nil
 }
 
 func newTaskHubGrpcWorker(
@@ -881,7 +996,8 @@ func (w *TaskHubGrpcWorker) Run(ctx context.Context) error {
 	return run.err
 }
 
-// Shutdown stops intake and waits for in-flight work to finish. If ctx expires,
+// Shutdown stops new dispatch and keeps the lease-owning intake stream open
+// until received work completes or is abandoned. If ctx expires,
 // in-flight execution and completion RPCs are canceled.
 func (w *TaskHubGrpcWorker) Shutdown(ctx context.Context) error {
 	w.mu.Lock()
@@ -1003,9 +1119,10 @@ func (w *TaskHubGrpcWorker) runLoop(run *grpcWorkerRun, connection *grpcWorkerCo
 		w.options.reconnectMaxDelay,
 		w.options.reconnectRandom,
 	)
+	var previousRetirement <-chan struct{}
 	for {
 		observedMessage, err := w.consumeConnection(run, connection)
-		w.retireConnection(run, connection)
+		retirement := w.retireConnection(run, connection)
 
 		if run.intakeCtx.Err() != nil {
 			return nil
@@ -1013,6 +1130,16 @@ func (w *TaskHubGrpcWorker) runLoop(run *grpcWorkerRun, connection *grpcWorkerCo
 		if !isTransientWorkerError(err) {
 			return fmt.Errorf("work item stream stopped with a non-retryable error: %w", err)
 		}
+		// Allow one draining generation alongside the next intake, but do not
+		// accumulate connection groups during repeated reconnects.
+		if previousRetirement != nil {
+			select {
+			case <-previousRetirement:
+			case <-run.intakeCtx.Done():
+				return nil
+			}
+		}
+		previousRetirement = retirement
 		if code := status.Code(err); code == codes.Unauthenticated || code == codes.PermissionDenied {
 			w.logger.Warnf("gRPC worker authentication or authorization failed; reconnecting so refreshed credentials or RBAC can recover: %v", err)
 		}
@@ -1059,21 +1186,31 @@ func (w *TaskHubGrpcWorker) connect(ctx context.Context) (*grpcWorkerConnection,
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gRPC worker connection: %w", err)
 	}
-	closeOnError := func() {
+	closeOnError := func(err error) error {
 		if closer != nil {
-			_ = closer.Close()
+			if closeErr := closer.Close(); closeErr != nil {
+				return errors.Join(err, fmt.Errorf("failed to close gRPC worker connection: %w", closeErr))
+			}
 		}
+		return err
 	}
 
 	helloCtx, cancelHello := context.WithTimeout(ctx, w.options.helloTimeout)
 	_, err = client.Hello(helloCtx, &emptypb.Empty{})
 	cancelHello()
 	if err != nil {
-		closeOnError()
-		return nil, fmt.Errorf("gRPC worker Hello failed: %w", err)
+		return nil, closeOnError(fmt.Errorf("gRPC worker Hello failed: %w", err))
 	}
 
-	streamCtx, cancelStream := context.WithCancel(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, closeOnError(fmt.Errorf("worker intake stopped before opening the stream: %w", status.FromContextError(err).Err()))
+	}
+	// Ending an established stream releases its server-side leases, so logical
+	// intake stop must not cancel it until accepted work has acknowledged or
+	// abandoned. While the stream is still opening nothing is leased, so intake
+	// stop must be able to interrupt a blocked open.
+	streamCtx, cancelStream := context.WithCancel(context.WithoutCancel(ctx))
+	stopOpenCancel := context.AfterFunc(ctx, cancelStream)
 	stream, err := client.GetWorkItems(streamCtx, &protos.GetWorkItemsRequest{
 		MaxConcurrentOrchestrationWorkItems: int32(w.options.maxConcurrentOrchestrations),
 		MaxConcurrentActivityWorkItems:      int32(w.options.maxConcurrentActivities),
@@ -1081,10 +1218,17 @@ func (w *TaskHubGrpcWorker) connect(ctx context.Context) (*grpcWorkerConnection,
 		Capabilities:                        slices.Clone(w.options.capabilities),
 		WorkItemFilters:                     workItemFiltersToProto(w.options.workItemFilters),
 	})
+	if !stopOpenCancel() {
+		// Intake stopped during the open; the stream was or is being cancelled.
+		cancelStream()
+		if err == nil {
+			err = status.FromContextError(ctx.Err()).Err()
+		}
+		return nil, closeOnError(fmt.Errorf("worker intake stopped while opening the stream: %w", err))
+	}
 	if err != nil {
 		cancelStream()
-		closeOnError()
-		return nil, fmt.Errorf("failed to open gRPC work item stream: %w", err)
+		return nil, closeOnError(fmt.Errorf("failed to open gRPC work item stream: %w", err))
 	}
 
 	return &grpcWorkerConnection{
@@ -1247,18 +1391,21 @@ func workItemFiltersToProto(filters *WorkItemFilters) *protos.WorkItemFilters {
 	return result
 }
 
-func (w *TaskHubGrpcWorker) retireConnection(run *grpcWorkerRun, connection *grpcWorkerConnection) {
+func (w *TaskHubGrpcWorker) retireConnection(run *grpcWorkerRun, connection *grpcWorkerConnection) <-chan struct{} {
 	connection.cancelStream()
+	done := make(chan struct{})
 	run.retired.Add(1)
 	go func() {
 		defer run.retired.Done()
-		connection.pending.Wait()
+		defer close(done)
+		connection.waitForWorkItems()
 		if connection.closer != nil {
 			if err := connection.closer.Close(); err != nil {
 				w.logger.Warnf("failed to close retired gRPC worker connection: %v", err)
 			}
 		}
 	}()
+	return done
 }
 
 func isTransientWorkerError(err error) bool {

@@ -96,6 +96,17 @@ func startFilterCapturingWorker(
 	)
 	require.NoError(t, err)
 
+	completion, err := grpc.NewClient(
+		"passthrough:///export-history-filters",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+	)
+	require.NoError(t, err)
+	workerOptions = append([]durabletaskclient.TaskHubGrpcWorkerOption{
+		durabletaskclient.WithWorkerCompletionTransports(completion),
+	}, workerOptions...)
 	worker, err := durabletaskclient.NewTaskHubGrpcWorker(
 		connection,
 		registry,
@@ -109,6 +120,7 @@ func startFilterCapturingWorker(
 		defer cancel()
 		require.NoError(t, worker.Shutdown(shutdownCtx))
 		require.NoError(t, connection.Close())
+		require.NoError(t, completion.Close())
 		server.Stop()
 		require.NoError(t, listener.Close())
 	})

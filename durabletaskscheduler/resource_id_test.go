@@ -394,7 +394,11 @@ func TestPublicAuthenticationPathsPreserveResourceIDAcrossReconnects(t *testing.
 						awaitAudienceMetadata(t, server)
 						require.Len(t, recordedTokenOptions(credential), 1, "client acquires a token for its eager Hello")
 						if path == "compatibility listener" {
+							completion, err := connect(options, clientRole, "")
+							require.NoError(t, err)
+							defer func() { require.NoError(t, completion.Close()) }()
 							require.NoError(t, client.StartWorkItemListener(ctx, task.NewTaskRegistry(),
+								durabletaskclient.WithWorkerCompletionTransports(completion),
 								durabletaskclient.WithWorkerReconnectBackoff(time.Millisecond, time.Millisecond)))
 							awaitAudienceMetadata(t, server)
 							awaitAudienceMetadata(t, server)
