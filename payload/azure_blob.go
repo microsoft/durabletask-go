@@ -335,13 +335,14 @@ type azureBlobReference struct {
 func (s *AzureBlobStore) parseToken(token string) (azureBlobReference, error) {
 	account := s.primaryAccount
 	var container, name string
-	if strings.HasPrefix(token, azureBlobTokenV1) {
+	switch {
+	case strings.HasPrefix(token, azureBlobTokenV1):
 		parts := strings.SplitN(strings.TrimPrefix(token, azureBlobTokenV1), ":", 2)
 		if len(parts) != 2 {
 			return azureBlobReference{}, fmt.Errorf("%w: invalid blob:v1 token", api.ErrLargePayloadReference)
 		}
 		container, name = parts[0], parts[1]
-	} else if strings.HasPrefix(token, azureBlobTokenV2) {
+	case strings.HasPrefix(token, azureBlobTokenV2):
 		raw := strings.TrimPrefix(token, azureBlobTokenV2)
 		// Older tokens can contain SAS, snapshot, version or fragment fields.
 		// They describe neither the destination policy nor its authentication.
@@ -356,7 +357,7 @@ func (s *AzureBlobStore) parseToken(token string) (azureBlobReference, error) {
 		if err != nil {
 			return azureBlobReference{}, err
 		}
-	} else {
+	default:
 		return azureBlobReference{}, fmt.Errorf("%w: invalid Azure Blob token prefix", api.ErrLargePayloadReference)
 	}
 	if !validContainer(container) || name == "" || !validBlobPath(name) {

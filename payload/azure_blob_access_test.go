@@ -161,11 +161,12 @@ func TestAzureBlobStoreAccessPolicyMatrix(t *testing.T) {
 							assertBlobTokenAccess(t, store, recorder, test.token, test.allowed)
 						}
 						for _, req := range recorder.recorded() {
-							if auth == "identity" {
+							switch auth {
+							case "identity":
 								require.Equal(t, "Bearer "+"offline-test-token", req.Header.Get("Authorization"))
-							} else if auth == "sas" {
+							case "sas":
 								require.Equal(t, "configured", req.URL.Query().Get("sig"))
-							} else {
+							default:
 								require.True(t, strings.HasPrefix(req.Header.Get("Authorization"), "SharedKey account:"))
 							}
 						}
