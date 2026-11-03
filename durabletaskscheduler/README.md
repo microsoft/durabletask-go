@@ -477,11 +477,56 @@ requires every client and worker to share the same durable filesystem path;
 container-local or other ephemeral storage is not safe.
 
 Identity authentication uses `AccountURL` plus an `azcore.TokenCredential`.
-Cross-account identity reads require an explicit `AllowedHosts` entry. Azure
-Blob defaults match .NET: 256 KiB inclusive threshold, 10 MiB maximum, gzip
+By default, reads are restricted to the configured
+storage endpoint and container. This excludes both other accounts and other
+containers in the same account.
+
+Two independent options widen read access:
+
+| Option | Default | Scope |
+| --- | --- | --- |
+| `AllowAllContainersInConfiguredAccount` | `false` | Every container at the exact primary account endpoint, using its configured identity, key, or SAS authentication |
+| `AdditionalAccountURLs` | Empty | Every container at each listed absolute HTTPS Blob account service endpoint, using the primary `AccountURL`'s `azcore.TokenCredential` |
+
+The additional list does not widen the primary container scope. Set the boolean
+as well to read every container across both primary and additional accounts.
+Additional accounts require identity authentication; connection-string
+authentication with a nonempty additional list fails at construction. Storage
+RBAC, key, and SAS permissions still apply, and a failed request never falls back
+to another account or credential. Use narrowly permissioned credentials.
+
+Endpoints match scheme, case-insensitive hostname, effective port, and the
+case-sensitive account path for SDK-recognized IP-style endpoints such as
+Azurite. Different ports or account paths require separate additional entries.
+Hostname-only entries, wildcards, container/blob paths, userinfo, query strings,
+fragments, and a repeated primary endpoint are rejected in the additional list.
+Equivalent additional entries are deduplicated. Policy is captured at construction.
+HTTP primary endpoints require `AllowInsecureHTTP`; additional endpoints must
+always use HTTPS. Redirects are not followed.
+
+The same policy applies to `Resolve`, `ResolveToken`, token validation, and
+client/worker hydration. Legacy `blob:v1` tokens always select the primary
+account and honor its container option. Uploads always use the primary account
+and configured container and emit credential-free `blob:v2` tokens. Existing
+v2 token queries and fragments are ignored, including SAS, snapshot, and version
+parameters; only configured authentication is used. Userinfo is rejected.
+Literal backslashes in blob names are preserved (v1 `\` and v2 `%5C` select
+the same name); they are not treated as path separators. Slash-separated
+dot-segment traversal is rejected, and constructed SDK destinations must retain
+the authorized account, container, and exact blob name.
+The samples leave both broader-access options unset.
+
+Changing storage location does not rewrite existing references. Migrate
+payloads/references explicitly, keep a store configured for the original location,
+or opt into the appropriate read scope: the boolean for other containers at the
+same primary endpoint, or `AdditionalAccountURLs` for identity reads from an
+original account at a different endpoint. The SDK does not implement blob deletion
+or dashboard authentication; these options do not configure external service behavior.
+
+Azure Blob defaults match .NET: 256 KiB inclusive threshold, 10 MiB maximum, gzip
 enabled, eight exponential retries, and the `durabletask-payloads` container.
-Tokens are treated as untrusted: userinfo, SAS/query strings, fragments,
-unapproved hosts, malformed paths, oversized downloads, and invalid integrity
+Tokens are treated as untrusted: userinfo, unapproved destinations,
+malformed or traversing paths, oversized downloads, and invalid integrity
 metadata are rejected. Go-written blobs include size, SHA-256, and content-MD5
 integrity data; .NET blobs without that metadata remain readable.
 

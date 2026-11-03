@@ -548,6 +548,10 @@ To control instance-ID reuse, configure `api.OrchestrationIDReusePolicy.DedupeSt
 To externalize large payloads, set `durabletaskscheduler.Options.LargePayloads` to an `*api.LargePayloadOptions` value. This value holds an `api.LargePayloadStore` that saves the bytes. It also holds an `api.LargePayloadResolver` that reads the bytes back. The SDK applies the option to the management client and to the worker.
 
 The [`payload`](./payload) package includes Azure Blob Storage support. It emits the same self-describing `blob:v2` tokens as the .NET SDK.
+Reads default to the configured storage endpoint and container. Use
+`AllowAllContainersInConfiguredAccount` for primary account-wide reads or
+`AdditionalAccountURLs` for identity-authenticated reads of explicitly listed
+accounts. See [large payload configuration](./durabletaskscheduler/README.md#large-payloads).
 
 ## Distributed tracing
 
