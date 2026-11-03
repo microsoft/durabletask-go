@@ -13,6 +13,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAzureBlobStoreWithReplacedDefaultTransport(t *testing.T) {
+	original := http.DefaultTransport
+	replacement := &blobAccessRecorder{}
+	http.DefaultTransport = replacement
+	t.Cleanup(func() { http.DefaultTransport = original })
+
+	options := blobAccessOptions("https://account.blob.core.windows.net", "identity")
+	options.Credential = &blobAccessRecorder{}
+	options.AdditionalAccountURLs = []string{"https://other.blob.core.windows.net"}
+	store, err := NewAzureBlobStore(options)
+	require.NoError(t, err)
+	require.NotNil(t, store)
+	require.Empty(t, replacement.recorded())
+
+	clientOptions := newAzureBlobClientOptions()
+	client := clientOptions.Transport.(*http.Client)
+	transport := client.Transport.(*http.Transport)
+	defer transport.CloseIdleConnections()
+	require.True(t, transport.DisableCompression)
+	require.True(t, transport.ForceAttemptHTTP2)
+	require.NotNil(t, transport.Proxy)
+	require.NotNil(t, transport.DialContext)
+	require.ErrorIs(t, client.CheckRedirect(&http.Request{}, nil), http.ErrUseLastResponse)
+	require.Same(t, replacement, http.DefaultTransport)
+}
+
 func TestAzureBlobStoreHTTPDownloadCompression(t *testing.T) {
 	const maxPayloadBytes = 64
 	compressed, err := gzipPayload([]byte("payload"))

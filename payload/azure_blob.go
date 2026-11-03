@@ -112,8 +112,19 @@ func NewAzureBlobStore(options AzureBlobStoreOptions) (*AzureBlobStore, error) {
 }
 
 func newAzureBlobClientOptions() *azblob.ClientOptions {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DisableCompression = true
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		DisableCompression:    true,
+	}
 	return &azblob.ClientOptions{ClientOptions: azcore.ClientOptions{
 		Retry: policy.RetryOptions{
 			MaxRetries:    8,
