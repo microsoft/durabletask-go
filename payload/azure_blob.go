@@ -652,7 +652,7 @@ func parseAzureBlobDestination(u *url.URL) (account, container, name string, err
 
 func validBlobPath(path string) bool {
 	for _, r := range path {
-		if r == '\\' || r < 32 || r == 127 {
+		if r < 32 || r == 127 {
 			return false
 		}
 	}

@@ -275,6 +275,48 @@ func TestAzureBlobStoreEmptyAdditionalAccounts(t *testing.T) {
 	}
 }
 
+func TestAzureBlobStorePreservesLiteralBackslashes(t *testing.T) {
+	for _, primary := range []string{"https://account.blob.core.windows.net", "https://127.0.0.1:10000/account1"} {
+		for _, auth := range []string{"identity", "sas", "shared-key"} {
+			t.Run(primary+"/"+auth, func(t *testing.T) {
+				options := blobAccessOptions(primary, auth)
+				options.AllowAllContainersInConfiguredAccount = true
+				if auth == "identity" {
+					options.AdditionalAccountURLs = []string{"https://other.blob.core.windows.net"}
+				}
+				store, recorder := newAccessTestAzureBlobStore(t, options)
+				for _, location := range []string{primary + "/mycontainer/", primary + "/othercontainer/", "https://other.blob.core.windows.net/mycontainer/"} {
+					if strings.HasPrefix(location, "https://other.") && auth != "identity" {
+						continue
+					}
+					for _, name := range []string{`nested\blob`, `..\othercontainer/blob`, `nested/\blob`, `nested\..\blob`, `literal%5Cblob`} {
+						u, err := url.Parse(location)
+						require.NoError(t, err)
+						prefix := u.Path
+						u.Path += name
+						tokens := []string{azureBlobTokenV2 + u.String()}
+						if strings.HasPrefix(location, primary+"/") {
+							container := strings.TrimSuffix(strings.TrimPrefix(location, primary+"/"), "/")
+							tokens = append(tokens, azureBlobTokenV1+container+":"+name)
+						}
+						start := len(recorder.recorded())
+						for _, token := range tokens {
+							assertBlobTokenAccess(t, store, recorder, token, true)
+						}
+						requests := recorder.recorded()[start:]
+						require.NotEmpty(t, requests)
+						for _, req := range requests {
+							require.Equal(t, u.Host, req.URL.Host)
+							require.Equal(t, prefix+name, req.URL.Path)
+							require.Equal(t, prefix+url.PathEscape(name), req.URL.EscapedPath())
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestAzureBlobStoreChecksConstructedDestination(t *testing.T) {
 	for _, primary := range []bool{false, true} {
 		options := blobAccessOptions("https://account.blob.core.windows.net", "identity")
@@ -305,7 +347,9 @@ func TestAzureBlobStoreRejectsDestinationEscapes(t *testing.T) {
 		azureBlobTokenV2 + "https://account.blob.core.windows.net/mycontainer/../othercontainer/blob",
 		azureBlobTokenV2 + "https://account.blob.core.windows.net/mycontainer/%2e%2e%2fothercontainer/blob",
 		azureBlobTokenV2 + "https://account.blob.core.windows.net/mycontainer%2fblob/name",
-		azureBlobTokenV2 + "https://account.blob.core.windows.net/mycontainer/..%5cothercontainer/blob",
+		azureBlobTokenV2 + "https://account.blob.core.windows.net/mycontainer/nested%5cblob/../../othercontainer/blob",
+		azureBlobTokenV2 + "https://account.blob.core.windows.net/mycontainer%5cothercontainer/blob",
+		azureBlobTokenV2 + "https://127.0.0.1:10000/account1%5caccount2/mycontainer/blob",
 		azureBlobTokenV1 + "mycontainer:../othercontainer/blob",
 		azureBlobTokenV1 + "mycontainer:..",
 	} {

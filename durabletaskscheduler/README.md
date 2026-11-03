@@ -510,6 +510,10 @@ account and honor its container option. Uploads always use the primary account
 and configured container and emit credential-free `blob:v2` tokens. Existing
 v2 token queries and fragments are ignored, including SAS, snapshot, and version
 parameters; only configured authentication is used. Userinfo is rejected.
+Literal backslashes in blob names are preserved (v1 `\` and v2 `%5C` select
+the same name); they are not treated as path separators. Slash-separated
+dot-segment traversal is rejected, and constructed SDK destinations must retain
+the authorized account, container, and exact blob name.
 The samples leave both broader-access options unset.
 
 Changing storage location does not rewrite existing references. Migrate
