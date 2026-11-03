@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -41,30 +42,27 @@ type AzureBlobStoreOptions struct {
 	Container        string
 	// CompressionEnabled defaults to true when nil.
 	CompressionEnabled *bool
-	// AllowedHosts permits blob:v2 reads from any container on the listed
-	// hostnames using Credential, including other containers in the configured
-	// account. Entries match hostnames only, not ports or containers.
-	// Nil or empty restricts reads to the configured endpoint and container.
-	// ConnectionString authentication cannot use this opt-in.
-	//
-	// Enable only when task-hub callers may reference any blob that Credential
-	// can read on these hosts, and use a narrowly permissioned Storage identity.
-	// .NET-authored blobs on these hosts may not include Go integrity metadata;
-	// they remain bounded by MaxPayloadBytes.
-	AllowedHosts      []string
-	AllowInsecureHTTP bool
-	MaxPayloadBytes   int
+	// AllowAllContainersInConfiguredAccount permits reads in every container
+	// at the primary account endpoint, using its configured authentication.
+	AllowAllContainersInConfiguredAccount bool
+	// AdditionalAccountURLs lists absolute HTTPS Blob account service endpoints
+	// whose containers may be read using Credential. Requires AccountURL plus
+	// Credential; connection-string authentication cannot use additional accounts.
+	// This list does not widen the primary account's container scope.
+	AdditionalAccountURLs []string
+	AllowInsecureHTTP     bool
+	MaxPayloadBytes       int
 }
 
 // AzureBlobStore stores payloads in Azure Blob Storage using .NET-compatible
 // blob:v2 tokens. It also resolves .NET's legacy blob:v1 tokens.
 type AzureBlobStore struct {
 	client             *azblob.Client
-	credential         azcore.TokenCredential
-	clientOptions      *azblob.ClientOptions
 	container          string
 	containerURL       *url.URL
-	allowHosts         map[string]struct{}
+	primaryAccount     string
+	additionalAccounts map[string]*azblob.Client
+	allowAllContainers bool
 	allowInsecureHTTP  bool
 	compressionEnabled bool
 	maxPayloadBytes    int
@@ -110,6 +108,24 @@ var (
 
 // NewAzureBlobStore constructs a production Azure Blob Storage payload store.
 func NewAzureBlobStore(options AzureBlobStoreOptions) (*AzureBlobStore, error) {
+	return newAzureBlobStore(options, newAzureBlobClientOptions())
+}
+
+func newAzureBlobClientOptions() *azblob.ClientOptions {
+	return &azblob.ClientOptions{ClientOptions: azcore.ClientOptions{
+		Retry: policy.RetryOptions{
+			MaxRetries:    8,
+			RetryDelay:    250 * time.Millisecond,
+			MaxRetryDelay: 10 * time.Second,
+			TryTimeout:    2 * time.Minute,
+		},
+		Transport: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
+	}}
+}
+
+func newAzureBlobStore(options AzureBlobStoreOptions, clientOptions *azblob.ClientOptions) (*AzureBlobStore, error) {
 	container := options.Container
 	if container == "" {
 		container = "durabletask-payloads"
@@ -126,6 +142,9 @@ func NewAzureBlobStore(options AzureBlobStoreOptions) (*AzureBlobStore, error) {
 	if options.ConnectionString != "" && options.Credential != nil {
 		return nil, errors.New("connection string and token credential cannot be combined")
 	}
+	if len(options.AdditionalAccountURLs) != 0 && options.ConnectionString != "" {
+		return nil, errors.New("additional Azure Blob accounts require AccountURL and a token credential")
+	}
 	compressionEnabled := true
 	if options.CompressionEnabled != nil {
 		compressionEnabled = *options.CompressionEnabled
@@ -137,12 +156,6 @@ func NewAzureBlobStore(options AzureBlobStoreOptions) (*AzureBlobStore, error) {
 	if maxPayloadBytes <= 0 {
 		return nil, errors.New("azure blob maximum payload size must be greater than zero")
 	}
-	clientOptions := &azblob.ClientOptions{ClientOptions: azcore.ClientOptions{Retry: policy.RetryOptions{
-		MaxRetries:    8,
-		RetryDelay:    250 * time.Millisecond,
-		MaxRetryDelay: 10 * time.Second,
-		TryTimeout:    2 * time.Minute,
-	}}}
 	var (
 		client *azblob.Client
 		err    error
@@ -151,10 +164,14 @@ func NewAzureBlobStore(options AzureBlobStoreOptions) (*AzureBlobStore, error) {
 		client, err = azblob.NewClientFromConnectionString(options.ConnectionString, clientOptions)
 	} else {
 		accountURL, parseErr := url.Parse(options.AccountURL)
-		if parseErr != nil || !isSafeBlobURL(accountURL, options.AllowInsecureHTTP) {
+		if parseErr != nil || strings.ContainsAny(options.AccountURL, "?#") {
 			return nil, fmt.Errorf("%w: invalid Azure Blob account URL", api.ErrLargePayloadReference)
 		}
-		client, err = azblob.NewClient(options.AccountURL, options.Credential, clientOptions)
+		accountURL, err = canonicalBlobAccountURL(accountURL, options.AllowInsecureHTTP)
+		if err != nil {
+			return nil, err
+		}
+		client, err = azblob.NewClient(accountURL.String(), options.Credential, clientOptions)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create Azure Blob client: %w", err)
@@ -163,30 +180,44 @@ func NewAzureBlobStore(options AzureBlobStoreOptions) (*AzureBlobStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: Azure Blob service URL is not allowed", api.ErrLargePayloadReference)
 	}
-	publicURL := *serviceURL
-	publicURL.RawQuery, publicURL.Fragment, publicURL.User = "", "", nil
-	publicURL.ForceQuery = false
-	if !isSafeBlobURL(&publicURL, options.AllowInsecureHTTP) {
-		return nil, fmt.Errorf("%w: Azure Blob service URL is not allowed", api.ErrLargePayloadReference)
+	publicURL := credentialFreeBlobURL(serviceURL)
+	accountURL, err := canonicalBlobAccountURL(publicURL, options.AllowInsecureHTTP)
+	if err != nil || serviceURL.User != nil || strings.Contains(client.URL(), "#") {
+		return nil, fmt.Errorf("%w: invalid Azure Blob service endpoint", api.ErrLargePayloadReference)
 	}
-	containerURL := publicURL
-	containerURL.Path = strings.TrimRight(publicURL.Path, "/") + "/" + container
+	containerURL := *accountURL
+	containerURL.Path += "/" + container
 	containerURL.RawPath = ""
-	allowedHosts := make(map[string]struct{}, len(options.AllowedHosts))
-	for _, host := range options.AllowedHosts {
-		host = normalizedHost(host)
-		if host == "" {
-			return nil, errors.New("azure blob allowed host cannot be empty")
+	additional := make(map[string]*azblob.Client, len(options.AdditionalAccountURLs))
+	for _, raw := range options.AdditionalAccountURLs {
+		endpoint, parseErr := url.Parse(raw)
+		if parseErr != nil || strings.ContainsAny(raw, "?#") {
+			return nil, fmt.Errorf("%w: invalid additional Azure Blob account URL", api.ErrLargePayloadReference)
 		}
-		allowedHosts[host] = struct{}{}
+		endpoint, parseErr = canonicalBlobAccountURL(endpoint, false)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		key := endpoint.String()
+		if key == accountURL.String() {
+			return nil, fmt.Errorf("%w: additional account repeats the primary endpoint; use AllowAllContainersInConfiguredAccount", api.ErrLargePayloadReference)
+		}
+		if _, exists := additional[key]; exists {
+			continue
+		}
+		additionalClient, clientErr := azblob.NewClient(key, options.Credential, clientOptions)
+		if clientErr != nil {
+			return nil, fmt.Errorf("create additional Azure Blob client: %w", clientErr)
+		}
+		additional[key] = additionalClient
 	}
 	return &AzureBlobStore{
 		client:             client,
-		credential:         options.Credential,
-		clientOptions:      clientOptions,
 		container:          container,
 		containerURL:       &containerURL,
-		allowHosts:         allowedHosts,
+		primaryAccount:     accountURL.String(),
+		additionalAccounts: additional,
+		allowAllContainers: options.AllowAllContainersInConfiguredAccount,
 		allowInsecureHTTP:  options.AllowInsecureHTTP,
 		compressionEnabled: compressionEnabled,
 		maxPayloadBytes:    maxPayloadBytes,
@@ -263,11 +294,7 @@ func (s *AzureBlobStore) Store(ctx context.Context, payload []byte) (string, err
 }
 
 func (s *AzureBlobStore) Resolve(ctx context.Context, location string) ([]byte, error) {
-	ref, err := s.parseToken(azureBlobTokenV2 + location)
-	if err != nil || !ref.same || ref.container != s.container {
-		return nil, fmt.Errorf("%w: invalid Azure Blob location", api.ErrLargePayloadReference)
-	}
-	return s.download(ctx, ref)
+	return s.ResolveToken(ctx, azureBlobTokenV2+location)
 }
 
 // StoreToken stores a payload and returns the unwrapped .NET blob:v2 token.
@@ -302,55 +329,65 @@ func (s *AzureBlobStore) ResolveToken(ctx context.Context, token string) ([]byte
 type azureBlobReference struct {
 	container string
 	name      string
-	blobURL   *url.URL
-	same      bool
+	client    *azblob.Client
 }
 
 func (s *AzureBlobStore) parseToken(token string) (azureBlobReference, error) {
+	account := s.primaryAccount
+	var container, name string
 	if strings.HasPrefix(token, azureBlobTokenV1) {
 		parts := strings.SplitN(strings.TrimPrefix(token, azureBlobTokenV1), ":", 2)
-		if len(parts) != 2 || parts[0] != s.container || parts[1] == "" {
+		if len(parts) != 2 {
 			return azureBlobReference{}, fmt.Errorf("%w: invalid blob:v1 token", api.ErrLargePayloadReference)
 		}
-		return azureBlobReference{container: s.container, name: parts[1], same: true}, nil
-	}
-	if !strings.HasPrefix(token, azureBlobTokenV2) {
+		container, name = parts[0], parts[1]
+	} else if strings.HasPrefix(token, azureBlobTokenV2) {
+		raw := strings.TrimPrefix(token, azureBlobTokenV2)
+		// Older tokens can contain SAS, snapshot, version or fragment fields.
+		// They describe neither the destination policy nor its authentication.
+		if i := strings.IndexAny(raw, "?#"); i >= 0 {
+			raw = raw[:i]
+		}
+		blobURL, err := url.Parse(raw)
+		if err != nil || !isSafeBlobURL(blobURL, s.allowInsecureHTTP) {
+			return azureBlobReference{}, fmt.Errorf("%w: invalid blob:v2 URL", api.ErrLargePayloadReference)
+		}
+		account, container, name, err = parseAzureBlobDestination(blobURL)
+		if err != nil {
+			return azureBlobReference{}, err
+		}
+	} else {
 		return azureBlobReference{}, fmt.Errorf("%w: invalid Azure Blob token prefix", api.ErrLargePayloadReference)
 	}
-	blobURL, err := url.Parse(strings.TrimPrefix(token, azureBlobTokenV2))
-	if err != nil || !isSafeBlobURL(blobURL, s.allowInsecureHTTP) {
-		return azureBlobReference{}, fmt.Errorf("%w: invalid blob:v2 URL", api.ErrLargePayloadReference)
+	if !validContainer(container) || name == "" || !validBlobPath(name) {
+		return azureBlobReference{}, fmt.Errorf("%w: invalid Azure Blob path", api.ErrLargePayloadReference)
 	}
-	container, name, err := parseAzureBlobPath(blobURL)
-	if err != nil || !validContainer(container) || name == "" {
-		return azureBlobReference{}, fmt.Errorf("%w: invalid blob:v2 path", api.ErrLargePayloadReference)
-	}
-	same := sameURLContainer(blobURL, s.containerURL)
-	if !same {
-		if s.credential == nil {
-			return azureBlobReference{}, fmt.Errorf("%w: cross-account Azure Blob tokens require a token credential", api.ErrLargePayloadReference)
+	client := s.client
+	if account == s.primaryAccount {
+		if container != s.container && !s.allowAllContainers {
+			return azureBlobReference{}, fmt.Errorf("%w: Azure Blob container is not allowed", api.ErrLargePayloadReference)
 		}
-		if _, allowed := s.allowHosts[normalizedHost(blobURL.Host)]; !allowed {
-			return azureBlobReference{}, fmt.Errorf("%w: Azure Blob token host is not allowed", api.ErrLargePayloadReference)
+	} else {
+		client = s.additionalAccounts[account]
+		if client == nil {
+			return azureBlobReference{}, fmt.Errorf("%w: Azure Blob account endpoint is not allowed", api.ErrLargePayloadReference)
 		}
 	}
-	return azureBlobReference{container: container, name: name, blobURL: blobURL, same: same}, nil
+	// Check the SDK's actual joined/escaped destination before its pipeline
+	// can acquire credentials or send a request, including literal v1 names.
+	finalURL, err := url.Parse(client.ServiceClient().NewContainerClient(container).NewBlobClient(name).URL())
+	if err != nil {
+		return azureBlobReference{}, fmt.Errorf("%w: invalid constructed Azure Blob URL", api.ErrLargePayloadReference)
+	}
+	finalAccount, finalContainer, finalName, err := parseAzureBlobDestination(credentialFreeBlobURL(finalURL))
+	if err != nil || finalAccount != account || finalContainer != container || finalName != name {
+		return azureBlobReference{}, fmt.Errorf("%w: constructed Azure Blob destination does not match the authorized location", api.ErrLargePayloadReference)
+	}
+	return azureBlobReference{container: container, name: name, client: client}, nil
 }
 
 func (s *AzureBlobStore) download(ctx context.Context, ref azureBlobReference) ([]byte, error) {
-	var (
-		response azblob.DownloadStreamResponse
-		err      error
-	)
-	if ref.same {
-		response, err = s.client.DownloadStream(ctx, s.container, ref.name, nil)
-	} else {
-		client, clientErr := azblob.NewClient(blobAccountURL(ref.blobURL).String(), s.credential, s.clientOptions)
-		if clientErr != nil {
-			return nil, fmt.Errorf("create cross-account Azure Blob client: %w", clientErr)
-		}
-		response, err = client.DownloadStream(ctx, ref.container, ref.name, nil)
-	}
+	response, err := ref.client.DownloadStream(ctx, ref.container, ref.name, nil)
 	if err != nil {
 		if bloberror.HasCode(err, bloberror.BlobNotFound, bloberror.ContainerNotFound) {
 			return nil, fmt.Errorf(
@@ -508,58 +545,122 @@ func (s *AzureBlobStore) blobURL(name string) *url.URL {
 	return &u
 }
 
-func parseAzureBlobPath(u *url.URL) (string, string, error) {
-	segments := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
-	pathStyle := net.ParseIP(u.Hostname()) != nil || strings.EqualFold(u.Hostname(), "localhost")
-	if pathStyle {
-		if len(segments) < 3 || segments[0] == "" {
-			return "", "", errors.New("invalid path-style Azure Blob URL")
+func credentialFreeBlobURL(u *url.URL) *url.URL {
+	clean := *u
+	clean.RawQuery, clean.Fragment, clean.RawFragment = "", "", ""
+	clean.ForceQuery = false
+	return &clean
+}
+
+func canonicalBlobAccountURL(u *url.URL, allowHTTP bool) (*url.URL, error) {
+	invalid := fmt.Errorf("%w: invalid Azure Blob account service endpoint", api.ErrLargePayloadReference)
+	if !isSafeBlobURL(u, allowHTTP) || !validBlobHostname(u.Hostname()) {
+		return nil, invalid
+	}
+	canonical := *u
+	canonical.Path = strings.TrimRight(u.Path, "/")
+	canonical.RawPath = ""
+	parts, err := blob.ParseURL(canonical.String())
+	if err != nil || parts.ContainerName != "" || parts.BlobName != "" {
+		return nil, invalid
+	}
+	if net.ParseIP(u.Hostname()) != nil {
+		account := parts.IPEndpointStyleInfo.AccountName
+		if account == "" || strings.ContainsAny(account, "/\\% ") || canonical.Path != "/"+account {
+			return nil, invalid
 		}
-		segments = segments[1:]
+	} else if canonical.Path != "" {
+		return nil, invalid
 	}
-	if len(segments) < 2 {
-		return "", "", errors.New("invalid Azure Blob URL path")
+	port, err := strconv.Atoi(effectivePort(u))
+	if err != nil || port < 1 || port > 65535 {
+		return nil, invalid
 	}
-	container, err := url.PathUnescape(segments[0])
-	if err != nil {
-		return "", "", err
+	host := strings.ToLower(u.Hostname())
+	canonical.Host = host
+	if strings.Contains(host, ":") {
+		canonical.Host = "[" + host + "]"
 	}
-	name, err := url.PathUnescape(strings.Join(segments[1:], "/"))
-	if err != nil || name == "" {
-		return "", "", errors.New("invalid Azure Blob name")
+	if (u.Scheme != "https" || port != 443) && (u.Scheme != "http" || port != 80) {
+		canonical.Host = net.JoinHostPort(host, strconv.Itoa(port))
 	}
-	return container, name, nil
+	return &canonical, nil
 }
 
-func blobAccountURL(blobURL *url.URL) *url.URL {
-	u := *blobURL
-	segments := strings.Split(strings.Trim(blobURL.EscapedPath(), "/"), "/")
-	if net.ParseIP(blobURL.Hostname()) != nil || strings.EqualFold(blobURL.Hostname(), "localhost") {
-		u.Path = "/" + segments[0] + "/"
-	} else {
-		u.Path = "/"
+func validBlobHostname(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
 	}
-	u.RawPath, u.RawQuery, u.Fragment, u.User = "", "", "", nil
-	return &u
+	if len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(host, "."), ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
-func sameURLContainer(blobURL, containerURL *url.URL) bool {
-	if blobURL == nil || containerURL == nil {
-		return false
+func parseAzureBlobDestination(u *url.URL) (account, container, name string, err error) {
+	invalid := fmt.Errorf("%w: invalid Azure Blob destination path", api.ErrLargePayloadReference)
+	if !isSafeBlobURL(u, true) {
+		return "", "", "", invalid
 	}
-	tokenContainer := *blobURL
-	container, _, err := parseAzureBlobPath(&tokenContainer)
+	serviceURL := *u
+	serviceURL.Path, serviceURL.RawPath = "", ""
+	path := strings.TrimPrefix(u.EscapedPath(), "/")
+	if net.ParseIP(u.Hostname()) != nil {
+		var rawAccount string
+		var found bool
+		rawAccount, path, found = strings.Cut(path, "/")
+		decoded, decodeErr := url.PathUnescape(rawAccount)
+		if !found || decodeErr != nil || strings.ContainsAny(decoded, "/\\") {
+			return "", "", "", invalid
+		}
+		serviceURL.Path = "/" + decoded
+	}
+	rawContainer, rawName, found := strings.Cut(path, "/")
+	if !found {
+		return "", "", "", invalid
+	}
+	container, err = url.PathUnescape(rawContainer)
+	if err != nil || !validContainer(container) {
+		return "", "", "", invalid
+	}
+	name, err = url.PathUnescape(rawName)
+	if err != nil || name == "" || !validBlobPath(name) {
+		return "", "", "", invalid
+	}
+	endpoint, err := canonicalBlobAccountURL(&serviceURL, true)
 	if err != nil {
-		return false
+		return "", "", "", err
 	}
-	expected := *containerURL
-	expected.Path = strings.TrimRight(expected.Path, "/")
-	tokenContainer.Path = strings.TrimRight(blobAccountURL(&tokenContainer).Path, "/") + "/" + container
-	tokenContainer.RawPath, tokenContainer.RawQuery, tokenContainer.Fragment, tokenContainer.User = "", "", "", nil
-	return strings.EqualFold(tokenContainer.Scheme, expected.Scheme) &&
-		strings.EqualFold(tokenContainer.Hostname(), expected.Hostname()) &&
-		effectivePort(&tokenContainer) == effectivePort(&expected) &&
-		tokenContainer.Path == expected.Path
+	// Match the SDK's own once-decoded interpretation, not a URL-prefix guess.
+	parts, err := blob.ParseURL(u.String())
+	if err != nil || parts.ContainerName != container || parts.BlobName != name {
+		return "", "", "", invalid
+	}
+	return endpoint.String(), container, name, nil
+}
+
+func validBlobPath(path string) bool {
+	for _, r := range path {
+		if r == '\\' || r < 32 || r == 127 {
+			return false
+		}
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func effectivePort(u *url.URL) string {
@@ -576,7 +677,8 @@ func effectivePort(u *url.URL) string {
 }
 
 func isSafeBlobURL(u *url.URL, allowHTTP bool) bool {
-	return u != nil && u.IsAbs() && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" &&
+	return u != nil && u.IsAbs() && u.Opaque == "" && u.Hostname() != "" && u.User == nil &&
+		u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && u.RawFragment == "" && validBlobPath(u.Path) &&
 		(u.Scheme == "https" || (allowHTTP && u.Scheme == "http"))
 }
 
@@ -590,14 +692,6 @@ func validContainer(container string) bool {
 		}
 	}
 	return !strings.Contains(container, "--")
-}
-
-func normalizedHost(host string) string {
-	host = strings.TrimSpace(strings.ToLower(host))
-	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
-		return parsedHost
-	}
-	return strings.Trim(host, "[]")
 }
 
 func randomBlobName() (string, error) {

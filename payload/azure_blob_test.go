@@ -16,11 +16,11 @@ import (
 func newTestAzureBlobStore(t *testing.T) *AzureBlobStore {
 	t.Helper()
 	store, err := NewAzureBlobStore(AzureBlobStoreOptions{
-		AccountURL:        "http://127.0.0.1:10000/devstoreaccount1",
-		Credential:        staticCredential{},
-		Container:         "mycontainer",
-		AllowInsecureHTTP: true,
-		AllowedHosts:      []string{"myaccount.blob.core.windows.net"},
+		AccountURL:            "http://127.0.0.1:10000/devstoreaccount1",
+		Credential:            staticCredential{},
+		Container:             "mycontainer",
+		AllowInsecureHTTP:     true,
+		AdditionalAccountURLs: []string{"https://myaccount.blob.core.windows.net"},
 	})
 	require.NoError(t, err)
 	return store
@@ -52,20 +52,18 @@ func TestAzureBlobStoreRejectsUntrustedTokens(t *testing.T) {
 	for _, token := range []string{
 		"blob:v1:othercontainer:0f8fad5bd9cb469fa16570867728950e",
 		"blob:v2:https://user@myaccount.blob.core.windows.net/mycontainer/0f8fad5bd9cb469fa16570867728950e",
-		"blob:v2:https://myaccount.blob.core.windows.net/mycontainer/0f8fad5bd9cb469fa16570867728950e?sig=x",
-		"blob:v2:https://myaccount.blob.core.windows.net/mycontainer/0f8fad5bd9cb469fa16570867728950e#fragment",
 		"blob:v2:https://untrusted.blob.core.windows.net/mycontainer/0f8fad5bd9cb469fa16570867728950e",
 	} {
 		require.ErrorIs(t, store.ValidateLargePayloadToken(token), api.ErrLargePayloadReference)
 	}
 }
 
-func TestAzureBlobStoreAllowsExplicitCrossAccountHost(t *testing.T) {
+func TestAzureBlobStoreAllowsExplicitAdditionalAccount(t *testing.T) {
 	store, err := NewAzureBlobStore(AzureBlobStoreOptions{
-		AccountURL:   "https://account.blob.core.windows.net",
-		Credential:   staticCredential{},
-		Container:    "mycontainer",
-		AllowedHosts: []string{"other.blob.core.windows.net"},
+		AccountURL:            "https://account.blob.core.windows.net",
+		Credential:            staticCredential{},
+		Container:             "mycontainer",
+		AdditionalAccountURLs: []string{"https://other.blob.core.windows.net"},
 	})
 	require.NoError(t, err)
 	require.NoError(t, store.ValidateLargePayloadToken(

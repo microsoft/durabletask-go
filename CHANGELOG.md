@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Azure Blob payload reads use independent `AllowAllContainersInConfiguredAccount` and `AdditionalAccountURLs` options, with endpoint-and-container defaults shared by native token and generic location reads. Additional accounts require identity authentication and exact service endpoints. V2 token queries and fragments are ignored when resolving existing references; new v2 tokens remain credential-free, and v1 reads remain supported.
+
 ### Added
 
 - Added required completion-transport isolation to gRPC workers: one intake and three dedicated completion/abandon connections by default, with a configurable 1–8 completion budget and bounded generation-safe retirement. `WithWorkerCompletionConnections(0)` is invalid. Borrowed workers and client listeners require separate caller-owned channels via `WithWorkerCompletionTransports`; owning factories must return distinct connections and non-nil closers for every invocation.
