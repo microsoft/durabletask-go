@@ -112,6 +112,8 @@ func NewAzureBlobStore(options AzureBlobStoreOptions) (*AzureBlobStore, error) {
 }
 
 func newAzureBlobClientOptions() *azblob.ClientOptions {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableCompression = true
 	return &azblob.ClientOptions{ClientOptions: azcore.ClientOptions{
 		Retry: policy.RetryOptions{
 			MaxRetries:    8,
@@ -119,9 +121,12 @@ func newAzureBlobClientOptions() *azblob.ClientOptions {
 			MaxRetryDelay: 10 * time.Second,
 			TryTimeout:    2 * time.Minute,
 		},
-		Transport: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		}},
+		Transport: &http.Client{
+			Transport: transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}}
 }
 
