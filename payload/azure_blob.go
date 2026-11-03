@@ -41,7 +41,14 @@ type AzureBlobStoreOptions struct {
 	Container        string
 	// CompressionEnabled defaults to true when nil.
 	CompressionEnabled *bool
-	// AllowedHosts explicitly permits cross-account blob:v2 reads with Credential.
+	// AllowedHosts permits blob:v2 reads from any container on the listed
+	// hostnames using Credential, including other containers in the configured
+	// account. Entries match hostnames only, not ports or containers.
+	// Nil or empty restricts reads to the configured endpoint and container.
+	// ConnectionString authentication cannot use this opt-in.
+	//
+	// Enable only when task-hub callers may reference any blob that Credential
+	// can read on these hosts, and use a narrowly permissioned Storage identity.
 	// .NET-authored blobs on these hosts may not include Go integrity metadata;
 	// they remain bounded by MaxPayloadBytes.
 	AllowedHosts      []string

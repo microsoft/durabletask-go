@@ -477,8 +477,22 @@ requires every client and worker to share the same durable filesystem path;
 container-local or other ephemeral storage is not safe.
 
 Identity authentication uses `AccountURL` plus an `azcore.TokenCredential`.
-Cross-account identity reads require an explicit `AllowedHosts` entry. Azure
-Blob defaults match .NET: 256 KiB inclusive threshold, 10 MiB maximum, gzip
+By default (`AllowedHosts` nil or empty), reads are restricted to the configured
+storage endpoint and container. This excludes both other accounts and other
+containers in the same account.
+
+`AllowedHosts` explicitly permits native `blob:v2` token reads from **any
+container on a listed hostname**, using the configured Storage identity and its
+permissions. Adding the configured account's hostname also permits reads from
+its other containers. Entries match hostnames only, not ports or containers;
+HTTPS is still required unless `AllowInsecureHTTP` is enabled. Enable this option
+only when task-hub callers may reference any blob that identity can read on
+those hosts, and use a narrowly permissioned Storage identity. Connection-string
+authentication cannot use this opt-in. Generic `Resolve` locations remain
+restricted to the configured endpoint and container even with `AllowedHosts`.
+The samples leave `AllowedHosts` unset.
+
+Azure Blob defaults match .NET: 256 KiB inclusive threshold, 10 MiB maximum, gzip
 enabled, eight exponential retries, and the `durabletask-payloads` container.
 Tokens are treated as untrusted: userinfo, SAS/query strings, fragments,
 unapproved hosts, malformed paths, oversized downloads, and invalid integrity
