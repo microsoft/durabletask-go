@@ -57,11 +57,15 @@ type OrchestrationContext struct {
 	rawInput             []byte
 	oldEvents            []*protos.HistoryEvent
 	newEvents            []*protos.HistoryEvent
-	suspendedEvents      []replayEvent
-	resumedEvents        []replayEvent
-	isSuspended          bool
-	isTerminated         bool
-	historyIndex         int
+	// historyBase is the number of stored history events before newEvents. It
+	// equals len(oldEvents) for a normal turn. A resumed session turn has no
+	// oldEvents, so it uses the stored event count reported by the backend.
+	historyBase     int
+	suspendedEvents []replayEvent
+	resumedEvents   []replayEvent
+	isSuspended     bool
+	isTerminated    bool
+	historyIndex    int
 	// processedEventsThisTurn follows DTS numEventsProcessed semantics and
 	// excludes orchestration control markers.
 	processedEventsThisTurn  int
@@ -285,15 +289,20 @@ func newOrchestrationContext(
 		registry:                  registry,
 		oldEvents:                 oldEvents,
 		newEvents:                 newEvents,
+		historyBase:               len(oldEvents),
 		bufferedExternalEvents:    make(map[string]*list.List),
 		pendingExternalEventTasks: make(map[string]*list.List),
 		eventChannels:             make(map[string]any),
 		eventWaiters:              make(map[string]map[*coroutine]struct{}),
 	}
-	ctx.maxHistoryEventsExceeded = options.MaxHistoryEvents > 0 &&
-		len(oldEvents)+len(newEvents) > options.MaxHistoryEvents
+	ctx.maxHistoryEventsExceeded = ctx.historyLimitReached()
 	ctx.scope = newCancellationScope(nil)
 	return ctx
+}
+
+func (ctx *OrchestrationContext) historyLimitReached() bool {
+	limit := ctx.orchestrationOptions.MaxHistoryEvents
+	return limit > 0 && ctx.historyBase+len(ctx.newEvents) > limit
 }
 
 func (ctx *OrchestrationContext) engineContext() *OrchestrationContext {
@@ -367,7 +376,15 @@ func (ctx *OrchestrationContext) WithCancel() (*OrchestrationContext, func()) {
 	return child, cancel
 }
 
-func (ctx *OrchestrationContext) start() (actions []*protos.OrchestratorAction) {
+// start runs one complete turn and then unloads the orchestration.
+func (ctx *OrchestrationContext) start() []*protos.OrchestratorAction {
+	ctx.begin()
+	defer ctx.unload()
+	return ctx.run()
+}
+
+// begin resets the per-execution state and creates the coroutine scheduler.
+func (ctx *OrchestrationContext) begin() {
 	ctx.historyIndex = 0
 	ctx.processedEventsThisTurn = 0
 	ctx.sequenceNumber = 0
@@ -378,10 +395,59 @@ func (ctx *OrchestrationContext) start() (actions []*protos.OrchestratorAction) 
 	ctx.pendingEntityTasks = make(map[string]*completableTask)
 	ctx.clearCriticalSection()
 	ctx.scheduler = newCoroutineScheduler(ctx)
-	defer func() {
-		ctx.scheduler.shutdown()
-		ctx.scheduler = nil
-	}()
+}
+
+// unload stops all coroutines with the forced-unload (teardown) semantics.
+// It is safe to call more than once.
+func (ctx *OrchestrationContext) unload() {
+	if ctx.scheduler == nil {
+		return
+	}
+	ctx.scheduler.shutdown()
+	ctx.scheduler = nil
+}
+
+// commit retires the actions that the backend has durably applied. This has
+// the same effect as replaying the history events that those actions create.
+func (ctx *OrchestrationContext) commit(sent []*protos.OrchestratorAction) {
+	for _, action := range sent {
+		if action == nil {
+			continue
+		}
+		if _, ok := ctx.pendingActions[action.Id]; !ok {
+			continue
+		}
+		if requested := action.GetSendEntityMessage().GetEntityLockRequested(); requested != nil &&
+			ctx.criticalSectionID != "" && requested.CriticalSectionId == ctx.criticalSectionID {
+			ctx.criticalSectionRequestCommitted = true
+		}
+		delete(ctx.pendingActions, action.Id)
+	}
+}
+
+// resume runs one more turn on the loaded orchestration. The batch contains
+// only new events, and historyBase is the number of events that the backend
+// has already stored for this execution.
+func (ctx *OrchestrationContext) resume(batch []*protos.HistoryEvent, historyBase int) []*protos.OrchestratorAction {
+	ctx.oldEvents = nil
+	ctx.newEvents = batch
+	ctx.historyBase = historyBase
+	ctx.historyIndex = 0
+	ctx.IsReplaying = false
+	ctx.processedEventsThisTurn = 0
+	ctx.maxEventsPerTurnExceeded = false
+	ctx.maxHistoryEventsExceeded = ctx.historyLimitReached()
+	// A full replay would see events buffered by an earlier suspension as
+	// old history, so they are replayed when the resume drains them.
+	for i := range ctx.suspendedEvents {
+		ctx.suspendedEvents[i].isReplaying = true
+	}
+	return ctx.run()
+}
+
+// run processes the remaining events and runs coroutines until no more
+// progress is possible in this turn. It returns the pending actions.
+func (ctx *OrchestrationContext) run() (actions []*protos.OrchestratorAction) {
 	defer func() {
 		if value := recover(); value != nil {
 			ctx.continuedAsNew = false
@@ -522,10 +588,10 @@ func countsTowardTurnBudget(event *protos.HistoryEvent) bool {
 		event.GetExecutionResumed() == nil
 }
 
-// HistoryLength returns the total old and new history supplied to this execution.
+// HistoryLength returns the total old and new history of this execution turn.
 func (ctx *OrchestrationContext) HistoryLength() int {
 	engine := ctx.engineContext()
-	return len(engine.oldEvents) + len(engine.newEvents)
+	return engine.historyBase + len(engine.newEvents)
 }
 
 // HistoryLimitExceeded reports whether MaxHistoryEvents was exceeded.
