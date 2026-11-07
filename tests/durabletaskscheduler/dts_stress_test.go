@@ -851,13 +851,21 @@ func runPerf(t *testing.T, workload perfWorkload, sessions bool) perfResult {
 			}
 		}
 	}()
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			close(stopSampler)
+			<-sampled
+		})
+	}
+	// A failed workload exits through runtime.Goexit, so stop the sampler then too.
+	defer stop()
 	cpuStart := processCPU()
 	start := time.Now()
 	units := workload.run(t, ctx, h.client)
 	wall := time.Since(start)
 	cpu := processCPU() - cpuStart
-	close(stopSampler)
-	<-sampled
+	stop()
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
 
@@ -868,9 +876,12 @@ func runPerf(t *testing.T, workload perfWorkload, sessions bool) perfResult {
 	if sessions {
 		require.Positive(t, probe.acks.Load(), "the sessions-on run did not use sessions")
 		if workload.serial {
+			// DTS may combine entity signals into a few batches, so check that
+			// every turn after the first two loads resumed a session, not a
+			// share of turns.
 			turns := probe.acks.Load() + probe.unary.Load()
 			require.LessOrEqual(t, probe.workItems.Load(), int64(2), "a serial workload loaded its instance more than twice")
-			require.GreaterOrEqual(t, probe.resumes.Load()*10, turns*9, "fewer than 90%% of %d turns resumed a session", turns)
+			require.GreaterOrEqual(t, probe.resumes.Load(), turns-2, "only %d of %d turns resumed a session", probe.resumes.Load(), turns)
 		}
 	} else {
 		require.Zero(t, probe.acks.Load(), "the sessions-off run used sessions")
@@ -1137,6 +1148,13 @@ func runStress(t *testing.T, config stressConfig) {
 	var completed atomic.Int64
 	done := make(chan struct{})
 	var background sync.WaitGroup
+	var stopOnce sync.Once
+	stopBackground := func() {
+		stopOnce.Do(func() { close(done) })
+		background.Wait()
+	}
+	// A failed check exits through runtime.Goexit, so stop the restarts then too.
+	defer stopBackground()
 	// waitProgress waits until the given number of instances completed. It
 	// returns false when the run ends first.
 	waitProgress := func(target int64) bool {
@@ -1194,8 +1212,7 @@ func runStress(t *testing.T, config stressConfig) {
 	} else {
 		problems = verifyStressBatch(ctx, h.client, batch, &completed)
 	}
-	close(done)
-	background.Wait()
+	stopBackground()
 	elapsed := time.Since(start)
 
 	t.Logf("finished in %v: worker restarts=%d acks=%d unary=%d replays=%d resumes=%d releases=%d abandons=%d notFound=%d maxOpenStreams=%d",
@@ -1241,9 +1258,10 @@ func runStress(t *testing.T, config stressConfig) {
 		assert.Zero(t, probe.notFound.Load(), "unexpected NotFound errors")
 	}
 	if config.faultRate > 0 && sessionsOn && !config.backendRestart {
-		// About 1 in 50 session streams gets each fault kind, so with 500
-		// turns a missing kind is a real problem, not bad luck.
-		if probe.acks.Load() >= 500 {
+		// Each stream gets each fault kind with a chance of faultRate/5. With
+		// 10 expected faults of each kind, a missing kind is a real problem,
+		// not bad luck (the default rate of 0.1 needs 500 turns).
+		if float64(probe.acks.Load())*config.faultRate/float64(stressFaultKinds-1) >= 10 {
 			for kind := faultCutBeforeSend; kind < stressFaultKinds; kind++ {
 				applied := probe.faults[kind].Load()
 				if kind == faultDelayAfterAck {
