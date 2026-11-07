@@ -33,8 +33,10 @@ var errSessionCleanupFailed = errors.New("extended-session cleanup failed; recon
 // the replay of the full history.
 //
 // A waiting session keeps its concurrency slot, a service credit, and an
-// open stream. Leave sessions off for hosts that scale to zero and behind
-// proxies that close idle streams quickly.
+// open stream, the same as in Durable Functions. With a slow backend or many
+// short orchestrations, waiting sessions can leave fewer slots for new work,
+// so raise [WithMaxConcurrentOrchestrationWorkItems]. Leave sessions off for
+// hosts that scale to zero and behind proxies that close idle streams quickly.
 type ExtendedSessionOptions struct {
 	// IdleTimeout is the longest time a session waits for new messages after
 	// the service accepts a turn. Zero means [DefaultExtendedSessionTimeout].
