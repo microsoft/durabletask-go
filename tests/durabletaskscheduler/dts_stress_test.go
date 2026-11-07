@@ -404,20 +404,29 @@ func restartBackend(t *testing.T) error {
 	if output, err := exec.Command("sh", "-c", command).CombinedOutput(); err != nil {
 		return fmt.Errorf("restart command failed: %w: %s", err, output)
 	}
-	client, err := durabletaskscheduler.NewClient(context.Background(), emulatorOptions(t), stressLogger())
-	if err != nil {
-		return err
-	}
-	defer func() { _ = client.Close() }()
+	// NewClient sends a Hello, so it is part of the readiness check too.
+	var err error
 	for deadline := time.Now().Add(3 * time.Minute); time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, err = client.FetchOrchestrationMetadata(ctx, api.InstanceID("stress-ready-"+uuid.NewString()))
-		cancel()
-		if err == nil || errors.Is(err, api.ErrInstanceNotFound) {
+		if err = backendAnswers(t); err == nil {
 			return nil
 		}
 	}
 	return fmt.Errorf("the backend did not answer after the restart: %w", err)
+}
+
+func backendAnswers(t *testing.T) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := durabletaskscheduler.NewClient(ctx, emulatorOptions(t), stressLogger())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = client.Close() }()
+	_, err = client.FetchOrchestrationMetadata(ctx, api.InstanceID("stress-ready-"+uuid.NewString()))
+	if errors.Is(err, api.ErrInstanceNotFound) {
+		return nil
+	}
+	return err
 }
 
 // stressHarness owns one management client and a worker that can be
@@ -1068,9 +1077,11 @@ func verifyStressBatch(ctx context.Context, client *durabletaskscheduler.Client,
 			if err != nil {
 				if ctx.Err() != nil {
 					status := "unknown"
-					if latest, fetchErr := client.FetchOrchestrationMetadata(context.Background(), batch.ids[i]); fetchErr == nil && latest != nil {
+					lookupCtx, cancelLookup := context.WithTimeout(context.Background(), 10*time.Second)
+					if latest, fetchErr := client.FetchOrchestrationMetadata(lookupCtx, batch.ids[i]); fetchErr == nil && latest != nil {
 						status = latest.RuntimeStatus.String()
 					}
+					cancelLookup()
 					report("%s: not finished (%s): %v", batch.ids[i], status, err)
 					return
 				}

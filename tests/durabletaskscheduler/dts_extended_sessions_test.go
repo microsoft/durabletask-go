@@ -406,6 +406,10 @@ func TestDTSExtendedSessionReleaseRace(t *testing.T) {
 	require.NoError(t, err)
 	_, err = client.WaitForOrchestrationStart(ctx, id)
 	require.NoError(t, err)
+	// The idle timer starts at the acknowledgement, not at RaiseEvent, so wait
+	// for the first idle release instead of relying on the delays below.
+	require.Eventually(t, func() bool { return tracker.releases.Load() >= 1 }, time.Minute, 10*time.Millisecond,
+		"the idle timeout must release the waiting session")
 	for i := 1; i <= 8; i++ {
 		time.Sleep(time.Duration(40*(i%4)) * time.Millisecond)
 		require.NoError(t, client.RaiseEvent(ctx, id, "value", api.WithEventPayload(i)))
@@ -413,7 +417,6 @@ func TestDTSExtendedSessionReleaseRace(t *testing.T) {
 	metadata, err := client.WaitForOrchestrationCompletion(ctx, id)
 	require.NoError(t, err)
 	requireCompletedValue(t, metadata, 36)
-	require.GreaterOrEqual(t, tracker.releases.Load(), int32(1), "the idle timeout must have released a session")
 }
 
 // Scenario 9: entity operations across turns, a failed batch, and deletion.
