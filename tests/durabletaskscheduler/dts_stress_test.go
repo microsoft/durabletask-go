@@ -19,6 +19,8 @@
 //   - DTS_STRESS_FAULT_RATE: the chance of a fault on each session stream in
 //     the chaos test (default 0.1).
 //   - DTS_STRESS_VERBOSE=1: print worker warnings, not only errors.
+//   - DTS_STRESS_TRACE=1: print every work item the worker receives and every
+//     completion, abandon, and release it sends, with the completion token.
 //
 // Use 127.0.0.1 and not localhost. On some machines every localhost
 // connection waits for an IPv6 attempt first.
@@ -220,6 +222,9 @@ func (p *stressProbe) unaryInterceptor() grpc.UnaryClientInterceptor {
 			p.releases.Add(1)
 		}
 		err := invoker(ctx, method, req, reply, cc, opts...)
+		if token, ok := req.(interface{ GetCompletionToken() string }); ok {
+			stressTracef("%s %s: %v", method[strings.LastIndex(method, "/")+1:], token.GetCompletionToken(), err)
+		}
 		p.recordErr(err)
 		return err
 	}
@@ -240,6 +245,9 @@ func (s *probedReadStream) RecvMsg(m any) error {
 	case *protos.HistoryChunk:
 		s.probe.historyBytes.Add(int64(proto.Size(message)))
 	case *protos.WorkItem:
+		if request := message.GetActivityRequest(); request != nil {
+			stressTracef("received activity %s %s", message.GetCompletionToken(), request.GetOrchestrationInstance().GetInstanceId())
+		}
 		switch {
 		case message.GetOrchestratorRequest() != nil:
 			request := message.GetOrchestratorRequest()
@@ -250,6 +258,8 @@ func (s *probedReadStream) RecvMsg(m any) error {
 		default:
 			return nil
 		}
+		stressTracef("received %s %s%s", message.GetCompletionToken(),
+			message.GetOrchestratorRequest().GetInstanceId(), message.GetEntityRequestV2().GetInstanceId())
 		s.probe.workItems.Add(1)
 		s.probe.historyBytes.Add(int64(proto.Size(message)))
 		s.probe.startTurn(message.GetCompletionToken())
@@ -276,6 +286,7 @@ func (s *probedSessionStream) finish() {
 
 // inject breaks the stream on both sides, so the service also sees it end.
 func (s *probedSessionStream) inject() error {
+	stressTracef("session fault %s: %s", s.token, stressFaultNames[s.fault])
 	s.probe.faults[s.fault].Add(1)
 	s.cancel()
 	s.finish()
@@ -293,6 +304,7 @@ func (s *probedSessionStream) SendMsg(m any) error {
 		s.token = request.GetCompletionToken()
 	}
 	s.probe.finishTurn(s.token)
+	stressTracef("session send %s", s.token)
 	return s.ClientStream.SendMsg(m)
 }
 
@@ -317,6 +329,7 @@ func (s *probedSessionStream) RecvMsg(m any) error {
 			s.probe.startTurn(s.token)
 		}
 		s.probe.recordErr(err)
+		stressTracef("session end %s batch=%v: %v", s.token, s.batch, err)
 		s.cancel()
 		s.finish()
 		return err
@@ -336,6 +349,14 @@ func (s *probedSessionStream) RecvMsg(m any) error {
 		s.broken = s.fault == faultCutMidBatch
 	}
 	return nil
+}
+
+var stressTrace = os.Getenv("DTS_STRESS_TRACE") == "1"
+
+func stressTracef(format string, args ...any) {
+	if stressTrace {
+		fmt.Fprintf(os.Stderr, "TRACE %s "+format+"\n", append([]any{time.Now().Format("15:04:05.000000")}, args...)...)
+	}
 }
 
 func envFloat(name string, fallback float64) float64 {
@@ -407,10 +428,7 @@ func newStressHarness(
 	t.Helper()
 	client, err := durabletaskscheduler.NewClient(context.Background(), emulatorOptions(t), stressLogger())
 	require.NoError(t, err)
-	options := append([]durabletaskclient.TaskHubGrpcWorkerOption{
-		durabletaskclient.WithAutoWorkItemFilters(),
-		durabletaskclient.WithWorkerSilentDisconnectTimeout(15 * time.Second),
-	}, workerOptions...)
+	options := append([]durabletaskclient.TaskHubGrpcWorkerOption{durabletaskclient.WithAutoWorkItemFilters()}, workerOptions...)
 	if sessions != nil {
 		options = append(options, durabletaskclient.WithExtendedSessions(*sessions))
 	}
