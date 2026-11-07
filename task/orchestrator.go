@@ -425,6 +425,17 @@ func (ctx *OrchestrationContext) commit(sent []*protos.OrchestratorAction) {
 	}
 }
 
+// releaseProcessedHistory drops the events of a finished turn while the
+// orchestration waits for its next batch. The live coroutines and the event
+// buffers keep everything that later turns need, so a long session does not
+// keep its full history in memory.
+func (ctx *OrchestrationContext) releaseProcessedHistory() {
+	ctx.historyBase = ctx.HistoryLength()
+	ctx.oldEvents = nil
+	ctx.newEvents = nil
+	ctx.historyIndex = 0
+}
+
 // resume runs one more turn on the loaded orchestration. The batch contains
 // only new events, and historyBase is the number of events that the backend
 // has already stored for this execution.

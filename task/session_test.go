@@ -1029,6 +1029,43 @@ func TestSessionHistoryLengthUsesHistoryBase(t *testing.T) {
 	require.Equal(t, []int{2, 100, 101}, lengths)
 }
 
+func TestSessionDropsProcessedHistoryBetweenTurns(t *testing.T) {
+	ctx, session, response := startWaitingSession(t, func(ctx *OrchestrationContext) (any, error) {
+		var value string
+		if err := ctx.WaitForSingleEvent("go", -1).Await(&value); err != nil {
+			return nil, err
+		}
+		return value, ctx.CallActivity("work").Await(nil)
+	})
+	require.Nil(t, ctx.oldEvents)
+	require.Nil(t, ctx.newEvents)
+	require.Equal(t, 2, ctx.historyBase)
+	session.Commit(response.Actions)
+
+	// The event is buffered while suspended, and it must survive the cleanup.
+	batch := []*protos.HistoryEvent{
+		sessionOrchestratorStarted(sessionTestStart.Add(time.Minute)),
+		suspended(),
+		eventRaised("go", `"payload"`),
+	}
+	result, next, err := session.Resume(context.Background(), batch, 2)
+	require.NoError(t, err)
+	require.NotNil(t, next)
+	require.Empty(t, result.Response.Actions)
+	require.Nil(t, ctx.newEvents)
+	require.Len(t, ctx.suspendedEvents, 1)
+	next.Commit(result.Response.Actions)
+
+	result, next, err = next.Resume(context.Background(),
+		[]*protos.HistoryEvent{sessionOrchestratorStarted(sessionTestStart.Add(2 * time.Minute)), resumed()}, 5)
+	require.NoError(t, err)
+	require.NotNil(t, next)
+	require.Len(t, result.Response.Actions, 1)
+	require.Equal(t, "work", result.Response.Actions[0].GetScheduleTask().GetName())
+	require.Nil(t, ctx.newEvents)
+	next.Close()
+}
+
 func TestSessionCloseEmitsNoDurableWork(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	deferredBlocked := 0

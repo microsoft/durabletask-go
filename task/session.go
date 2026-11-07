@@ -86,6 +86,7 @@ func (s *orchestratorSession) finishTurn(
 		s.Close()
 		return results, nil, nil
 	}
+	s.ctx.releaseProcessedHistory()
 	s.state = sessionAwaitingCommit
 	return results, s, nil
 }
