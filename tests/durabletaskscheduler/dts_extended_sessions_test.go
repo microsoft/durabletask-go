@@ -196,6 +196,9 @@ func requireExtendedSessions(t *testing.T) {
 	t.Helper()
 	emulatorOptions(t)
 	sessionProbeOnce.Do(func() {
+		// A probe that stops early, for example on a failed require, must fail
+		// the tests instead of skipping them.
+		sessionProbeErr = errors.New("the extended-session probe did not finish")
 		registry := task.NewTaskRegistry()
 		if err := registry.AddActivityN("SessionProbeActivity", func(task.ActivityContext) (any, error) { return nil, nil }); err != nil {
 			sessionProbeErr = err
@@ -220,6 +223,7 @@ func requireExtendedSessions(t *testing.T) {
 			sessionProbeErr = err
 			return
 		}
+		sessionProbeErr = nil
 		sessionProbeSupported = tracker.acks.Load() > 0
 		if !sessionProbeSupported && tracker.code(codes.Unimplemented) == 0 {
 			sessionProbeErr = fmt.Errorf("the session probe saw neither an acknowledgement nor Unimplemented")
