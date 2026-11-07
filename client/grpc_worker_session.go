@@ -181,6 +181,17 @@ func sessionScopeAfterAck(scope *workerSessionScope, turnCount int32) *workerSes
 	return scope
 }
 
+// generationContext returns a context that also ends when the intake stream
+// of this generation ends.
+func (s *workerSessionScope) generationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	generationCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(s.connection.streamCtx, cancel)
+	return generationCtx, func() {
+		stop()
+		cancel()
+	}
+}
+
 // available reports whether a new session turn may use the streaming RPC.
 func (s *workerSessionScope) available() bool {
 	return s != nil && s.run.sessions != nil &&
@@ -239,24 +250,28 @@ func (w *TaskHubGrpcWorker) awaitSessionBatch(
 		if preAckErr == nil {
 			return outcome, batch
 		}
+		unimplemented := status.Code(preAckErr) == codes.Unimplemented
+		if unimplemented {
+			w.logger.Infof("%s: the service does not support extended sessions; completing without them until the next reconnect", call.instanceID)
+			scope.connection.sessionsUnsupported.Store(true)
+		}
 		switch {
-		case errors.Is(preAckErr, errSessionStreamBudgetFull) && attempt == 1:
+		case (unimplemented || errors.Is(preAckErr, errSessionStreamBudgetFull)) && attempt == 1:
 			return sessionUseUnary, nil
-		case errors.Is(preAckErr, errSessionStreamBudgetFull):
+		case unimplemented || errors.Is(preAckErr, errSessionStreamBudgetFull):
 			// An earlier attempt may have been applied without its
 			// acknowledgement. A unary completion with the same count could
 			// then fail and leave the session open, so abandon instead.
-			w.logger.Warnf("%s: no session stream is free to retry the completion; abandoning the work item", call.instanceID)
+			w.logger.Warnf("%s: cannot retry the completion on a session stream; abandoning the work item: %v", call.instanceID, preAckErr)
 			w.cleanupSessionWorkItem(ctx, scope, call.instanceID, "abandon", call.abandon)
 			return sessionEnded, nil
-		case status.Code(preAckErr) == codes.Unimplemented:
-			w.logger.Infof("%s: the service does not support extended sessions; completing without them until the next reconnect", call.instanceID)
-			scope.connection.sessionsUnsupported.Store(true)
-			return sessionUseUnary, nil
 		case ctx.Err() != nil || scope.connection.streamCtx.Err() != nil:
 			return sessionEnded, nil
 		case isTransientWorkerRPCError(preAckErr) && attempt < w.options.transientRetryMaxAttempts:
-			if w.wait(ctx, w.retryDelay(attempt)) != nil {
+			waitCtx, cancelWait := scope.generationContext(ctx)
+			err := w.wait(waitCtx, w.retryDelay(attempt))
+			cancelWait()
+			if err != nil {
 				return sessionEnded, nil
 			}
 		default:
@@ -428,7 +443,11 @@ func (w *TaskHubGrpcWorker) cleanupSessionWorkItem(
 	operation string,
 	action func(context.Context) error,
 ) {
-	cleanupCtx, cancel := context.WithTimeout(ctx, w.options.sessionCleanupTimeout)
+	// When the intake stream ends, the service takes the work item back, so
+	// cleanup stops too.
+	generationCtx, cancelGeneration := scope.generationContext(ctx)
+	defer cancelGeneration()
+	cleanupCtx, cancel := context.WithTimeout(generationCtx, w.options.sessionCleanupTimeout)
 	defer cancel()
 	for attempt := 1; ; attempt++ {
 		callCtx, cancelCall := context.WithTimeout(cleanupCtx, w.options.rpcTimeout)
@@ -440,6 +459,9 @@ func (w *TaskHubGrpcWorker) cleanupSessionWorkItem(
 		if isTransientWorkerRPCError(err) && cleanupCtx.Err() == nil &&
 			w.wait(cleanupCtx, w.retryDelay(attempt)) == nil && cleanupCtx.Err() == nil {
 			continue
+		}
+		if ctx.Err() != nil || scope.connection.streamCtx.Err() != nil {
+			return
 		}
 		w.logger.Errorf("%s: failed to %s the session work item; reconnecting the work item stream: %v", instanceID, operation, err)
 		scope.connection.abortForSessionCleanup()

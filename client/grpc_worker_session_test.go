@@ -1176,3 +1176,83 @@ func TestWorkerEntitySessionCachesStateBeforeExternalization(t *testing.T) {
 	require.Len(t, requests, 2)
 	require.Equal(t, `"x"`, requests[1].EntityState.GetValue())
 }
+
+func TestWorkerSessionUnimplementedAfterUncertainAttemptAbandons(t *testing.T) {
+	h := newSessionHarness(t, 2)
+	var opens atomic.Int32
+	h.client.openErr = func() error {
+		if opens.Add(1) == 2 {
+			return status.Error(codes.Unimplemented, "switched off")
+		}
+		return nil
+	}
+	h.dispatch("uncertain")
+	h.client.nextCall(t).stream.end(status.Error(codes.Unavailable, "lost"))
+	require.Eventually(t, func() bool { return h.client.abandons() == 1 }, 5*time.Second, time.Millisecond)
+	require.Empty(t, h.client.unaryOrchestrations(), "a unary completion after an uncertain attempt can leave the session open")
+
+	// Sessions stay off on this intake generation.
+	h.dispatch("next")
+	require.Len(t, h.waitUnary(t, 1), 1)
+	h.client.noCall(t)
+}
+
+// detachedSessionScope returns a session scope whose intake stream the test
+// ends by calling the returned function.
+func detachedSessionScope() (*workerSessionScope, context.CancelFunc) {
+	streamCtx, endStream := context.WithCancel(context.Background())
+	connection := &grpcWorkerConnection{streamCtx: streamCtx, cancelStream: endStream}
+	run := &grpcWorkerRun{intakeCtx: context.Background()}
+	return &workerSessionScope{run: run, connection: connection}, endStream
+}
+
+func TestWorkerSessionRetryWaitStopsWhenIntakeEnds(t *testing.T) {
+	worker := newSessionHarness(t, 1, WithWorkerTransientRetryPolicy(3, time.Hour, time.Hour)).worker
+	scope, endStream := detachedSessionScope()
+	opened := make(chan struct{}, 3)
+	outcome := make(chan sessionOutcome, 1)
+	go func() {
+		result, _ := worker.awaitSessionBatch(context.Background(), scope, sessionCall{
+			instanceID: "retry-wait",
+			open: func(context.Context) (grpc.ServerStreamingClient[protos.CompleteTaskWithExtendedSessionResponse], error) {
+				opened <- struct{}{}
+				return nil, status.Error(codes.Unavailable, "down")
+			},
+			abandon: func(context.Context) error { return nil },
+		})
+		outcome <- result
+	}()
+	<-opened
+	endStream()
+	select {
+	case result := <-outcome:
+		require.Equal(t, sessionEnded, result)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the retry wait did not stop when the intake stream ended")
+	}
+	require.Len(t, opened, 0, "no attempt may run after the intake stream ended")
+}
+
+func TestWorkerSessionCleanupStopsWhenIntakeEnds(t *testing.T) {
+	worker := newSessionHarness(t, 1, WithWorkerTransientRetryPolicy(3, time.Hour, time.Hour)).worker
+	worker.options.sessionCleanupTimeout = time.Hour
+	scope, endStream := detachedSessionScope()
+	attempts := make(chan struct{}, 3)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.cleanupSessionWorkItem(context.Background(), scope, "cleanup", "release", func(context.Context) error {
+			attempts <- struct{}{}
+			return status.Error(codes.Unavailable, "down")
+		})
+	}()
+	<-attempts
+	endStream()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup did not stop when the intake stream ended")
+	}
+	require.Len(t, attempts, 0)
+	require.False(t, scope.connection.sessionCleanupFailed.Load(), "an ended generation needs no extra reconnect")
+}
