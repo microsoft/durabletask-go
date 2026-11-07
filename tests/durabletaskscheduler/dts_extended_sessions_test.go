@@ -130,7 +130,7 @@ func (s *trackedSessionStream) fail(message string) error {
 
 func (s *trackedSessionStream) RecvMsg(m any) error {
 	if s.broken {
-		return s.fail("injected: session stream broke while idle")
+		return s.fail("injected: session stream broke")
 	}
 	err := s.ClientStream.RecvMsg(m)
 	if err != nil {
@@ -151,8 +151,9 @@ func (s *trackedSessionStream) RecvMsg(m any) error {
 		}
 		s.broken = s.tracker.breakWhenIdle.CompareAndSwap(true, false)
 	case response.GetNewMessages() != nil:
+		// Deliver the first chunk, then break the stream before the batch ends.
 		if s.tracker.cutBatch.CompareAndSwap(true, false) {
-			return s.fail("injected: batch cut off after the first chunk")
+			s.broken = true
 		}
 	}
 	return nil
@@ -344,7 +345,7 @@ func TestDTSExtendedSessionRecovery(t *testing.T) {
 			},
 		},
 		{
-			name:   "batch cut off",
+			name:   "batch cut off after the first chunk",
 			inject: func(tr *sessionTracker) { tr.cutBatch.Store(true) },
 			check: func(t *testing.T, tr *sessionTracker) {
 				require.False(t, tr.cutBatch.Load(), "the fault was not injected")
