@@ -18,6 +18,16 @@ import (
 
 const maxWorkerCompletionConnections = 8
 
+// workerSessionStreamsPerConnection is the extended-session stream budget of
+// one completion connection: half of the 100 HTTP/2 streams per connection
+// that DTS documents, so other completions always have room.
+const workerSessionStreamsPerConnection = 50
+
+// errSessionStreamBudgetFull means that no completion connection can open
+// another extended-session stream. Nothing was sent, so the caller completes
+// the work item with the unary RPC instead.
+var errSessionStreamBudgetFull = errors.New("worker extended-session stream budget is full")
+
 func validateWorkerCompletionBudget(n int) error {
 	if n < 1 || n > maxWorkerCompletionConnections {
 		return fmt.Errorf("worker completion connections must be between 1 and %d", maxWorkerCompletionConnections)
@@ -67,7 +77,10 @@ type workerCompletionTransport struct {
 	closers     []io.Closer
 	next        atomic.Uint64
 	closeOnce   sync.Once
-	closeErr    error
+
+	sessionMu      sync.Mutex
+	sessionStreams []int
+	closeErr       error
 }
 
 func newWorkerCompletionTransport(
@@ -158,7 +171,9 @@ func isWorkerCompletionMethod(method string) bool {
 		protos.TaskHubSidecarService_CompleteEntityTask_FullMethodName,
 		protos.TaskHubSidecarService_AbandonTaskActivityWorkItem_FullMethodName,
 		protos.TaskHubSidecarService_AbandonTaskOrchestratorWorkItem_FullMethodName,
-		protos.TaskHubSidecarService_AbandonTaskEntityWorkItem_FullMethodName:
+		protos.TaskHubSidecarService_AbandonTaskEntityWorkItem_FullMethodName,
+		protos.TaskHubSidecarService_ReleaseTaskOrchestratorWorkItem_FullMethodName,
+		protos.TaskHubSidecarService_ReleaseTaskEntityWorkItem_FullMethodName:
 		return true
 	default:
 		return false
@@ -171,7 +186,71 @@ func (c *workerCompletionTransport) NewStream(
 	method string,
 	opts ...grpc.CallOption,
 ) (grpc.ClientStream, error) {
-	return c.intake.NewStream(ctx, desc, method, opts...)
+	if !isWorkerSessionStreamMethod(method) {
+		return c.intake.NewStream(ctx, desc, method, opts...)
+	}
+	index, ok := c.reserveSessionStream()
+	if !ok {
+		return nil, errSessionStreamBudgetFull
+	}
+	stream, err := c.completions[index].NewStream(ctx, desc, method, opts...)
+	if err != nil {
+		c.releaseSessionStream(index)
+		return nil, err
+	}
+	budgeted := &budgetedClientStream{ClientStream: stream}
+	var once sync.Once
+	budgeted.release = func() { once.Do(func() { c.releaseSessionStream(index) }) }
+	// Callers cancel the stream context when they finish with the stream.
+	context.AfterFunc(ctx, budgeted.release)
+	return budgeted, nil
+}
+
+func isWorkerSessionStreamMethod(method string) bool {
+	return method == protos.TaskHubSidecarService_CompleteOrchestratorTaskWithExtendedSession_FullMethodName ||
+		method == protos.TaskHubSidecarService_CompleteEntityTaskWithExtendedSession_FullMethodName
+}
+
+// reserveSessionStream picks the least-loaded completion connection that
+// still has session stream budget.
+func (c *workerCompletionTransport) reserveSessionStream() (int, bool) {
+	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
+	if c.sessionStreams == nil {
+		c.sessionStreams = make([]int, len(c.completions))
+	}
+	best := -1
+	for i, streams := range c.sessionStreams {
+		if streams < workerSessionStreamsPerConnection && (best < 0 || streams < c.sessionStreams[best]) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return 0, false
+	}
+	c.sessionStreams[best]++
+	return best, true
+}
+
+func (c *workerCompletionTransport) releaseSessionStream(index int) {
+	c.sessionMu.Lock()
+	c.sessionStreams[index]--
+	c.sessionMu.Unlock()
+}
+
+// budgetedClientStream returns its session stream budget when the stream
+// ends with any status or when its context ends.
+type budgetedClientStream struct {
+	grpc.ClientStream
+	release func()
+}
+
+func (s *budgetedClientStream) RecvMsg(m any) error {
+	err := s.ClientStream.RecvMsg(m)
+	if err != nil {
+		s.release()
+	}
+	return err
 }
 
 func (c *workerCompletionTransport) Close() error {

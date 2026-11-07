@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -118,6 +119,10 @@ type taskHubGrpcWorkerOptions struct {
 	unversionedOrchestrators        map[string]struct{}
 	unversionedActivities           map[string]struct{}
 	reconnectRandom                 randomInt64N
+	extendedSessions                *ExtendedSessionOptions
+	sessionCleanupTimeout           time.Duration
+	// sessionTimerFn replaces the session timers in tests.
+	sessionTimerFn func(sessionTimerKind, time.Duration) <-chan time.Time
 	// waitFn overrides every delay the worker imposes on itself: reconnect
 	// backoff, transient RPC retry backoff, and work-item abandon delays. It is
 	// only set by tests so the deterministic delay schedule can be observed
@@ -144,6 +149,7 @@ func defaultTaskHubGrpcWorkerOptions() taskHubGrpcWorkerOptions {
 		maxStreamedHistoryBytes:        DefaultMaxStreamedHistoryBytes,
 		maxOrchestratorCompletionBytes: DefaultMaxOrchestratorCompletionBytes,
 		reconnectRandom:                rand.Int64N,
+		sessionCleanupTimeout:          defaultSessionCleanupTimeout,
 		capabilities:                   []WorkerCapability{WorkerCapabilityHistoryStreaming},
 	}
 }
@@ -537,6 +543,7 @@ type grpcWorkerRun struct {
 	orchestrationSlots chan struct{}
 	activitySlots      chan struct{}
 	entitySlots        chan struct{}
+	sessions           *sessionManager
 	pending            sync.WaitGroup
 	retired            sync.WaitGroup
 	err                error
@@ -547,6 +554,11 @@ type grpcWorkerConnection struct {
 	stream       workItemsStream
 	cancelStream context.CancelFunc
 	closer       io.Closer
+	// streamCtx ends with this intake generation. Sessions dispatched by the
+	// generation end with it.
+	streamCtx            context.Context
+	sessionsUnsupported  atomic.Bool
+	sessionCleanupFailed atomic.Bool
 
 	pendingMu        sync.Mutex
 	pendingChanged   *sync.Cond
@@ -588,6 +600,14 @@ func (c *grpcWorkerConnection) waitForWorkItems() {
 	c.pendingMu.Lock()
 	defer c.pendingMu.Unlock()
 	c.waitForWorkItemsLocked()
+}
+
+// abortForSessionCleanup ends the intake stream after a session work item
+// could not be released or abandoned. The service then abandons every work
+// item of this generation, and the worker reconnects.
+func (c *grpcWorkerConnection) abortForSessionCleanup() {
+	c.sessionCleanupFailed.Store(true)
+	c.cancelStream()
 }
 
 func (c *grpcWorkerConnection) stopIntake() {
@@ -706,6 +726,9 @@ func newTaskHubGrpcWorker(
 		if err := configure(&options); err != nil {
 			return nil, err
 		}
+	}
+	if err := options.resolveExtendedSessionLimits(); err != nil {
+		return nil, err
 	}
 	hasLargePayloadCapability := slices.Contains(options.capabilities, WorkerCapabilityLargePayloads)
 	if hasLargePayloadCapability && options.largePayloads == nil {
@@ -1067,6 +1090,9 @@ func (w *TaskHubGrpcWorker) begin(ctx context.Context) (*grpcWorkerRun, *grpcWor
 		activitySlots: make(chan struct{}, w.options.maxConcurrentActivities),
 		entitySlots:   make(chan struct{}, w.options.maxConcurrentEntities),
 	}
+	if w.options.extendedSessions != nil {
+		run.sessions = newSessionManager(w.options.extendedSessions)
+	}
 	w.run = run
 	w.lastErr = nil
 	w.mu.Unlock()
@@ -1236,6 +1262,7 @@ func (w *TaskHubGrpcWorker) connect(ctx context.Context) (*grpcWorkerConnection,
 		stream:       stream,
 		cancelStream: cancelStream,
 		closer:       closer,
+		streamCtx:    streamCtx,
 	}, nil
 }
 
@@ -1415,7 +1442,7 @@ func isTransientWorkerError(err error) bool {
 	if errors.Is(err, ErrStreamedHistoryLimitExceeded) {
 		return false
 	}
-	if errors.Is(err, io.EOF) || errors.Is(err, errSilentDisconnect) {
+	if errors.Is(err, io.EOF) || errors.Is(err, errSilentDisconnect) || errors.Is(err, errSessionCleanupFailed) {
 		return true
 	}
 	grpcStatus, ok := status.FromError(err)
