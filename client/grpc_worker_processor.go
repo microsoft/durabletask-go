@@ -17,6 +17,7 @@ import (
 	"github.com/microsoft/durabletask-go/internal/largepayload"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -73,7 +74,8 @@ func (w *TaskHubGrpcWorker) consumeConnection(run *grpcWorkerRun, connection *gr
 			}
 		case *protos.WorkItem_EntityRequestV2:
 			if err := w.dispatchEntity(run, connection, workItem.GetCompletionToken(), func(ctx context.Context) {
-				w.processEntityV2(ctx, connection.client, workItem.GetCompletionToken(), request.EntityRequestV2)
+				scope := &workerSessionScope{run: run, connection: connection}
+				w.processEntityWorkItem(ctx, connection.client, scope, workItem.GetCompletionToken(), request.EntityRequestV2)
 			}); err != nil {
 				return observedMessage, err
 			}
@@ -94,6 +96,9 @@ func (w *TaskHubGrpcWorker) receiveWorkItem(run *grpcWorkerRun, connection *grpc
 	}
 	workItem, err := recvBeforeSilenceTimeout(connection.stream.Recv, cancelOnSilence, w.options.silentDisconnectTimeout)
 	if err != nil {
+		if connection.sessionCleanupFailed.Load() {
+			return nil, errSessionCleanupFailed
+		}
 		return nil, err
 	}
 	if workItem == nil {
@@ -156,7 +161,9 @@ func (w *TaskHubGrpcWorker) dispatchOrchestration(
 ) error {
 	return w.dispatch(run, connection, run.orchestrationSlots,
 		func(ctx context.Context) { w.abandonOrchestration(ctx, connection.client, completionToken) },
-		func(ctx context.Context) { w.processOrchestration(ctx, connection.client, completionToken, request) },
+		func(ctx context.Context) {
+			w.processOrchestrationWorkItem(ctx, connection.client, &workerSessionScope{run: run, connection: connection}, completionToken, request)
+		},
 	)
 }
 
@@ -228,6 +235,18 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 	completionToken string,
 	request *protos.OrchestratorRequest,
 ) {
+	w.processOrchestrationWorkItem(ctx, client, nil, completionToken, request)
+}
+
+// processOrchestrationWorkItem runs an orchestration work item. When scope
+// allows extended sessions, the orchestration can stay loaded for later turns.
+func (w *TaskHubGrpcWorker) processOrchestrationWorkItem(
+	ctx context.Context,
+	client protos.TaskHubSidecarServiceClient,
+	scope *workerSessionScope,
+	completionToken string,
+	request *protos.OrchestratorRequest,
+) {
 	pastEvents := request.PastEvents
 	if request.RequiresHistoryStreaming {
 		history, err := w.streamHistory(ctx, client, request)
@@ -260,13 +279,29 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 		}
 	}
 
-	results, err := w.executor.ExecuteOrchestrator(
-		ctx,
-		api.InstanceID(request.InstanceId),
-		pastEvents,
-		request.NewEvents,
-		request.EntityParameters,
+	var (
+		results *task.ExecutionResults
+		session task.OrchestratorSession
+		err     error
 	)
+	sessionExecutor, canSession := w.executor.(task.SessionExecutor)
+	if canSession && scope.available() {
+		results, session, err = sessionExecutor.StartOrchestratorSession(
+			ctx,
+			api.InstanceID(request.InstanceId),
+			pastEvents,
+			request.NewEvents,
+			request.EntityParameters,
+		)
+	} else {
+		results, err = w.executor.ExecuteOrchestrator(
+			ctx,
+			api.InstanceID(request.InstanceId),
+			pastEvents,
+			request.NewEvents,
+			request.EntityParameters,
+		)
+	}
 	var delayed workItemAbandonDelayError
 	if errors.As(err, &delayed) {
 		w.logger.Warnf("%s: orchestration work item rejected; abandoning it: %v", request.InstanceId, err)
@@ -280,14 +315,52 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 		return
 	}
 
+	turn := orchestrationTurn{
+		instanceID:   request.InstanceId,
+		token:        completionToken,
+		traceContext: request.OrchestrationTraceContext,
+		parentTrace:  executionStartedTraceContext(pastEvents, request.NewEvents),
+	}
+	response, ok := w.orchestratorResponse(ctx, client, turn, results, err)
+	if !ok {
+		if session != nil {
+			session.Close()
+		}
+		return
+	}
+	if session != nil {
+		w.runOrchestrationSession(ctx, client, scope, turn, session, response, historySize(pastEvents, request.NewEvents))
+		return
+	}
+	w.completeOrchestration(ctx, client, turn, response, 0)
+}
+
+// orchestrationTurn holds what every turn of one orchestration work item
+// needs to build and send its response.
+type orchestrationTurn struct {
+	instanceID   string
+	token        string
+	traceContext *protos.OrchestrationTraceContext
+	parentTrace  *protos.TraceContext
+}
+
+// orchestratorResponse builds the response for one turn. It returns false
+// after it abandoned the work item.
+func (w *TaskHubGrpcWorker) orchestratorResponse(
+	ctx context.Context,
+	client protos.TaskHubSidecarServiceClient,
+	turn orchestrationTurn,
+	results *task.ExecutionResults,
+	err error,
+) (*protos.OrchestratorResponse, bool) {
 	response := &protos.OrchestratorResponse{
-		InstanceId:                request.InstanceId,
-		CompletionToken:           completionToken,
-		OrchestrationTraceContext: request.OrchestrationTraceContext,
+		InstanceId:                turn.instanceID,
+		CompletionToken:           turn.token,
+		OrchestrationTraceContext: turn.traceContext,
 	}
 	switch {
 	case err != nil:
-		w.logger.Errorf("%s: orchestration execution failed: %v", request.InstanceId, err)
+		w.logger.Errorf("%s: orchestration execution failed: %v", turn.instanceID, err)
 		response.Actions = []*protos.OrchestratorAction{helpers.NewCompleteOrchestrationAction(
 			-1,
 			protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,
@@ -308,38 +381,149 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 		)}
 	default:
 		response = results.Response
-		response.InstanceId = request.InstanceId
-		response.CompletionToken = completionToken
+		response.InstanceId = turn.instanceID
+		response.CompletionToken = turn.token
 		if response.OrchestrationTraceContext == nil {
-			response.OrchestrationTraceContext = request.OrchestrationTraceContext
+			response.OrchestrationTraceContext = turn.traceContext
 		}
-		if err := populateOrchestratorActionTraceContexts(
-			response.Actions,
-			pastEvents,
-			request.NewEvents,
-		); err != nil {
-			w.logger.Warnf("%s: failed to populate action trace contexts: %v", request.InstanceId, err)
+		if err := populateActionTraceContexts(response.Actions, turn.parentTrace); err != nil {
+			w.logger.Warnf("%s: failed to populate action trace contexts: %v", turn.instanceID, err)
 		}
 	}
 	if err := largepayload.TransformOrchestratorResponse(ctx, w.options.largePayloads, response); err != nil {
-		w.logger.Errorf("%s: failed to externalize orchestration response payloads: %v", request.InstanceId, err)
-		w.abandonOrchestration(ctx, client, completionToken)
-		return
+		w.logger.Errorf("%s: failed to externalize orchestration response payloads: %v", turn.instanceID, err)
+		w.abandonOrchestration(ctx, client, turn.token)
+		return nil, false
 	}
+	return failOversizedOrchestratorResponse(response, w.options.maxOrchestratorCompletionBytes), true
+}
 
-	response = failOversizedOrchestratorResponse(response, w.options.maxOrchestratorCompletionBytes)
-	err = w.executeRPCWithRetry(ctx, "complete orchestration task", func(callCtx context.Context) error {
+// completeOrchestration sends a turn with the unary RPC. The count and token
+// are set right before sending, because earlier steps may rebuild the
+// response.
+func (w *TaskHubGrpcWorker) completeOrchestration(
+	ctx context.Context,
+	client protos.TaskHubSidecarServiceClient,
+	turn orchestrationTurn,
+	response *protos.OrchestratorResponse,
+	completionCount int32,
+) {
+	response.CompletionToken = turn.token
+	response.CompletionCount = completionCount
+	err := w.executeRPCWithRetry(ctx, "complete orchestration task", func(callCtx context.Context) error {
 		_, callErr := client.CompleteOrchestratorTask(callCtx, response)
 		return callErr
 	})
 	if err != nil {
 		if isWorkItemGone(err) {
-			w.logger.Warnf("%s: orchestration work item was no longer available before completion", request.InstanceId)
+			w.logger.Warnf("%s: orchestration work item was no longer available before completion", turn.instanceID)
 			return
 		}
-		w.logger.Errorf("%s: failed to complete orchestration work item: %v", request.InstanceId, err)
-		w.abandonOrchestration(ctx, client, completionToken)
+		w.logger.Errorf("%s: failed to complete orchestration work item: %v", turn.instanceID, err)
+		w.abandonOrchestration(ctx, client, turn.token)
 	}
+}
+
+// runOrchestrationSession keeps an orchestration loaded while the service
+// sends new batches. This goroutine owns the session: it sends each turn,
+// waits for the next batch, and is the only caller of release and abandon.
+func (w *TaskHubGrpcWorker) runOrchestrationSession(
+	ctx context.Context,
+	client protos.TaskHubSidecarServiceClient,
+	scope *workerSessionScope,
+	turn orchestrationTurn,
+	session task.OrchestratorSession,
+	response *protos.OrchestratorResponse,
+	sessionBytes int64,
+) {
+	lease := scope.run.sessions.acquire(orchestrationSessionKind)
+	defer lease.release()
+	var turnCount int32
+	for {
+		if session != nil && (lease == nil || !scope.available() || !canContinueOrchestrationSession(response)) {
+			session.Close()
+			session = nil
+		}
+		if session == nil {
+			w.completeOrchestration(ctx, client, turn, response, turnCount)
+			return
+		}
+		var historyBase int32
+		outcome, batch := w.awaitSessionBatch(ctx, scope, lease, sessionCall{
+			instanceID: turn.instanceID,
+			open: func(callCtx context.Context) (grpc.ServerStreamingClient[protos.CompleteTaskWithExtendedSessionResponse], error) {
+				response.CompletionToken = turn.token
+				response.CompletionCount = turnCount
+				return client.CompleteOrchestratorTaskWithExtendedSession(callCtx, response)
+			},
+			onAck: func(ack *protos.ExtendedSessionAck) int64 {
+				session.Commit(response.Actions)
+				historyBase = ack.GetHistoryEventCount()
+				turnCount++
+				return sessionBytes
+			},
+			release: releaseOrchestrationOnce(client, turn.token),
+			abandon: abandonOrchestrationOnce(client, turn.token),
+		})
+		switch outcome {
+		case sessionUseUnary:
+			session.Close()
+			session = nil
+			continue
+		case sessionEnded:
+			session.Close()
+			return
+		}
+
+		payloadRequest := &protos.OrchestratorRequest{NewEvents: batch}
+		if err := largepayload.TransformOrchestratorRequest(ctx, w.options.largePayloads, payloadRequest); err != nil {
+			w.logger.Errorf("%s: failed to hydrate session batch payloads: %v", turn.instanceID, err)
+			session.Close()
+			w.cleanupSessionWorkItem(ctx, scope, turn.instanceID, "release", releaseOrchestrationOnce(client, turn.token))
+			return
+		}
+		sessionBytes += historySize(nil, batch)
+		results, next, err := session.Resume(ctx, batch, int(historyBase))
+		if err != nil {
+			w.logger.Errorf("%s: failed to run session batch: %v", turn.instanceID, err)
+			session.Close()
+			w.cleanupSessionWorkItem(ctx, scope, turn.instanceID, "release", releaseOrchestrationOnce(client, turn.token))
+			return
+		}
+		session = next
+		var ok bool
+		if response, ok = w.orchestratorResponse(ctx, client, turn, results, nil); !ok {
+			if session != nil {
+				session.Close()
+			}
+			return
+		}
+	}
+}
+
+// canContinueOrchestrationSession reports whether a response may keep the
+// session. A worker-built failure, for example for an oversized response,
+// ends it.
+func canContinueOrchestrationSession(response *protos.OrchestratorResponse) bool {
+	if response.NumEventsProcessed != nil {
+		return false
+	}
+	for _, action := range response.Actions {
+		if action.GetCompleteOrchestration() != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func historySize(eventLists ...[]*protos.HistoryEvent) int64 {
+	var size int64
+	for _, events := range eventLists {
+		for _, event := range events {
+			size += int64(proto.Size(event))
+		}
+	}
+	return size
 }
 
 // failOversizedOrchestratorResponse converts a response that modern DTS cannot
@@ -394,7 +578,10 @@ func populateOrchestratorActionTraceContexts(
 	pastEvents []*protos.HistoryEvent,
 	newEvents []*protos.HistoryEvent,
 ) error {
-	parent := executionStartedTraceContext(pastEvents, newEvents)
+	return populateActionTraceContexts(actions, executionStartedTraceContext(pastEvents, newEvents))
+}
+
+func populateActionTraceContexts(actions []*protos.OrchestratorAction, parent *protos.TraceContext) error {
 	if parent == nil {
 		return nil
 	}
@@ -605,44 +792,74 @@ func (w *TaskHubGrpcWorker) processEntityV2(
 	completionToken string,
 	request *protos.EntityRequest,
 ) {
+	w.processEntityWorkItem(ctx, client, nil, completionToken, request)
+}
+
+// processEntityWorkItem runs a V2 entity work item. When scope allows
+// extended sessions, the entity state stays cached for later batches.
+func (w *TaskHubGrpcWorker) processEntityWorkItem(
+	ctx context.Context,
+	client protos.TaskHubSidecarServiceClient,
+	scope *workerSessionScope,
+	completionToken string,
+	request *protos.EntityRequest,
+) {
+	result, ok := w.entityBatchResult(ctx, client, completionToken, request)
+	if !ok {
+		return
+	}
+	if result.FailureDetails == nil && scope.available() {
+		w.runEntitySession(ctx, client, scope, request.GetInstanceId(), completionToken, result)
+		return
+	}
+	w.completeEntityBatchResult(ctx, client, request.GetInstanceId(), result)
+}
+
+// entityBatchResult runs one entity batch and returns the result to send.
+// It returns false after it abandoned the work item.
+func (w *TaskHubGrpcWorker) entityBatchResult(
+	ctx context.Context,
+	client protos.TaskHubSidecarServiceClient,
+	completionToken string,
+	request *protos.EntityRequest,
+) (*protos.EntityBatchResult, bool) {
 	batch, operationInfos, err := entityBatchFromRequestV2(request)
 	if err != nil {
 		w.logger.Errorf("invalid V2 entity work item: %v", err)
 		w.abandonEntity(ctx, client, completionToken)
-		return
+		return nil, false
 	}
 	entityID, parseErr := api.EntityIDFromString(batch.GetInstanceId())
 	if parseErr != nil {
 		w.logger.Errorf("%s: invalid entity instance ID: %v", batch.GetInstanceId(), parseErr)
 		w.abandonEntity(ctx, client, completionToken)
-		return
+		return nil, false
 	}
 	if !matchesEntityWorkItemFilters(w.options.workItemFilters, entityID.Name) {
 		w.logger.Warnf("%s: entity work item does not match configured filters; abandoning it", request.GetInstanceId())
 		w.abandonEntity(ctx, client, completionToken)
-		return
+		return nil, false
 	}
 	if err := largepayload.TransformEntityBatchRequest(ctx, w.options.largePayloads, batch); err != nil {
 		w.logger.Errorf("%s: failed to hydrate entity batch payloads: %v", request.GetInstanceId(), err)
 		if entityProcessingCanceled(ctx, err) {
 			w.abandonEntity(ctx, client, completionToken)
-			return
+			return nil, false
 		}
-		w.completeEntityBatchFailure(ctx, client, request.GetInstanceId(), completionToken, err)
-		return
+		return newEntityBatchFailure(completionToken, err), true
 	}
 	executor, ok := w.executor.(task.EntityExecutor)
 	if !ok {
 		w.logger.Error("task executor does not support entity work items")
 		w.abandonEntity(ctx, client, completionToken)
-		return
+		return nil, false
 	}
 	result, err := executeEntitySafely(ctx, executor, batch)
 	if err != nil {
 		if entityProcessingCanceled(ctx, err) {
 			w.logger.Warnf("%s: entity execution canceled; abandoning work item", request.GetInstanceId())
 			w.abandonEntity(ctx, client, completionToken)
-			return
+			return nil, false
 		}
 		w.logger.Errorf("%s: entity execution failed: %v", request.GetInstanceId(), err)
 		result = newEntityBatchFailure(completionToken, err)
@@ -660,13 +877,81 @@ func (w *TaskHubGrpcWorker) processEntityV2(
 		w.logger.Errorf("%s: failed to externalize entity batch payloads: %v", request.GetInstanceId(), err)
 		if entityProcessingCanceled(ctx, err) {
 			w.abandonEntity(ctx, client, completionToken)
+			return nil, false
+		}
+		return newEntityBatchFailure(completionToken, err), true
+	}
+	return result, true
+}
+
+// runEntitySession keeps an entity's state cached while the service sends new
+// operation batches. Each batch runs with the state of the last accepted
+// result. A failed batch ends the session with the unary RPC, and the service
+// then abandons the work item.
+func (w *TaskHubGrpcWorker) runEntitySession(
+	ctx context.Context,
+	client protos.TaskHubSidecarServiceClient,
+	scope *workerSessionScope,
+	instanceID string,
+	completionToken string,
+	result *protos.EntityBatchResult,
+) {
+	lease := scope.run.sessions.acquire(entitySessionKind)
+	defer lease.release()
+	streaming := lease != nil
+	var (
+		turnCount int32
+		state     *wrapperspb.StringValue
+	)
+	for {
+		if !streaming || !scope.available() || result.FailureDetails != nil {
+			w.completeEntityBatchResultWithCount(ctx, client, instanceID, result, turnCount)
 			return
 		}
-		w.completeEntityBatchFailure(ctx, client, request.GetInstanceId(), completionToken, err)
-		return
+		outcome, batch := w.awaitSessionBatch(ctx, scope, lease, sessionCall{
+			instanceID: instanceID,
+			open: func(callCtx context.Context) (grpc.ServerStreamingClient[protos.CompleteTaskWithExtendedSessionResponse], error) {
+				result.CompletionToken = completionToken
+				result.CompletionCount = turnCount
+				return client.CompleteEntityTaskWithExtendedSession(callCtx, result)
+			},
+			onAck: func(*protos.ExtendedSessionAck) int64 {
+				state = result.EntityState
+				turnCount++
+				return int64(len(state.GetValue()))
+			},
+			release: releaseEntityOnce(client, completionToken),
+			abandon: abandonEntityOnce(client, completionToken),
+		})
+		switch outcome {
+		case sessionUseUnary:
+			streaming = false
+			continue
+		case sessionEnded:
+			return
+		}
+		var ok bool
+		result, ok = w.entityBatchResult(ctx, client, completionToken, &protos.EntityRequest{
+			InstanceId:        instanceID,
+			EntityState:       state,
+			OperationRequests: entityOperationEvents(batch),
+		})
+		if !ok {
+			return
+		}
 	}
+}
 
-	w.completeEntityBatchResult(ctx, client, request.GetInstanceId(), result)
+// entityOperationEvents drops the control events that may start a session
+// batch. Entity batches contain only operation requests.
+func entityOperationEvents(batch []*protos.HistoryEvent) []*protos.HistoryEvent {
+	operations := make([]*protos.HistoryEvent, 0, len(batch))
+	for _, event := range batch {
+		if event.GetOrchestratorStarted() == nil {
+			operations = append(operations, event)
+		}
+	}
+	return operations
 }
 
 func executeEntitySafely(
@@ -703,16 +988,6 @@ func newEntityBatchFailure(completionToken string, err error) *protos.EntityBatc
 		CompletionToken: completionToken,
 		FailureDetails:  failure.FromError(err),
 	}
-}
-
-func (w *TaskHubGrpcWorker) completeEntityBatchFailure(
-	ctx context.Context,
-	client protos.TaskHubSidecarServiceClient,
-	instanceID string,
-	completionToken string,
-	err error,
-) {
-	w.completeEntityBatchResult(ctx, client, instanceID, newEntityBatchFailure(completionToken, err))
 }
 
 func validateEntityBatchResult(
@@ -756,6 +1031,20 @@ func (w *TaskHubGrpcWorker) completeEntityBatchResult(
 	instanceID string,
 	result *protos.EntityBatchResult,
 ) {
+	w.completeEntityBatchResultWithCount(ctx, client, instanceID, result, 0)
+}
+
+// completeEntityBatchResultWithCount sends an entity result with the unary
+// RPC. The count is set right before sending, because a failure result is a
+// new message.
+func (w *TaskHubGrpcWorker) completeEntityBatchResultWithCount(
+	ctx context.Context,
+	client protos.TaskHubSidecarServiceClient,
+	instanceID string,
+	result *protos.EntityBatchResult,
+	completionCount int32,
+) {
+	result.CompletionCount = completionCount
 	err := w.executeRPCWithRetry(ctx, "complete entity task", func(callCtx context.Context) error {
 		_, callErr := client.CompleteEntityTask(callCtx, result)
 		return callErr
