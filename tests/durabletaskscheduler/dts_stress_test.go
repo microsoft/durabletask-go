@@ -99,6 +99,9 @@ type stressProbe struct {
 	open         atomic.Int64
 	maxOpen      atomic.Int64
 	faults       [stressFaultKinds]atomic.Int64
+	// delayHolds counts held messages, including holds that a worker
+	// restart ended before the idle timeout.
+	delayHolds atomic.Int64
 
 	mu        sync.Mutex
 	rng       *rand.Rand
@@ -278,6 +281,7 @@ type probedSessionStream struct {
 	batch  bool
 	broken bool
 	delay  bool
+	ackAt  time.Time
 }
 
 func (s *probedSessionStream) finish() {
@@ -314,17 +318,18 @@ func (s *probedSessionStream) RecvMsg(m any) error {
 	}
 	if s.delay {
 		// Hold back the next message past the worker's idle timeout. The
-		// worker usually ends the stream first. The fault counts only when the
-		// hold lasted at least the idle timeout.
+		// worker usually ends the stream first. The fault counts only when
+		// the idle timeout passed since the acknowledgement, which is when
+		// the worker's idle timer starts.
 		s.delay = false
-		start := time.Now()
+		s.probe.delayHolds.Add(1)
 		var cancelled bool
 		select {
 		case <-time.After(s.probe.idleTimeout + time.Second):
 		case <-s.ctx.Done():
 			cancelled = true
 		}
-		if time.Since(start) >= s.probe.idleTimeout {
+		if time.Since(s.ackAt) >= s.probe.idleTimeout {
 			s.probe.faults[faultDelayAfterAck].Add(1)
 		}
 		if cancelled {
@@ -351,6 +356,7 @@ func (s *probedSessionStream) RecvMsg(m any) error {
 			return s.inject()
 		}
 		s.probe.acks.Add(1)
+		s.ackAt = time.Now()
 		s.broken = s.fault == faultCutAfterAck
 		s.delay = s.fault == faultDelayAfterAck
 	case response.GetNewMessages() != nil:
@@ -1235,8 +1241,16 @@ func runStress(t *testing.T, config stressConfig) {
 		assert.Zero(t, probe.notFound.Load(), "unexpected NotFound errors")
 	}
 	if config.faultRate > 0 && sessionsOn && !config.backendRestart {
-		for kind := faultCutBeforeSend; kind < stressFaultKinds; kind++ {
-			assert.Positive(t, probe.faults[kind].Load(), "no %q fault was injected", stressFaultNames[kind])
+		// About 1 in 50 session streams gets each fault kind, so with 500
+		// turns a missing kind is a real problem, not bad luck.
+		if probe.acks.Load() >= 500 {
+			for kind := faultCutBeforeSend; kind < stressFaultKinds; kind++ {
+				applied := probe.faults[kind].Load()
+				if kind == faultDelayAfterAck {
+					applied = probe.delayHolds.Load()
+				}
+				assert.Positive(t, applied, "no %q fault was applied", stressFaultNames[kind])
+			}
 		}
 		// Upper bounds that faults and restarts explain:
 		//   - Only a failure before the acknowledgement abandons a session work
