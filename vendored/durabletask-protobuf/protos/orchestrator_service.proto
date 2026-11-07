@@ -378,6 +378,12 @@ message OrchestratorResponse {
     // Zero-based position of the current chunk within a chunked completion sequence.
     // This field is omitted for non-chunked completions.
     google.protobuf.Int32Value chunkIndex = 9 [deprecated=true];
+
+    // The number of completions already sent for this work item. It is 0 for the first completion and
+    // increases by one for each completion in an extended session. Every completion of a work item that
+    // is in an extended session must carry the current count, including completions sent with
+    // CompleteOrchestratorTask. A completion with the wrong count fails with NOT_FOUND.
+    int32 completionCount = 10;
 }
 
 message CreateInstanceRequest {
@@ -641,6 +647,12 @@ message EntityBatchResult {
     repeated OperationInfo operationInfos = 6; // used only with DTS
     // Whether or not an entity state is required to complete the original EntityBatchRequest and none was provided.
     bool requiresState = 7;
+
+    // The number of completions already sent for this work item. It is 0 for the first completion and
+    // increases by one for each completion in an extended session. Every completion of a work item that
+    // is in an extended session must carry the current count, including completions sent with
+    // CompleteEntityTask. A completion with the wrong count fails with NOT_FOUND.
+    int32 completionCount = 8;
 }
 
 message EntityRequest {
@@ -706,6 +718,7 @@ message StartNewOrchestrationAction {
     google.protobuf.Timestamp scheduledTime = 5;
     google.protobuf.Timestamp requestTime = 6;
     TraceContext parentTraceContext = 7;
+    map<string, string> tags = 8;
 }
 
 message AbandonActivityTaskRequest {
@@ -730,6 +743,38 @@ message AbandonEntityTaskRequest {
 
 message AbandonEntityTaskResponse {
     // Empty.
+}
+
+message ReleaseTaskWorkItemRequest {
+    string completionToken = 1;
+}
+
+message ReleaseTaskWorkItemResponse {
+    // Empty.
+}
+
+// Confirms that the service applied a completion. It gives the same guarantee as a successful
+// CompleteOrchestratorTask or CompleteEntityTask response.
+message ExtendedSessionAck {
+    // The number of history events stored for the instance's current execution
+    // after applying this completion. It is 0 after continue-as-new and for entities.
+    int32 historyEventCount = 1;
+}
+
+// A message on the stream of an extended-session completion.
+message CompleteTaskWithExtendedSessionResponse {
+    oneof response {
+        // Always the first message on the stream.
+        ExtendedSessionAck ack = 1;
+
+        // Sent while the service waits for new messages for the instance. A ping shows only that
+        // the connection is alive. It is not a sign of progress.
+        HealthPing healthPing = 2;
+
+        // One part of the next batch of new messages. A large batch is split into several chunks.
+        // The batch is complete only when the stream ends with an OK status.
+        HistoryChunk newMessages = 3;
+    }
 }
 
 message SkipGracefulOrchestrationTerminationsRequest {
@@ -790,6 +835,27 @@ service TaskHubSidecarService {
     rpc CompleteOrchestratorTask(OrchestratorResponse) returns (CompleteTaskResponse);
     rpc CompleteEntityTask(EntityBatchResult) returns (CompleteTaskResponse);
 
+    // Completes an orchestration work item and keeps it in an extended session, so the worker can keep
+    // the orchestration in memory and receive only new messages.
+    // - The first message is an ack. After the ack, the completion is applied.
+    // - The service then sends health pings until new messages arrive, sends them as one batch of
+    //   newMessages chunks, and ends the stream with OK. The worker must not run a batch until the
+    //   stream ends with OK. If the stream fails after some chunks, the worker discards them, and the
+    //   service delivers the messages again later.
+    // - The service can end the stream after the ack without a batch, for example after a terminal
+    //   completion or when the session is idle for too long. The work item is then no longer owned.
+    // - The worker continues the session by calling this RPC again with the same completionToken and
+    //   completionCount increased by one. It ends the session with ReleaseTaskOrchestratorWorkItem.
+    // - If the call fails before the ack and the outcome is unknown, the worker abandons the work item.
+    //   If the stream fails after the ack, the worker releases it.
+    // - UNIMPLEMENTED means that the service does not support extended sessions. Only in that case may
+    //   the worker send the same result with CompleteOrchestratorTask instead.
+    rpc CompleteOrchestratorTaskWithExtendedSession(OrchestratorResponse) returns (stream CompleteTaskWithExtendedSessionResponse);
+
+    // Completes an entity work item and keeps it in an extended session. It follows the same rules as
+    // CompleteOrchestratorTaskWithExtendedSession. The session ends with ReleaseTaskEntityWorkItem.
+    rpc CompleteEntityTaskWithExtendedSession(EntityBatchResult) returns (stream CompleteTaskWithExtendedSessionResponse);
+
     // Gets the history of an orchestration instance as a stream of events.
     rpc StreamInstanceHistory(StreamInstanceHistoryRequest) returns (stream HistoryChunk);
 
@@ -819,6 +885,15 @@ service TaskHubSidecarService {
 
     // Abandon an entity work item
     rpc AbandonTaskEntityWorkItem(AbandonEntityTaskRequest) returns (AbandonEntityTaskResponse);
+
+    // Ends the extended session of an orchestration work item after its last completion was acknowledged.
+    // New messages for the instance are then dispatched as a normal work item with the full history.
+    // Releasing a work item that is no longer active succeeds and does nothing.
+    rpc ReleaseTaskOrchestratorWorkItem(ReleaseTaskWorkItemRequest) returns (ReleaseTaskWorkItemResponse);
+
+    // Ends the extended session of an entity work item. It follows the same rules as
+    // ReleaseTaskOrchestratorWorkItem.
+    rpc ReleaseTaskEntityWorkItem(ReleaseTaskWorkItemRequest) returns (ReleaseTaskWorkItemResponse);
 
     // "Skip" graceful termination of orchestrations by immediately changing their status in storage to "terminated".
     // Note that a maximum of 500 orchestrations can be terminated at a time using this method.
