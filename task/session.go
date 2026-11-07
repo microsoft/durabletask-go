@@ -103,7 +103,10 @@ func (ctx *OrchestrationContext) canContinueSession() bool {
 		// The backend sends unprocessed events again in the next work item, so
 		// a partial turn must not keep them in memory.
 		!ctx.maxEventsPerTurnExceeded &&
-		!ctx.maxHistoryEventsExceeded
+		!ctx.maxHistoryEventsExceeded &&
+		// A full replay would read these values again with a later turn's
+		// value, so the session could decide differently.
+		!ctx.turnHistoryRead
 }
 
 func validateSessionBatch(batch []*protos.HistoryEvent, historyBase int) error {

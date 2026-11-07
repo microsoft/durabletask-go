@@ -72,23 +72,26 @@ type OrchestrationContext struct {
 	processedEventsThisTurn  int
 	maxEventsPerTurnExceeded bool
 	maxHistoryEventsExceeded bool
-	sequenceNumber           int32
-	newGuidCounter           uint64
-	pendingActions           map[int32]*protos.OrchestratorAction
-	pendingTasks             map[int32]*completableTask
-	pendingEntityTasks       map[string]*completableTask
-	continuedAsNew           bool
-	continuedAsNewInput      any
-	continuedAsNewVersion    *wrapperspb.StringValue
-	customStatus             string
-	defaultVersion           string
-	converter                api.DataConverter
-	entitiesSupported        bool
-	scheduler                *coroutineScheduler
-	unwinding                bool
-	root                     *OrchestrationContext
-	scope                    *cancellationScope
-	derived                  []*OrchestrationContext
+	// turnHistoryRead records that orchestrator code read HistoryLength or
+	// HistoryLimitExceeded, which an extended session cannot keep consistent.
+	turnHistoryRead       bool
+	sequenceNumber        int32
+	newGuidCounter        uint64
+	pendingActions        map[int32]*protos.OrchestratorAction
+	pendingTasks          map[int32]*completableTask
+	pendingEntityTasks    map[string]*completableTask
+	continuedAsNew        bool
+	continuedAsNewInput   any
+	continuedAsNewVersion *wrapperspb.StringValue
+	customStatus          string
+	defaultVersion        string
+	converter             api.DataConverter
+	entitiesSupported     bool
+	scheduler             *coroutineScheduler
+	unwinding             bool
+	root                  *OrchestrationContext
+	scope                 *cancellationScope
+	derived               []*OrchestrationContext
 
 	bufferedExternalEvents     map[string]*list.List
 	pendingExternalEventTasks  map[string]*list.List
@@ -431,7 +434,7 @@ func (ctx *OrchestrationContext) commit(sent []*protos.OrchestratorAction) {
 // buffers keep everything that later turns need, so a long session does not
 // keep its full history in memory.
 func (ctx *OrchestrationContext) releaseProcessedHistory() {
-	ctx.historyBase = ctx.HistoryLength()
+	ctx.historyBase = ctx.historyLength()
 	ctx.oldEvents = nil
 	ctx.newEvents = nil
 	ctx.historyIndex = 0
@@ -602,15 +605,24 @@ func countsTowardTurnBudget(event *protos.HistoryEvent) bool {
 }
 
 // HistoryLength returns the total old and new history of this execution turn.
+// A full replay reads it again with the value of a later turn, so with
+// extended sessions, reading it ends the session after the current turn.
 func (ctx *OrchestrationContext) HistoryLength() int {
 	engine := ctx.engineContext()
-	return engine.historyBase + len(engine.newEvents)
+	engine.turnHistoryRead = true
+	return engine.historyLength()
 }
 
-// HistoryLimitExceeded reports whether MaxHistoryEvents was exceeded.
+// HistoryLimitExceeded reports whether MaxHistoryEvents was exceeded. Like
+// HistoryLength, reading it ends an extended session after the current turn.
 func (ctx *OrchestrationContext) HistoryLimitExceeded() bool {
 	engine := ctx.engineContext()
+	engine.turnHistoryRead = true
 	return engine.maxHistoryEventsExceeded
+}
+
+func (ctx *OrchestrationContext) historyLength() int {
+	return ctx.historyBase + len(ctx.newEvents)
 }
 
 func (ctx *OrchestrationContext) processEvent(e *protos.HistoryEvent) error {
@@ -1741,7 +1753,7 @@ func (ctx *OrchestrationContext) enforceHistoryLimit() {
 		InstanceID:            ctx.ID,
 		OrchestrationName:     ctx.Name,
 		OrchestrationVersion:  ctx.Version,
-		HistoryLength:         ctx.HistoryLength(),
+		HistoryLength:         ctx.historyLength(),
 		MaxHistoryEvents:      ctx.orchestrationOptions.MaxHistoryEvents,
 		UnprocessedEventCount: unprocessedEventCount,
 		SerializedInput:       string(ctx.rawInput),
@@ -1781,7 +1793,7 @@ func invokeHistoryLimitHandler(handler HistoryLimitHandler, info HistoryLimitInf
 func (ctx *OrchestrationContext) newHistoryLimitError(policyError error) *HistoryLimitError {
 	return &HistoryLimitError{
 		InstanceID:       ctx.ID,
-		HistoryLength:    ctx.HistoryLength(),
+		HistoryLength:    ctx.historyLength(),
 		MaxHistoryEvents: ctx.orchestrationOptions.MaxHistoryEvents,
 		PolicyError:      policyError,
 	}

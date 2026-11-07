@@ -1163,3 +1163,37 @@ func TestSessionDropsFinishedCoroutinesBetweenTurns(t *testing.T) {
 	require.Nil(t, next)
 	requireCompletedWith(t, sessionRun{responses: []*protos.OrchestratorResponse{result.Response}, sessionEnded: true}, `true`)
 }
+
+// A full replay reads HistoryLength again with the latest turn's value. The
+// session must end once orchestrator code reads it, or a later turn could
+// decide differently from the replay.
+func TestSessionEndsAfterTurnHistoryRead(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		read func(*OrchestrationContext) bool
+	}{
+		{name: "HistoryLength", read: func(ctx *OrchestrationContext) bool { return ctx.HistoryLength() > 9 }},
+		{name: "HistoryLimitExceeded", read: func(ctx *OrchestrationContext) bool { return ctx.HistoryLimitExceeded() }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			run := runSessionEquivalence(t, sessionScenario{orchestrator: func(ctx *OrchestrationContext) (any, error) {
+				for i := 0; ; i++ {
+					// The first reads happen on turn 2, so the session must
+					// survive the earlier turns.
+					if i >= 2 && tt.read(ctx) {
+						return i, nil
+					}
+					if i == 6 {
+						return i, nil
+					}
+					if err := ctx.CallActivity("work").Await(nil); err != nil {
+						return nil, err
+					}
+				}
+			}})
+			require.True(t, run.sessionEnded)
+			require.Len(t, run.responses, 3, "the session must end on the turn that read the value")
+			require.Nil(t, completionOf(run.responses[2]))
+		})
+	}
+}

@@ -588,9 +588,9 @@ func (te *taskExecutor) reportHistoryMetric(ctx *OrchestrationContext) {
 		InstanceID:           ctx.ID,
 		OrchestrationName:    ctx.Name,
 		OrchestrationVersion: ctx.Version,
-		HistoryLength:        ctx.HistoryLength(),
+		HistoryLength:        ctx.historyLength(),
 		ProcessedEvents:      ctx.processedEventsThisTurn,
-		HistoryLimitExceeded: ctx.HistoryLimitExceeded(),
+		HistoryLimitExceeded: ctx.maxHistoryEventsExceeded,
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
