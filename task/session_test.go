@@ -1105,3 +1105,61 @@ func TestSessionCloseEmitsNoDurableWork(t *testing.T) {
 	require.Equal(t, 3, deferredBlocked)
 	requireNoGoroutineLeak(t, baseline)
 }
+
+func TestSessionDropsFinishedCoroutinesBetweenTurns(t *testing.T) {
+	ctx, session, response := startWaitingSession(t, func(ctx *OrchestrationContext) (any, error) {
+		childDone := false
+		ctx.Go(func(child *OrchestrationContext) {
+			if child.WaitForSingleEvent("child", -1).Await(nil) == nil {
+				childDone = true
+			}
+		})
+		for range 3 {
+			if err := ctx.WaitForSingleEvent("e", -1).Await(nil); err != nil {
+				return nil, err
+			}
+			ctx.Go(func(*OrchestrationContext) {})
+		}
+		if err := ctx.WaitForSingleEvent("end", -1).Await(nil); err != nil {
+			return nil, err
+		}
+		return childDone, nil
+	})
+	live := func(want int) {
+		t.Helper()
+		require.Len(t, ctx.scheduler.all, want)
+		for _, c := range ctx.scheduler.all {
+			if c.scope != nil {
+				for _, scoped := range c.scope.coroutines {
+					require.NotEqual(t, coroutineCompleted, scoped.state, "a finished coroutine is still in its scope")
+				}
+			}
+		}
+	}
+	live(2)
+	actions := response.Actions
+	historyBase := 2
+	turn := func(event string) (*ExecutionResults, OrchestratorSession) {
+		t.Helper()
+		session.Commit(actions)
+		historyBase += 2
+		result, next, err := session.Resume(context.Background(), []*protos.HistoryEvent{
+			sessionOrchestratorStarted(sessionTestStart.Add(time.Duration(historyBase) * time.Minute)),
+			eventRaised(event, `1`),
+		}, historyBase)
+		require.NoError(t, err)
+		actions = result.Response.Actions
+		return result, next
+	}
+	for range 3 {
+		_, next := turn("e")
+		require.NotNil(t, next)
+		live(2)
+	}
+	_, next := turn("child")
+	require.NotNil(t, next)
+	live(1)
+	result, next := turn("end")
+	require.Nil(t, next)
+	requireCompletedWith(t, sessionRun{responses: []*protos.OrchestratorResponse{result.Response}, sessionEnded: true}, `true`)
+}

@@ -8,6 +8,7 @@ import (
 	"maps"
 	"math"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -434,6 +435,7 @@ func (ctx *OrchestrationContext) releaseProcessedHistory() {
 	ctx.oldEvents = nil
 	ctx.newEvents = nil
 	ctx.historyIndex = 0
+	ctx.scheduler.dropCompleted()
 }
 
 // resume runs one more turn on the loaded orchestration. The batch contains
@@ -1891,12 +1893,12 @@ func (ctx *OrchestrationContext) actions() []*protos.OrchestratorAction {
 		return nil
 	}
 
-	actions := make([]*protos.OrchestratorAction, 0, len(ctx.pendingActions))
-	for id := int32(0); id < ctx.sequenceNumber; id++ {
-		a, ok := ctx.pendingActions[id]
-		if !ok {
-			continue
-		}
+	// Sort the pending IDs instead of scanning every ID ever used, because a
+	// long session retires most of them.
+	ids := slices.Sorted(maps.Keys(ctx.pendingActions))
+	actions := make([]*protos.OrchestratorAction, 0, len(ids))
+	for _, id := range ids {
+		a := ctx.pendingActions[id]
 		actions = append(actions, a)
 		// ContinueAsNew intent survives a later failure or termination, so check
 		// the completion's actual status before carrying events forward.
