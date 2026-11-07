@@ -69,25 +69,25 @@ type stressFault int
 
 const (
 	noFault stressFault = iota
-	faultCutBeforeAck
+	faultCutBeforeSend
 	faultDropAck
 	faultCutMidBatch
-	faultCutIdle
-	faultDelayIdle
+	faultCutAfterAck
+	faultDelayAfterAck
 	stressFaultKinds
 )
 
 var stressFaultNames = [stressFaultKinds]string{
-	"none", "cut before ack", "drop ack", "cut mid-batch", "cut while idle", "delay past idle timeout",
+	"none", "cut-before-send", "drop-ack", "cut-mid-batch", "cut-after-ack", "delay-after-ack",
 }
 
 // stressProbe counts what the worker sends and receives, and can inject
 // faults on session streams.
 type stressProbe struct {
-	faultRate float64
-	idleDelay time.Duration
+	faultRate   float64
+	idleTimeout time.Duration
 
-	historyBytes atomic.Int64
+	payloadBytes atomic.Int64
 	workItems    atomic.Int64
 	replays      atomic.Int64
 	resumes      atomic.Int64
@@ -106,12 +106,12 @@ type stressProbe struct {
 	latencies []time.Duration
 }
 
-func newStressProbe(faultRate float64, idleDelay time.Duration) *stressProbe {
+func newStressProbe(faultRate float64, idleTimeout time.Duration) *stressProbe {
 	return &stressProbe{
-		faultRate: faultRate,
-		idleDelay: idleDelay,
-		rng:       rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 1)),
-		turnStart: make(map[string]time.Time),
+		faultRate:   faultRate,
+		idleTimeout: idleTimeout,
+		rng:         rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 1)),
+		turnStart:   make(map[string]time.Time),
 	}
 }
 
@@ -243,7 +243,7 @@ func (s *probedReadStream) RecvMsg(m any) error {
 	}
 	switch message := m.(type) {
 	case *protos.HistoryChunk:
-		s.probe.historyBytes.Add(int64(proto.Size(message)))
+		s.probe.payloadBytes.Add(int64(proto.Size(message)))
 	case *protos.WorkItem:
 		if request := message.GetActivityRequest(); request != nil {
 			stressTracef("received activity %s %s", message.GetCompletionToken(), request.GetOrchestrationInstance().GetInstanceId())
@@ -261,7 +261,7 @@ func (s *probedReadStream) RecvMsg(m any) error {
 		stressTracef("received %s %s%s", message.GetCompletionToken(),
 			message.GetOrchestratorRequest().GetInstanceId(), message.GetEntityRequestV2().GetInstanceId())
 		s.probe.workItems.Add(1)
-		s.probe.historyBytes.Add(int64(proto.Size(message)))
+		s.probe.payloadBytes.Add(int64(proto.Size(message)))
 		s.probe.startTurn(message.GetCompletionToken())
 	}
 	return nil
@@ -294,7 +294,7 @@ func (s *probedSessionStream) inject() error {
 }
 
 func (s *probedSessionStream) SendMsg(m any) error {
-	if s.fault == faultCutBeforeAck {
+	if s.fault == faultCutBeforeSend {
 		return s.inject()
 	}
 	switch request := m.(type) {
@@ -313,11 +313,21 @@ func (s *probedSessionStream) RecvMsg(m any) error {
 		return s.inject()
 	}
 	if s.delay {
+		// Hold back the next message past the worker's idle timeout. The
+		// worker usually ends the stream first. The fault counts only when the
+		// hold lasted at least the idle timeout.
 		s.delay = false
-		s.probe.faults[faultDelayIdle].Add(1)
+		start := time.Now()
+		var cancelled bool
 		select {
-		case <-time.After(s.probe.idleDelay):
+		case <-time.After(s.probe.idleTimeout + time.Second):
 		case <-s.ctx.Done():
+			cancelled = true
+		}
+		if time.Since(start) >= s.probe.idleTimeout {
+			s.probe.faults[faultDelayAfterAck].Add(1)
+		}
+		if cancelled {
 			s.finish()
 			return status.FromContextError(s.ctx.Err()).Err()
 		}
@@ -341,10 +351,10 @@ func (s *probedSessionStream) RecvMsg(m any) error {
 			return s.inject()
 		}
 		s.probe.acks.Add(1)
-		s.broken = s.fault == faultCutIdle
-		s.delay = s.fault == faultDelayIdle
+		s.broken = s.fault == faultCutAfterAck
+		s.delay = s.fault == faultDelayAfterAck
 	case response.GetNewMessages() != nil:
-		s.probe.historyBytes.Add(int64(proto.Size(response.GetNewMessages())))
+		s.probe.payloadBytes.Add(int64(proto.Size(response.GetNewMessages())))
 		s.batch = true
 		s.broken = s.fault == faultCutMidBatch
 	}
@@ -464,9 +474,7 @@ func (h *stressHarness) stopWorker() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := worker.Shutdown(ctx); err != nil {
-		h.t.Logf("worker shutdown: %v", err)
-	}
+	assert.NoError(h.t, worker.Shutdown(ctx), "worker shutdown")
 }
 
 // restartWorker replaces the worker. It is safe to call from any goroutine.
@@ -631,7 +639,8 @@ func stressMixed(ctx *task.OrchestrationContext) (any, error) {
 		return value, err
 	default:
 		entityID := stressEntityID(input.Prefix, i%input.Entities)
-		if i%2 == 1 {
+		// i%6 == 5 here, so i is always odd. Use i/6 to alternate the shapes.
+		if (i/6)%2 == 1 {
 			unlock, err := ctx.LockEntities(entityID)
 			if err != nil {
 				return nil, err
@@ -668,7 +677,7 @@ type perfResult struct {
 	cpu          time.Duration
 	totalAlloc   uint64
 	peakHeap     uint64
-	historyBytes int64
+	payloadBytes int64
 	workItems    int64
 	replays      int64
 	resumes      int64
@@ -682,7 +691,10 @@ type perfResult struct {
 type perfWorkload struct {
 	name  string
 	units string
-	run   func(t *testing.T, ctx context.Context, client *durabletaskscheduler.Client) int
+	// serial workloads drive one instance through many turns, so with
+	// sessions on it must load once and resume for almost every turn.
+	serial bool
+	run    func(t *testing.T, ctx context.Context, client *durabletaskscheduler.Client) int
 }
 
 func processCPU() time.Duration {
@@ -715,14 +727,14 @@ func waitCompleted(t *testing.T, ctx context.Context, client *durabletaskschedul
 
 func perfWorkloads() []perfWorkload {
 	return []perfWorkload{
-		{name: "chain", units: "activities", run: func(t *testing.T, ctx context.Context, client *durabletaskscheduler.Client) int {
+		{name: "chain", units: "activities", serial: true, run: func(t *testing.T, ctx context.Context, client *durabletaskscheduler.Client) int {
 			steps := scaled(500)
 			id, err := client.ScheduleNewOrchestration(ctx, "PerfChain", api.WithInput(steps))
 			require.NoError(t, err)
 			waitCompleted(t, ctx, client, id, steps)
 			return steps
 		}},
-		{name: "events", units: "events", run: func(t *testing.T, ctx context.Context, client *durabletaskscheduler.Client) int {
+		{name: "events", units: "events", serial: true, run: func(t *testing.T, ctx context.Context, client *durabletaskscheduler.Client) int {
 			events := scaled(200)
 			id, err := client.ScheduleNewOrchestration(ctx, "PerfEvents", api.WithInput(events))
 			require.NoError(t, err)
@@ -753,7 +765,7 @@ func perfWorkloads() []perfWorkload {
 			waitCompleted(t, ctx, client, id, width*(width+1)/2)
 			return width
 		}},
-		{name: "entity", units: "signals", run: func(t *testing.T, ctx context.Context, client *durabletaskscheduler.Client) int {
+		{name: "entity", units: "signals", serial: true, run: func(t *testing.T, ctx context.Context, client *durabletaskscheduler.Client) int {
 			signals := scaled(1000)
 			entityID := stressEntityID("perf-"+uuid.NewString(), 0)
 			for range signals {
@@ -849,6 +861,11 @@ func runPerf(t *testing.T, workload perfWorkload, sessions bool) perfResult {
 	slices.Sort(latencies)
 	if sessions {
 		require.Positive(t, probe.acks.Load(), "the sessions-on run did not use sessions")
+		if workload.serial {
+			turns := probe.acks.Load() + probe.unary.Load()
+			require.LessOrEqual(t, probe.workItems.Load(), int64(2), "a serial workload loaded its instance more than twice")
+			require.GreaterOrEqual(t, probe.resumes.Load()*10, turns*9, "fewer than 90%% of %d turns resumed a session", turns)
+		}
 	} else {
 		require.Zero(t, probe.acks.Load(), "the sessions-off run used sessions")
 	}
@@ -857,8 +874,8 @@ func runPerf(t *testing.T, workload perfWorkload, sessions bool) perfResult {
 		units:        units,
 		cpu:          cpu,
 		totalAlloc:   after.TotalAlloc - before.TotalAlloc,
-		peakHeap:     peakHeap.Load(),
-		historyBytes: probe.historyBytes.Load(),
+		peakHeap:     peakHeap.Load() - min(peakHeap.Load(), before.HeapInuse),
+		payloadBytes: probe.payloadBytes.Load(),
 		workItems:    probe.workItems.Load(),
 		replays:      probe.replays.Load(),
 		resumes:      probe.resumes.Load(),
@@ -915,9 +932,9 @@ func formatPerfRows(workload perfWorkload, off, on []perfResult) string {
 	durationRow("process CPU", func(r perfResult) time.Duration { return r.cpu })
 	row("allocated", float64(medianOf(off, func(r perfResult) uint64 { return r.totalAlloc })),
 		float64(medianOf(on, func(r perfResult) uint64 { return r.totalAlloc })), mib)
-	row("peak heap in use", float64(medianOf(off, func(r perfResult) uint64 { return r.peakHeap })),
+	row("peak heap growth", float64(medianOf(off, func(r perfResult) uint64 { return r.peakHeap })),
 		float64(medianOf(on, func(r perfResult) uint64 { return r.peakHeap })), mib)
-	intRow("history received", func(r perfResult) int64 { return r.historyBytes }, mib)
+	intRow("worker protobuf payload bytes", func(r perfResult) int64 { return r.payloadBytes }, mib)
 	intRow("work items (loads)", func(r perfResult) int64 { return r.workItems }, count)
 	intRow("replays", func(r perfResult) int64 { return r.replays }, count)
 	intRow("session resumes", func(r perfResult) int64 { return r.resumes }, count)
@@ -936,8 +953,9 @@ func TestDTSPerf(t *testing.T) {
 	for _, workload := range perfWorkloads() {
 		t.Run(workload.name, func(t *testing.T) {
 			results := map[bool][]perfResult{}
-			for range repeat {
-				for _, sessions := range []bool{false, true} {
+			for i := range repeat {
+				// Alternate the order, so warm-up does not favor one mode.
+				for _, sessions := range []bool{i%2 == 1, i%2 == 0} {
 					require.NoError(t, restartBackend(t))
 					result := runPerf(t, workload, sessions)
 					t.Logf("sessions=%v wall=%v acks=%d unary=%d replays=%d resumes=%d",
@@ -1087,7 +1105,7 @@ func runStress(t *testing.T, config stressConfig) {
 	if sessionsOn {
 		sessions = &durabletaskclient.ExtendedSessionOptions{IdleTimeout: idleTimeout}
 	}
-	probe := newStressProbe(config.faultRate, idleTimeout+time.Second)
+	probe := newStressProbe(config.faultRate, idleTimeout)
 	workerOptions := []durabletaskclient.TaskHubGrpcWorkerOption{
 		durabletaskclient.WithMaxConcurrentOrchestrationWorkItems(config.orchestrations),
 		durabletaskclient.WithMaxConcurrentActivityWorkItems(config.activities),
@@ -1113,10 +1131,10 @@ func runStress(t *testing.T, config stressConfig) {
 	var completed atomic.Int64
 	done := make(chan struct{})
 	var background sync.WaitGroup
-	// waitProgress waits until a share of the instances completed. It
+	// waitProgress waits until the given number of instances completed. It
 	// returns false when the run ends first.
-	waitProgress := func(share float64) bool {
-		for float64(completed.Load()) < share*float64(config.instances) {
+	waitProgress := func(target int64) bool {
+		for completed.Load() < target {
 			select {
 			case <-done:
 				return false
@@ -1128,7 +1146,7 @@ func runStress(t *testing.T, config stressConfig) {
 	if config.workerRestarts > 0 {
 		background.Go(func() {
 			for n := 1; n <= config.workerRestarts; n++ {
-				if !waitProgress(float64(n) / float64(config.workerRestarts+1)) {
+				if !waitProgress(int64(config.instances) * int64(n) / int64(config.workerRestarts+1)) {
 					return
 				}
 				h.restartWorker()
@@ -1136,9 +1154,10 @@ func runStress(t *testing.T, config stressConfig) {
 		})
 	}
 	persistent := os.Getenv("DTS_STRESS_PERSISTENT") == "1"
+	restartAt := int64(config.instances) * 3 / 10
 	if config.backendRestart {
 		background.Go(func() {
-			if !waitProgress(0.3) {
+			if !waitProgress(restartAt) {
 				return
 			}
 			t.Logf("restarting the backend after %d of %d instances", completed.Load(), config.instances)
@@ -1148,19 +1167,24 @@ func runStress(t *testing.T, config stressConfig) {
 	}
 	var problems []string
 	if config.backendRestart && !persistent {
-		// All state is lost on restart. Check only that new work completes.
-		for completed.Load() < int64(config.instances)*3/10 {
-			_, err := h.client.WaitForOrchestrationCompletion(ctx, batch.ids[completed.Load()])
-			if err == nil {
-				completed.Add(1)
+		// All state is lost on restart. Check the instances that finish
+		// before it, then check that new work completes after it.
+		for i := range restartAt {
+			metadata, err := h.client.WaitForOrchestrationCompletion(ctx, batch.ids[i], api.WithFetchPayloads(true))
+			require.NoError(t, err)
+			var got int
+			if metadata.RuntimeStatus != protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED {
+				problems = append(problems, fmt.Sprintf("%s: status %s: %v", batch.ids[i], metadata.RuntimeStatus, metadata.FailureDetails))
+			} else if err := metadata.ReadOutput(&got); err != nil || got != stressExpected(int(i)) {
+				problems = append(problems, fmt.Sprintf("%s: output %d, want %d (%v)", batch.ids[i], got, stressExpected(int(i)), err))
 			}
-			require.NoError(t, ctx.Err())
+			completed.Add(1)
 		}
 		background.Wait()
 		fresh := config
 		fresh.instances, fresh.entities, fresh.signalsPerEntity = scaled(120), scaled(12), 5
 		freshBatch := scheduleStressBatch(t, ctx, h.client, fresh)
-		problems = verifyStressBatch(ctx, h.client, freshBatch, new(atomic.Int64))
+		problems = append(problems, verifyStressBatch(ctx, h.client, freshBatch, new(atomic.Int64))...)
 	} else {
 		problems = verifyStressBatch(ctx, h.client, batch, &completed)
 	}
@@ -1171,7 +1195,7 @@ func runStress(t *testing.T, config stressConfig) {
 	t.Logf("finished in %v: worker restarts=%d acks=%d unary=%d replays=%d resumes=%d releases=%d abandons=%d notFound=%d maxOpenStreams=%d",
 		elapsed, h.restarts, probe.acks.Load(), probe.unary.Load(), probe.replays.Load(), probe.resumes.Load(),
 		probe.releases.Load(), probe.abandons.Load(), probe.notFound.Load(), probe.maxOpen.Load())
-	for kind := faultCutBeforeAck; kind < stressFaultKinds; kind++ {
+	for kind := faultCutBeforeSend; kind < stressFaultKinds; kind++ {
 		if n := probe.faults[kind].Load(); n > 0 {
 			t.Logf("injected %q: %d", stressFaultNames[kind], n)
 		}
@@ -1209,6 +1233,23 @@ func runStress(t *testing.T, config stressConfig) {
 	if probe.faultCount() == 0 && h.restarts == 0 && !config.backendRestart {
 		assert.Zero(t, probe.abandons.Load(), "unexpected abandons")
 		assert.Zero(t, probe.notFound.Load(), "unexpected NotFound errors")
+	}
+	if config.faultRate > 0 && sessionsOn && !config.backendRestart {
+		for kind := faultCutBeforeSend; kind < stressFaultKinds; kind++ {
+			assert.Positive(t, probe.faults[kind].Load(), "no %q fault was injected", stressFaultNames[kind])
+		}
+		// Upper bounds that faults and restarts explain:
+		//   - Only a failure before the acknowledgement abandons a session work
+		//     item: one abandon per cut-before-send or drop-ack fault at most.
+		//   - A worker restart can strand at most every in-flight work item:
+		//     one abandon each, plus a NotFound for its completion and one for
+		//     its abandon or release.
+		//   - Every other fault ends one stream, with at most one NotFound from
+		//     the retry or the release that follows.
+		inFlight := int64(h.restarts) * int64(config.orchestrations+config.activities+config.entityConcurrency)
+		preAck := probe.faults[faultCutBeforeSend].Load() + probe.faults[faultDropAck].Load()
+		assert.LessOrEqual(t, probe.abandons.Load(), preAck+inFlight, "more abandons than faults and restarts explain")
+		assert.LessOrEqual(t, probe.notFound.Load(), probe.faultCount()+2*inFlight, "more NotFound errors than faults and restarts explain")
 	}
 }
 
