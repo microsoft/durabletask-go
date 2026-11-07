@@ -321,7 +321,9 @@ func (w *TaskHubGrpcWorker) processOrchestrationWorkItem(
 		traceContext: request.OrchestrationTraceContext,
 		parentTrace:  executionStartedTraceContext(pastEvents, request.NewEvents),
 	}
-	response, ok := w.orchestratorResponse(ctx, client, turn, results, err)
+	response, ok := w.orchestratorResponse(ctx, turn, results, err, func() {
+		w.abandonOrchestration(ctx, client, completionToken)
+	})
 	if !ok {
 		if session != nil {
 			session.Close()
@@ -345,13 +347,13 @@ type orchestrationTurn struct {
 }
 
 // orchestratorResponse builds the response for one turn. It returns false
-// after it abandoned the work item.
+// after it called abandon.
 func (w *TaskHubGrpcWorker) orchestratorResponse(
 	ctx context.Context,
-	client protos.TaskHubSidecarServiceClient,
 	turn orchestrationTurn,
 	results *task.ExecutionResults,
 	err error,
+	abandon func(),
 ) (*protos.OrchestratorResponse, bool) {
 	response := &protos.OrchestratorResponse{
 		InstanceId:                turn.instanceID,
@@ -392,7 +394,7 @@ func (w *TaskHubGrpcWorker) orchestratorResponse(
 	}
 	if err := largepayload.TransformOrchestratorResponse(ctx, w.options.largePayloads, response); err != nil {
 		w.logger.Errorf("%s: failed to externalize orchestration response payloads: %v", turn.instanceID, err)
-		w.abandonOrchestration(ctx, client, turn.token)
+		abandon()
 		return nil, false
 	}
 	return failOversizedOrchestratorResponse(response, w.options.maxOrchestratorCompletionBytes), true
@@ -492,7 +494,9 @@ func (w *TaskHubGrpcWorker) runOrchestrationSession(
 		}
 		session = next
 		var ok bool
-		if response, ok = w.orchestratorResponse(ctx, client, turn, results, nil); !ok {
+		if response, ok = w.orchestratorResponse(ctx, turn, results, nil, func() {
+			w.cleanupSessionWorkItem(ctx, scope, turn.instanceID, "abandon", abandonOrchestrationOnce(client, turn.token))
+		}); !ok {
 			if session != nil {
 				session.Close()
 			}
@@ -804,7 +808,9 @@ func (w *TaskHubGrpcWorker) processEntityWorkItem(
 	completionToken string,
 	request *protos.EntityRequest,
 ) {
-	result, ok := w.entityBatchResult(ctx, client, completionToken, request)
+	result, ok := w.entityBatchResult(ctx, completionToken, request, func() {
+		w.abandonEntity(ctx, client, completionToken)
+	})
 	if !ok {
 		return
 	}
@@ -816,34 +822,34 @@ func (w *TaskHubGrpcWorker) processEntityWorkItem(
 }
 
 // entityBatchResult runs one entity batch and returns the result to send.
-// It returns false after it abandoned the work item.
+// It returns false after it called abandon.
 func (w *TaskHubGrpcWorker) entityBatchResult(
 	ctx context.Context,
-	client protos.TaskHubSidecarServiceClient,
 	completionToken string,
 	request *protos.EntityRequest,
+	abandon func(),
 ) (*protos.EntityBatchResult, bool) {
 	batch, operationInfos, err := entityBatchFromRequestV2(request)
 	if err != nil {
 		w.logger.Errorf("invalid V2 entity work item: %v", err)
-		w.abandonEntity(ctx, client, completionToken)
+		abandon()
 		return nil, false
 	}
 	entityID, parseErr := api.EntityIDFromString(batch.GetInstanceId())
 	if parseErr != nil {
 		w.logger.Errorf("%s: invalid entity instance ID: %v", batch.GetInstanceId(), parseErr)
-		w.abandonEntity(ctx, client, completionToken)
+		abandon()
 		return nil, false
 	}
 	if !matchesEntityWorkItemFilters(w.options.workItemFilters, entityID.Name) {
 		w.logger.Warnf("%s: entity work item does not match configured filters; abandoning it", request.GetInstanceId())
-		w.abandonEntity(ctx, client, completionToken)
+		abandon()
 		return nil, false
 	}
 	if err := largepayload.TransformEntityBatchRequest(ctx, w.options.largePayloads, batch); err != nil {
 		w.logger.Errorf("%s: failed to hydrate entity batch payloads: %v", request.GetInstanceId(), err)
 		if entityProcessingCanceled(ctx, err) {
-			w.abandonEntity(ctx, client, completionToken)
+			abandon()
 			return nil, false
 		}
 		return newEntityBatchFailure(completionToken, err), true
@@ -851,14 +857,14 @@ func (w *TaskHubGrpcWorker) entityBatchResult(
 	executor, ok := w.executor.(task.EntityExecutor)
 	if !ok {
 		w.logger.Error("task executor does not support entity work items")
-		w.abandonEntity(ctx, client, completionToken)
+		abandon()
 		return nil, false
 	}
 	result, err := executeEntitySafely(ctx, executor, batch)
 	if err != nil {
 		if entityProcessingCanceled(ctx, err) {
 			w.logger.Warnf("%s: entity execution canceled; abandoning work item", request.GetInstanceId())
-			w.abandonEntity(ctx, client, completionToken)
+			abandon()
 			return nil, false
 		}
 		w.logger.Errorf("%s: entity execution failed: %v", request.GetInstanceId(), err)
@@ -876,7 +882,7 @@ func (w *TaskHubGrpcWorker) entityBatchResult(
 	if err := largepayload.TransformEntityBatchResult(ctx, w.options.largePayloads, result); err != nil {
 		w.logger.Errorf("%s: failed to externalize entity batch payloads: %v", request.GetInstanceId(), err)
 		if entityProcessingCanceled(ctx, err) {
-			w.abandonEntity(ctx, client, completionToken)
+			abandon()
 			return nil, false
 		}
 		return newEntityBatchFailure(completionToken, err), true
@@ -931,10 +937,12 @@ func (w *TaskHubGrpcWorker) runEntitySession(
 			return
 		}
 		var ok bool
-		result, ok = w.entityBatchResult(ctx, client, completionToken, &protos.EntityRequest{
+		result, ok = w.entityBatchResult(ctx, completionToken, &protos.EntityRequest{
 			InstanceId:        instanceID,
 			EntityState:       state,
 			OperationRequests: entityOperationEvents(batch),
+		}, func() {
+			w.cleanupSessionWorkItem(ctx, scope, instanceID, "abandon", abandonEntityOnce(client, completionToken))
 		})
 		if !ok {
 			return

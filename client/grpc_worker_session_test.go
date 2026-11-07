@@ -831,6 +831,27 @@ func TestWorkerEntitySessionUsesCachedState(t *testing.T) {
 	require.Len(t, requests[1].Operations, 2, "control events are not entity operations")
 }
 
+func TestWorkerEntitySessionAbandonsInvalidBatch(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddEntityN("counter", func(*task.EntityContext) (any, error) { return nil, nil }))
+	client := newSessionSchedulerClient()
+	startSessionWorker(t, registry, client)
+	client.stream.results <- fakeWorkItemResult{item: &protos.WorkItem{
+		Request:         &protos.WorkItem_EntityRequestV2{EntityRequestV2: entitySessionRequest("@counter@b", entitySignal("noop"))},
+		CompletionToken: "entity-token",
+	}}
+	first := client.nextCall(t)
+	first.stream.ack(0)
+	first.stream.batch(helpers.NewTaskCompletedEvent(1, nil))
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return client.entityAbandonAttempts == 1
+	}, 5*time.Second, time.Millisecond)
+	require.Empty(t, client.unaryEntities())
+	require.Zero(t, client.releases.Load())
+}
+
 func TestWithExtendedSessionsValidation(t *testing.T) {
 	newWorker := func(opts ...TaskHubGrpcWorkerOption) error {
 		_, err := newTaskHubGrpcWorker(
