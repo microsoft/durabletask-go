@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,6 +88,7 @@ type sessionSchedulerClient struct {
 	*fakeSchedulerClient
 	calls      chan *fakeSessionCall
 	openErr    func() error
+	unaryErr   func() error
 	releaseErr func() error
 	abandonErr func() error
 
@@ -109,6 +111,19 @@ func (c *sessionSchedulerClient) GetWorkItems(
 ) (protos.TaskHubSidecarService_GetWorkItemsClient, error) {
 	c.connects.Add(1)
 	return c.fakeSchedulerClient.GetWorkItems(ctx, request, opts...)
+}
+
+func (c *sessionSchedulerClient) CompleteOrchestratorTask(
+	ctx context.Context,
+	response *protos.OrchestratorResponse,
+	opts ...grpc.CallOption,
+) (*protos.CompleteTaskResponse, error) {
+	if c.unaryErr != nil {
+		if err := c.unaryErr(); err != nil {
+			return nil, err
+		}
+	}
+	return c.fakeSchedulerClient.CompleteOrchestratorTask(ctx, response, opts...)
 }
 
 func (c *sessionSchedulerClient) open(ctx context.Context, call *fakeSessionCall) (grpc.ServerStreamingClient[protos.CompleteTaskWithExtendedSessionResponse], error) {
@@ -688,6 +703,52 @@ func TestWorkerSessionAbandonFailureReconnectsIntake(t *testing.T) {
 	require.Greater(t, h.client.orchestrationAbort.Load(), int32(1))
 }
 
+func TestWorkerSessionUnaryFailureAfterAckReconnectsIntake(t *testing.T) {
+	h := newSessionHarness(t, 1)
+	h.worker.options.sessionCleanupTimeout = 20 * time.Millisecond
+	h.client.unaryErr = func() error { return status.Error(codes.InvalidArgument, "rejected") }
+	h.client.abandonErr = func() error { return status.Error(codes.Unavailable, "down") }
+	h.dispatch("unary-fails")
+	first := h.client.nextCall(t)
+	first.stream.ack(4)
+	first.stream.batch(taskCompleted(0, "a")...)
+	require.Eventually(t, func() bool { return h.client.connects.Load() >= 2 }, 5*time.Second, time.Millisecond,
+		"a failed abandon of a session work item must reconnect intake")
+	require.Greater(t, h.client.orchestrationAbort.Load(), int32(1))
+}
+
+func TestWorkerEntitySessionUnaryFailureAfterAckReconnectsIntake(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddEntityN("counter", func(*task.EntityContext) (any, error) { return nil, nil }))
+	client := newSessionSchedulerClient()
+	client.entityCompletionErr = status.Error(codes.InvalidArgument, "rejected")
+	client.entityAbandonFailures = math.MaxInt32
+	h := startSessionWorker(t, registry, client)
+	h.worker.options.sessionCleanupTimeout = 20 * time.Millisecond
+	// A batch that fails ends the session with the unary RPC.
+	h.worker.executor = &recordingExecutor{executeEntity: func(_ context.Context, request *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
+		if request.EntityState != nil {
+			return nil, errors.New("framework failure")
+		}
+		return &protos.EntityBatchResult{
+			Results:     []*protos.OperationResult{{ResultType: &protos.OperationResult_Success{Success: &protos.OperationResultSuccess{}}}},
+			EntityState: wrapperspb.String("1"),
+		}, nil
+	}}
+	client.stream.results <- fakeWorkItemResult{item: &protos.WorkItem{
+		Request:         &protos.WorkItem_EntityRequestV2{EntityRequestV2: entitySessionRequest("@counter@c", entitySignal("add"))},
+		CompletionToken: "entity-token",
+	}}
+	first := client.nextCall(t)
+	first.stream.ack(0)
+	first.stream.batch(entitySignal("add"))
+	require.Eventually(t, func() bool { return client.connects.Load() >= 2 }, 5*time.Second, time.Millisecond,
+		"a failed abandon of a session work item must reconnect intake")
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	require.Greater(t, client.entityAbandonAttempts, 1)
+}
+
 func TestWorkerSessionClosesWithRetiredGeneration(t *testing.T) {
 	h := newSessionHarness(t, 2)
 	h.dispatch("retired")
@@ -720,50 +781,6 @@ func TestWorkerSessionShutdownReleasesIdleSessions(t *testing.T) {
 	defer cancel()
 	require.NoError(t, h.worker.Shutdown(ctx))
 	require.EqualValues(t, 1, h.client.releases.Load())
-}
-
-func TestWorkerSessionEvictsLeastRecentlyUsedIdleSession(t *testing.T) {
-	manager := newSessionManager(&ExtendedSessionOptions{
-		MaxOrchestrationSessions: 3,
-		MaxCachedBytes:           100,
-	})
-	first := manager.acquire(orchestrationSessionKind)
-	second := manager.acquire(orchestrationSessionKind)
-	third := manager.acquire(orchestrationSessionKind)
-	require.Nil(t, manager.acquire(orchestrationSessionKind))
-	first.setIdle(40)
-	second.setIdle(40)
-	third.setBusy()
-	require.Equal(t, int64(80), manager.bytes)
-	// Touching first makes second the least recently used session.
-	first.setBusy()
-	first.setIdle(40)
-	third.setIdle(40)
-	select {
-	case <-second.evict:
-	default:
-		t.Fatal("the least recently used idle session must be evicted")
-	}
-	select {
-	case <-first.evict:
-		t.Fatal("only one session should be evicted")
-	default:
-	}
-	require.Equal(t, int64(80), manager.bytes)
-	second.release()
-	second.release()
-	first.release()
-	third.release()
-	require.Zero(t, manager.bytes)
-	require.Zero(t, manager.orchestrations)
-}
-
-func TestWorkerSessionEvictionReleasesWorkItem(t *testing.T) {
-	h := newSessionHarness(t, 2, WithExtendedSessions(ExtendedSessionOptions{MaxCachedBytes: 1}))
-	h.dispatch("evicted")
-	first := h.client.nextCall(t)
-	first.stream.ack(4)
-	require.Eventually(t, func() bool { return h.client.releases.Load() == 1 }, 5*time.Second, time.Millisecond)
 }
 
 func entitySessionRequest(instanceID string, operations ...*protos.HistoryEvent) *protos.EntityRequest {
@@ -864,11 +881,23 @@ func TestWithExtendedSessionsValidation(t *testing.T) {
 	}
 	require.Error(t, newWorker(WithExtendedSessions(ExtendedSessionOptions{IdleTimeout: -1})))
 	require.Error(t, newWorker(WithExtendedSessions(ExtendedSessionOptions{MaxEntitySessions: -1})))
-	require.Error(t, newWorker(WithExtendedSessions(ExtendedSessionOptions{MaxCachedBytes: -1})))
 	require.ErrorContains(t, newWorker(
 		WithMaxConcurrentOrchestrationWorkItems(2),
 		WithExtendedSessions(ExtendedSessionOptions{MaxOrchestrationSessions: 2}),
 	), "must be lower")
+
+	shared := WithExtendedSessions(ExtendedSessionOptions{})
+	small, err := newTaskHubGrpcWorker(
+		func(context.Context) (protos.TaskHubSidecarServiceClient, io.Closer, error) { return nil, nil, nil },
+		task.NewTaskRegistry(), api.DefaultLogger(), WithMaxConcurrentOrchestrationWorkItems(4), shared)
+	require.NoError(t, err)
+	large, err := newTaskHubGrpcWorker(
+		func(context.Context) (protos.TaskHubSidecarServiceClient, io.Closer, error) { return nil, nil, nil },
+		task.NewTaskRegistry(), api.DefaultLogger(), WithMaxConcurrentOrchestrationWorkItems(40), shared)
+	require.NoError(t, err)
+	require.Equal(t, 2, small.options.extendedSessions.MaxOrchestrationSessions,
+		"workers built from one option value must not share their session options")
+	require.Equal(t, 20, large.options.extendedSessions.MaxOrchestrationSessions)
 
 	options := defaultTaskHubGrpcWorkerOptions()
 	require.NoError(t, WithExtendedSessions(ExtendedSessionOptions{})(&options))

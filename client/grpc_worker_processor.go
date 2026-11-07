@@ -331,10 +331,10 @@ func (w *TaskHubGrpcWorker) processOrchestrationWorkItem(
 		return
 	}
 	if session != nil {
-		w.runOrchestrationSession(ctx, client, scope, turn, session, response, historySize(pastEvents, request.NewEvents))
+		w.runOrchestrationSession(ctx, client, scope, turn, session, response)
 		return
 	}
-	w.completeOrchestration(ctx, client, turn, response, 0)
+	w.completeOrchestration(ctx, client, nil, turn, response, 0)
 }
 
 // orchestrationTurn holds what every turn of one orchestration work item
@@ -402,10 +402,11 @@ func (w *TaskHubGrpcWorker) orchestratorResponse(
 
 // completeOrchestration sends a turn with the unary RPC. The count and token
 // are set right before sending, because earlier steps may rebuild the
-// response.
+// response. scope is set for a work item that is in a session.
 func (w *TaskHubGrpcWorker) completeOrchestration(
 	ctx context.Context,
 	client protos.TaskHubSidecarServiceClient,
+	scope *workerSessionScope,
 	turn orchestrationTurn,
 	response *protos.OrchestratorResponse,
 	completionCount int32,
@@ -422,6 +423,10 @@ func (w *TaskHubGrpcWorker) completeOrchestration(
 			return
 		}
 		w.logger.Errorf("%s: failed to complete orchestration work item: %v", turn.instanceID, err)
+		if scope != nil {
+			w.cleanupSessionWorkItem(ctx, scope, turn.instanceID, "abandon", abandonOrchestrationOnce(client, turn.token))
+			return
+		}
 		w.abandonOrchestration(ctx, client, turn.token)
 	}
 }
@@ -436,7 +441,6 @@ func (w *TaskHubGrpcWorker) runOrchestrationSession(
 	turn orchestrationTurn,
 	session task.OrchestratorSession,
 	response *protos.OrchestratorResponse,
-	sessionBytes int64,
 ) {
 	lease := scope.run.sessions.acquire(orchestrationSessionKind)
 	defer lease.release()
@@ -447,22 +451,21 @@ func (w *TaskHubGrpcWorker) runOrchestrationSession(
 			session = nil
 		}
 		if session == nil {
-			w.completeOrchestration(ctx, client, turn, response, turnCount)
+			w.completeOrchestration(ctx, client, sessionScopeAfterAck(scope, turnCount), turn, response, turnCount)
 			return
 		}
 		var historyBase int32
-		outcome, batch := w.awaitSessionBatch(ctx, scope, lease, sessionCall{
+		outcome, batch := w.awaitSessionBatch(ctx, scope, sessionCall{
 			instanceID: turn.instanceID,
 			open: func(callCtx context.Context) (grpc.ServerStreamingClient[protos.CompleteTaskWithExtendedSessionResponse], error) {
 				response.CompletionToken = turn.token
 				response.CompletionCount = turnCount
 				return client.CompleteOrchestratorTaskWithExtendedSession(callCtx, response)
 			},
-			onAck: func(ack *protos.ExtendedSessionAck) int64 {
+			onAck: func(ack *protos.ExtendedSessionAck) {
 				session.Commit(response.Actions)
 				historyBase = ack.GetHistoryEventCount()
 				turnCount++
-				return sessionBytes
 			},
 			release: releaseOrchestrationOnce(client, turn.token),
 			abandon: abandonOrchestrationOnce(client, turn.token),
@@ -484,7 +487,6 @@ func (w *TaskHubGrpcWorker) runOrchestrationSession(
 			w.cleanupSessionWorkItem(ctx, scope, turn.instanceID, "release", releaseOrchestrationOnce(client, turn.token))
 			return
 		}
-		sessionBytes += historySize(nil, batch)
 		results, next, err := session.Resume(ctx, batch, int(historyBase))
 		if err != nil {
 			w.logger.Errorf("%s: failed to run session batch: %v", turn.instanceID, err)
@@ -518,16 +520,6 @@ func canContinueOrchestrationSession(response *protos.OrchestratorResponse) bool
 		}
 	}
 	return true
-}
-
-func historySize(eventLists ...[]*protos.HistoryEvent) int64 {
-	var size int64
-	for _, events := range eventLists {
-		for _, event := range events {
-			size += int64(proto.Size(event))
-		}
-	}
-	return size
 }
 
 // failOversizedOrchestratorResponse converts a response that modern DTS cannot
@@ -818,7 +810,7 @@ func (w *TaskHubGrpcWorker) processEntityWorkItem(
 		w.runEntitySession(ctx, client, scope, request.GetInstanceId(), completionToken, result)
 		return
 	}
-	w.completeEntityBatchResult(ctx, client, request.GetInstanceId(), result)
+	w.completeEntityBatchResult(ctx, client, nil, request.GetInstanceId(), result, 0)
 }
 
 // entityBatchResult runs one entity batch and returns the result to send.
@@ -911,20 +903,19 @@ func (w *TaskHubGrpcWorker) runEntitySession(
 	)
 	for {
 		if !streaming || !scope.available() || result.FailureDetails != nil {
-			w.completeEntityBatchResultWithCount(ctx, client, instanceID, result, turnCount)
+			w.completeEntityBatchResult(ctx, client, sessionScopeAfterAck(scope, turnCount), instanceID, result, turnCount)
 			return
 		}
-		outcome, batch := w.awaitSessionBatch(ctx, scope, lease, sessionCall{
+		outcome, batch := w.awaitSessionBatch(ctx, scope, sessionCall{
 			instanceID: instanceID,
 			open: func(callCtx context.Context) (grpc.ServerStreamingClient[protos.CompleteTaskWithExtendedSessionResponse], error) {
 				result.CompletionToken = completionToken
 				result.CompletionCount = turnCount
 				return client.CompleteEntityTaskWithExtendedSession(callCtx, result)
 			},
-			onAck: func(*protos.ExtendedSessionAck) int64 {
+			onAck: func(*protos.ExtendedSessionAck) {
 				state = result.EntityState
 				turnCount++
-				return int64(len(state.GetValue()))
 			},
 			release: releaseEntityOnce(client, completionToken),
 			abandon: abandonEntityOnce(client, completionToken),
@@ -1033,21 +1024,13 @@ func entityProcessingCanceled(ctx context.Context, err error) bool {
 		errors.Is(err, context.DeadlineExceeded)
 }
 
+// completeEntityBatchResult sends an entity result with the unary RPC. The
+// count is set right before sending, because a failure result is a new
+// message. scope is set for a work item that is in a session.
 func (w *TaskHubGrpcWorker) completeEntityBatchResult(
 	ctx context.Context,
 	client protos.TaskHubSidecarServiceClient,
-	instanceID string,
-	result *protos.EntityBatchResult,
-) {
-	w.completeEntityBatchResultWithCount(ctx, client, instanceID, result, 0)
-}
-
-// completeEntityBatchResultWithCount sends an entity result with the unary
-// RPC. The count is set right before sending, because a failure result is a
-// new message.
-func (w *TaskHubGrpcWorker) completeEntityBatchResultWithCount(
-	ctx context.Context,
-	client protos.TaskHubSidecarServiceClient,
+	scope *workerSessionScope,
 	instanceID string,
 	result *protos.EntityBatchResult,
 	completionCount int32,
@@ -1063,6 +1046,10 @@ func (w *TaskHubGrpcWorker) completeEntityBatchResultWithCount(
 			return
 		}
 		w.logger.Errorf("%s: failed to complete entity work item: %v", instanceID, err)
+		if scope != nil {
+			w.cleanupSessionWorkItem(ctx, scope, instanceID, "abandon", abandonEntityOnce(client, result.CompletionToken))
+			return
+		}
 		w.abandonEntity(ctx, client, result.CompletionToken)
 	}
 }

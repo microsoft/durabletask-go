@@ -1,7 +1,6 @@
 package client
 
 import (
-	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -49,10 +48,6 @@ type ExtendedSessionOptions struct {
 	MaxOrchestrationSessions int
 	// MaxEntitySessions limits waiting entity sessions in the same way.
 	MaxEntitySessions int
-	// MaxCachedBytes is an estimated memory budget for loaded sessions. When
-	// it is exceeded, the least recently used waiting sessions are ended.
-	// Zero means no byte limit.
-	MaxCachedBytes int64
 }
 
 // WithExtendedSessions turns on extended sessions. Sessions are off unless
@@ -66,16 +61,15 @@ func WithExtendedSessions(options ExtendedSessionOptions) TaskHubGrpcWorkerOptio
 		if options.MaxOrchestrationSessions < 0 || options.MaxEntitySessions < 0 {
 			return fmt.Errorf("extended session limits cannot be negative")
 		}
-		if options.MaxCachedBytes < 0 {
-			return fmt.Errorf("extended session cached bytes cannot be negative")
+		// Each worker resolves its own defaults, so it needs its own copy.
+		copied := options
+		if copied.IdleTimeout == 0 {
+			copied.IdleTimeout = DefaultExtendedSessionTimeout
 		}
-		if options.IdleTimeout == 0 {
-			options.IdleTimeout = DefaultExtendedSessionTimeout
+		if copied.TransferTimeout == 0 {
+			copied.TransferTimeout = DefaultExtendedSessionTimeout
 		}
-		if options.TransferTimeout == 0 {
-			options.TransferTimeout = DefaultExtendedSessionTimeout
-		}
-		target.extendedSessions = &options
+		target.extendedSessions = &copied
 		return nil
 	}
 }
@@ -117,73 +111,36 @@ type sessionManager struct {
 	mu             sync.Mutex
 	orchestrations int
 	entities       int
-	bytes          int64
-	idle           *list.List
 }
 
-// sessionLease is one session's share of the limits. Only the goroutine that
-// owns the session uses it, except for eviction.
+// sessionLease is one session's place within the limits.
 type sessionLease struct {
 	manager *sessionManager
 	kind    sessionKind
-	bytes   int64
-	idle    *list.Element
-	evict   chan struct{}
-	evicted bool
-	done    bool
+	once    sync.Once
 }
 
 func newSessionManager(options *ExtendedSessionOptions) *sessionManager {
-	return &sessionManager{options: options, idle: list.New()}
+	return &sessionManager{options: options}
 }
 
+// acquire returns nil when the limit for kind is reached.
 func (m *sessionManager) acquire(kind sessionKind) *sessionLease {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	count, limit := &m.orchestrations, m.options.MaxOrchestrationSessions
-	if kind == entitySessionKind {
-		count, limit = &m.entities, m.options.MaxEntitySessions
-	}
+	count, limit := m.counter(kind)
 	if *count >= limit {
 		return nil
 	}
 	*count++
-	return &sessionLease{manager: m, kind: kind, evict: make(chan struct{})}
+	return &sessionLease{manager: m, kind: kind}
 }
 
-// setIdle marks the session as waiting with the given estimated size. It
-// ends the least recently used waiting sessions while over the byte budget.
-func (l *sessionLease) setIdle(bytes int64) {
-	m := l.manager
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if l.evicted {
-		return
+func (m *sessionManager) counter(kind sessionKind) (*int, int) {
+	if kind == entitySessionKind {
+		return &m.entities, m.options.MaxEntitySessions
 	}
-	m.bytes += bytes - l.bytes
-	l.bytes = bytes
-	if l.idle == nil {
-		l.idle = m.idle.PushBack(l)
-	}
-	for m.options.MaxCachedBytes > 0 && m.bytes > m.options.MaxCachedBytes && m.idle.Len() > 0 {
-		victim := m.idle.Remove(m.idle.Front()).(*sessionLease)
-		victim.idle = nil
-		victim.evicted = true
-		m.bytes -= victim.bytes
-		victim.bytes = 0
-		close(victim.evict)
-	}
-}
-
-// setBusy marks the session as running, so it cannot be evicted.
-func (l *sessionLease) setBusy() {
-	m := l.manager
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if l.idle != nil {
-		m.idle.Remove(l.idle)
-		l.idle = nil
-	}
+	return &m.orchestrations, m.options.MaxOrchestrationSessions
 }
 
 // release returns the lease. It is safe to call on a nil lease.
@@ -191,24 +148,12 @@ func (l *sessionLease) release() {
 	if l == nil {
 		return
 	}
-	m := l.manager
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if l.done {
-		return
-	}
-	l.done = true
-	if l.idle != nil {
-		m.idle.Remove(l.idle)
-		l.idle = nil
-	}
-	m.bytes -= l.bytes
-	l.bytes = 0
-	if l.kind == entitySessionKind {
-		m.entities--
-	} else {
-		m.orchestrations--
-	}
+	l.once.Do(func() {
+		l.manager.mu.Lock()
+		defer l.manager.mu.Unlock()
+		count, _ := l.manager.counter(l.kind)
+		*count--
+	})
 }
 
 // workerSessionScope is the intake generation that dispatched a work item.
@@ -217,6 +162,16 @@ func (l *sessionLease) release() {
 type workerSessionScope struct {
 	run        *grpcWorkerRun
 	connection *grpcWorkerConnection
+}
+
+// sessionScopeAfterAck returns scope once the service has accepted at least
+// one session turn, so the work item is in a session. Otherwise it returns
+// nil, and the work item is handled like any other.
+func sessionScopeAfterAck(scope *workerSessionScope, turnCount int32) *workerSessionScope {
+	if turnCount == 0 {
+		return nil
+	}
+	return scope
 }
 
 // available reports whether a new session turn may use the streaming RPC.
@@ -252,9 +207,8 @@ const (
 type sessionCall struct {
 	instanceID string
 	open       func(context.Context) (grpc.ServerStreamingClient[protos.CompleteTaskWithExtendedSessionResponse], error)
-	// onAck runs when the service accepts the turn. It returns the estimated
-	// size of the loaded session.
-	onAck   func(*protos.ExtendedSessionAck) int64
+	// onAck runs when the service accepts the turn.
+	onAck   func(*protos.ExtendedSessionAck)
 	release func(context.Context) error
 	abandon func(context.Context) error
 }
@@ -271,11 +225,10 @@ type sessionMessage struct {
 func (w *TaskHubGrpcWorker) awaitSessionBatch(
 	ctx context.Context,
 	scope *workerSessionScope,
-	lease *sessionLease,
 	call sessionCall,
 ) (sessionOutcome, []*protos.HistoryEvent) {
 	for attempt := 1; ; attempt++ {
-		outcome, batch, preAckErr := w.runSessionStream(ctx, scope, lease, call)
+		outcome, batch, preAckErr := w.runSessionStream(ctx, scope, call)
 		if preAckErr == nil {
 			return outcome, batch
 		}
@@ -307,7 +260,6 @@ func (w *TaskHubGrpcWorker) awaitSessionBatch(
 func (w *TaskHubGrpcWorker) runSessionStream(
 	ctx context.Context,
 	scope *workerSessionScope,
-	lease *sessionLease,
 	call sessionCall,
 ) (sessionOutcome, []*protos.HistoryEvent, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -355,10 +307,10 @@ func (w *TaskHubGrpcWorker) runSessionStream(
 	acked, transferring := false, false
 	var batch []*protos.HistoryEvent
 	for {
-		// Shutdown and eviction end a session only while it waits.
-		var stopping, evicted <-chan struct{}
+		// Shutdown ends a session only while it waits.
+		var stopping <-chan struct{}
 		if acked && !transferring {
-			stopping, evicted = scope.run.intakeCtx.Done(), lease.evict
+			stopping = scope.run.intakeCtx.Done()
 		}
 		select {
 		case <-ctx.Done():
@@ -367,8 +319,6 @@ func (w *TaskHubGrpcWorker) runSessionStream(
 			return end("the work item stream ended", false)
 		case <-stopping:
 			return end("the worker is shutting down", true)
-		case <-evicted:
-			return end("the session cache is full", true)
 		case <-timer:
 			switch {
 			case !acked:
@@ -399,7 +349,7 @@ func (w *TaskHubGrpcWorker) runSessionStream(
 					return end("the service sent a second acknowledgement", true)
 				}
 				acked = true
-				lease.setIdle(call.onAck(response.Ack))
+				call.onAck(response.Ack)
 				restartTimer(sessionIdleTimer, w.options.extendedSessions.IdleTimeout)
 			case *protos.CompleteTaskWithExtendedSessionResponse_HealthPing:
 				// A ping shows only that the connection is alive.
@@ -409,7 +359,6 @@ func (w *TaskHubGrpcWorker) runSessionStream(
 				}
 				if !transferring {
 					transferring = true
-					lease.setBusy()
 					restartTimer(sessionTransferTimer, w.options.extendedSessions.TransferTimeout)
 				}
 				batch = append(batch, response.NewMessages.GetEvents()...)
