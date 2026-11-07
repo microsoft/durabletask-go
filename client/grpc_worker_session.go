@@ -12,7 +12,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
+
+// sessionCompletionCountReserve is the largest encoding of a non-negative
+// completionCount field: a one-byte tag and a varint of up to five bytes.
+const sessionCompletionCountReserve = 6
 
 // DefaultExtendedSessionTimeout is the default idle and transfer timeout of an
 // extended session.
@@ -235,8 +240,15 @@ func (w *TaskHubGrpcWorker) awaitSessionBatch(
 			return outcome, batch
 		}
 		switch {
-		case errors.Is(preAckErr, errSessionStreamBudgetFull):
+		case errors.Is(preAckErr, errSessionStreamBudgetFull) && attempt == 1:
 			return sessionUseUnary, nil
+		case errors.Is(preAckErr, errSessionStreamBudgetFull):
+			// An earlier attempt may have been applied without its
+			// acknowledgement. A unary completion with the same count could
+			// then fail and leave the session open, so abandon instead.
+			w.logger.Warnf("%s: no session stream is free to retry the completion; abandoning the work item", call.instanceID)
+			w.cleanupSessionWorkItem(ctx, scope, call.instanceID, "abandon", call.abandon)
+			return sessionEnded, nil
 		case status.Code(preAckErr) == codes.Unimplemented:
 			w.logger.Infof("%s: the service does not support extended sessions; completing without them until the next reconnect", call.instanceID)
 			scope.connection.sessionsUnsupported.Store(true)
@@ -266,7 +278,18 @@ func (w *TaskHubGrpcWorker) runSessionStream(
 ) (sessionOutcome, []*protos.HistoryEvent, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Opening the stream also sends the request, which can block. The
+	// acknowledgement timeout covers it, and so does the end of the intake
+	// generation.
+	opened := time.Now()
+	openTimer := time.AfterFunc(w.options.rpcTimeout, cancel)
+	stopGenerationLink := context.AfterFunc(scope.connection.streamCtx, cancel)
 	stream, err := call.open(streamCtx)
+	openTimedOut := !openTimer.Stop()
+	stopGenerationLink()
+	if openTimedOut {
+		return 0, nil, status.Error(codes.DeadlineExceeded, "opening the session stream timed out")
+	}
 	if err != nil {
 		return 0, nil, err
 	}
@@ -291,7 +314,7 @@ func (w *TaskHubGrpcWorker) runSessionStream(
 		<-received
 	}()
 
-	timer, stopTimer := w.sessionTimer(sessionAckTimer, w.options.rpcTimeout)
+	timer, stopTimer := w.sessionTimer(sessionAckTimer, max(0, w.options.rpcTimeout-time.Since(opened)))
 	defer func() { stopTimer() }()
 	restartTimer := func(kind sessionTimerKind, timeout time.Duration) {
 		stopTimer()
@@ -307,7 +330,10 @@ func (w *TaskHubGrpcWorker) runSessionStream(
 	}
 
 	acked, transferring := false, false
-	var batch []*protos.HistoryEvent
+	var (
+		batch      []*protos.HistoryEvent
+		batchBytes int64
+	)
 	for {
 		// Shutdown ends a session only while it waits.
 		var stopping <-chan struct{}
@@ -363,7 +389,17 @@ func (w *TaskHubGrpcWorker) runSessionStream(
 					transferring = true
 					restartTimer(sessionTransferTimer, w.options.extendedSessions.TransferTimeout)
 				}
-				batch = append(batch, response.NewMessages.GetEvents()...)
+				// Apply the streamed-history limits to the whole batch.
+				events := response.NewMessages.GetEvents()
+				if limit := w.options.maxStreamedHistoryEvents; limit > 0 && len(events) > limit-len(batch) {
+					return end(fmt.Sprintf("the batch exceeds %d events", limit), true)
+				}
+				chunkBytes := int64(proto.Size(response.NewMessages))
+				if limit := w.options.maxStreamedHistoryBytes; limit > 0 && chunkBytes > limit-batchBytes {
+					return end(fmt.Sprintf("the batch exceeds %d bytes", limit), true)
+				}
+				batch = append(batch, events...)
+				batchBytes += chunkBytes
 			default:
 				if !acked {
 					return 0, nil, status.Error(codes.Internal, "the service sent an unknown session message")

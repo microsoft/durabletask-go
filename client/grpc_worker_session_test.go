@@ -14,6 +14,7 @@ import (
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/microsoft/durabletask-go/payload"
 	"github.com/microsoft/durabletask-go/task"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -86,8 +87,10 @@ func (c *fakeSessionCall) count() int32 {
 // sessionSchedulerClient adds the extended-session RPCs to the fake scheduler.
 type sessionSchedulerClient struct {
 	*fakeSchedulerClient
-	calls      chan *fakeSessionCall
-	openErr    func() error
+	calls   chan *fakeSessionCall
+	openErr func() error
+	// openWait runs before the stream opens and can block like a send.
+	openWait   func(context.Context) error
 	unaryErr   func() error
 	releaseErr func() error
 	abandonErr func() error
@@ -127,6 +130,11 @@ func (c *sessionSchedulerClient) CompleteOrchestratorTask(
 }
 
 func (c *sessionSchedulerClient) open(ctx context.Context, call *fakeSessionCall) (grpc.ServerStreamingClient[protos.CompleteTaskWithExtendedSessionResponse], error) {
+	if c.openWait != nil {
+		if err := c.openWait(ctx); err != nil {
+			return nil, err
+		}
+	}
 	if c.openErr != nil {
 		if err := c.openErr(); err != nil {
 			return nil, err
@@ -1009,3 +1017,162 @@ func (*erroringStreamConn) NewStream(context.Context, *grpc.StreamDesc, string, 
 type erroringClientStream struct{ grpc.ClientStream }
 
 func (erroringClientStream) RecvMsg(any) error { return io.EOF }
+
+func TestWorkerSessionBudgetFullAfterUncertainAttemptAbandons(t *testing.T) {
+	h := newSessionHarness(t, 2)
+	var opens atomic.Int32
+	h.client.openErr = func() error {
+		if opens.Add(1) == 2 {
+			return errSessionStreamBudgetFull
+		}
+		return nil
+	}
+	h.dispatch("uncertain")
+	// The service may have applied this attempt before the stream broke.
+	h.client.nextCall(t).stream.end(status.Error(codes.Unavailable, "lost"))
+	require.Eventually(t, func() bool { return h.client.abandons() == 1 }, 5*time.Second, time.Millisecond)
+	require.EqualValues(t, 2, opens.Load())
+	h.client.noCall(t)
+	require.Empty(t, h.client.unaryOrchestrations(), "a unary completion after an uncertain attempt can leave the session open")
+}
+
+func TestWorkerSessionOpenTimeoutRetries(t *testing.T) {
+	h := newSessionHarness(t, 1, WithWorkerRPCTimeout(200*time.Millisecond))
+	var opens atomic.Int32
+	h.client.openWait = func(ctx context.Context) error {
+		if opens.Add(1) == 1 {
+			<-ctx.Done()
+			return status.FromContextError(ctx.Err()).Err()
+		}
+		return nil
+	}
+	h.dispatch("slow-open")
+	retried := h.client.nextCall(t)
+	require.EqualValues(t, 2, opens.Load(), "a stuck open must time out and retry")
+	require.EqualValues(t, 0, retried.count())
+	require.Zero(t, h.client.abandons())
+}
+
+func TestWorkerSessionOpenStopsWhenIntakeEnds(t *testing.T) {
+	h := newSessionHarness(t, 1, WithWorkerRPCTimeout(time.Minute))
+	opening := make(chan struct{})
+	unblocked := make(chan struct{})
+	var opens atomic.Int32
+	h.client.openWait = func(ctx context.Context) error {
+		if opens.Add(1) > 1 {
+			return nil
+		}
+		close(opening)
+		<-ctx.Done()
+		close(unblocked)
+		return status.FromContextError(ctx.Err()).Err()
+	}
+	h.dispatch("stuck")
+	<-opening
+	h.client.stream.results <- fakeWorkItemResult{err: status.Error(codes.Unavailable, "intake ended")}
+	select {
+	case <-unblocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stuck open did not stop when its intake generation ended")
+	}
+	require.Never(t, func() bool {
+		return h.client.abandons() != 0 || len(h.client.unaryOrchestrations()) != 0
+	}, 50*time.Millisecond, 5*time.Millisecond)
+}
+
+func TestWorkerSessionBatchLimitsRelease(t *testing.T) {
+	t.Run("events", func(t *testing.T) {
+		h := newSessionHarness(t, 2, WithMaxStreamedHistoryEvents(2))
+		h.dispatch("events")
+		first := h.client.nextCall(t)
+		first.stream.ack(4)
+		first.stream.chunk(helpers.NewOrchestratorStartedEvent(), helpers.NewEventRaisedEvent("x", nil))
+		first.stream.chunk(helpers.NewTaskCompletedEvent(0, nil))
+		require.Eventually(t, func() bool { return h.client.releases.Load() == 1 }, 5*time.Second, time.Millisecond)
+		h.client.noCall(t)
+		require.Empty(t, h.client.unaryOrchestrations())
+	})
+	t.Run("bytes", func(t *testing.T) {
+		h := newSessionHarness(t, 2, WithMaxStreamedHistoryBytes(256))
+		h.dispatch("bytes")
+		first := h.client.nextCall(t)
+		first.stream.ack(4)
+		first.stream.chunk(helpers.NewOrchestratorStartedEvent(),
+			helpers.NewEventRaisedEvent("x", wrapperspb.String(strings.Repeat("x", 512))))
+		require.Eventually(t, func() bool { return h.client.releases.Load() == 1 }, 5*time.Second, time.Millisecond)
+		h.client.noCall(t)
+		require.Empty(t, h.client.unaryOrchestrations())
+	})
+}
+
+func TestWorkerSessionReservesCompletionCountBytes(t *testing.T) {
+	for _, message := range []proto.Message{&protos.OrchestratorResponse{InstanceId: "x"}, &protos.EntityBatchResult{}} {
+		before := proto.Size(message)
+		switch m := message.(type) {
+		case *protos.OrchestratorResponse:
+			m.CompletionCount = math.MaxInt32
+		case *protos.EntityBatchResult:
+			m.CompletionCount = math.MaxInt32
+		}
+		require.LessOrEqual(t, proto.Size(message)-before, sessionCompletionCountReserve)
+	}
+	off := newSessionHarness(t, 1, WithMaxOrchestratorCompletionBytes(64*1024)).worker
+	off.options.extendedSessions = nil
+	require.Equal(t, 64*1024, off.orchestratorCompletionLimit())
+	on := newSessionHarness(t, 1, WithMaxOrchestratorCompletionBytes(64*1024)).worker
+	require.Equal(t, 64*1024-sessionCompletionCountReserve, on.orchestratorCompletionLimit())
+}
+
+type countingPayloadStore struct {
+	*payload.MemoryStore
+	resolves atomic.Int32
+}
+
+func (s *countingPayloadStore) Resolve(ctx context.Context, location string) ([]byte, error) {
+	s.resolves.Add(1)
+	return s.MemoryStore.Resolve(ctx, location)
+}
+
+func TestWorkerEntitySessionCachesStateBeforeExternalization(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddEntityN("text", func(ctx *task.EntityContext) (any, error) {
+		var value string
+		if ctx.HasState() {
+			if err := ctx.GetState(&value); err != nil {
+				return nil, err
+			}
+		}
+		return nil, ctx.SetState(value + "x")
+	}))
+	store := &countingPayloadStore{MemoryStore: payload.NewMemoryStore()}
+	client := newSessionSchedulerClient()
+	h := startSessionWorker(t, registry, client, WithWorkerLargePayloads(&api.LargePayloadOptions{
+		Store: store, Resolver: store, ThresholdBytes: 1, MaxPayloadBytes: 1024,
+	}))
+	var requests []*protos.EntityBatchRequest
+	var mu sync.Mutex
+	base := h.worker.executor.(task.EntityExecutor)
+	h.worker.executor = &recordingExecutor{executeEntity: func(ctx context.Context, request *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
+		mu.Lock()
+		requests = append(requests, proto.Clone(request).(*protos.EntityBatchRequest))
+		mu.Unlock()
+		return base.ExecuteEntity(ctx, request)
+	}}
+	client.stream.results <- fakeWorkItemResult{item: &protos.WorkItem{
+		Request:         &protos.WorkItem_EntityRequestV2{EntityRequestV2: entitySessionRequest("@text@a", entitySignal("add"))},
+		CompletionToken: "entity-token",
+	}}
+
+	first := client.nextCall(t)
+	require.True(t, api.IsLargePayloadReference(first.entity.EntityState.GetValue()), "the service must get the externalized state")
+	first.stream.ack(0)
+	first.stream.batch(helpers.NewOrchestratorStartedEvent(), entitySignal("add"))
+
+	second := client.nextCall(t)
+	require.True(t, api.IsLargePayloadReference(second.entity.EntityState.GetValue()))
+	require.Zero(t, store.resolves.Load(), "a resumed batch must not download the cached state")
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, requests, 2)
+	require.Equal(t, `"x"`, requests[1].EntityState.GetValue())
+}
