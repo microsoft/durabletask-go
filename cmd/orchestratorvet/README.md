@@ -122,7 +122,15 @@ leave the loop nor make durable progress. Any `return`, `break`, `goto`,
 labelled statement, closure, `go` statement, `defer`, or `panic` in the loop
 body ends the proof, as does any call the analyzer cannot follow, except calls
 to packages it explicitly models as pure. Any interaction with the durable task
-package counts as possible progress and suppresses the report.
+package counts as possible progress and suppresses the report, except
+`task.IsCompleted`, which only reads completion state and never yields.
+
+A loop whose only condition is `!task.IsCompleted(t)` is held to the same proof
+and reported with a polling-specific message, because a task cannot complete
+while the orchestration never yields. The report requires `t` to be a local
+variable that the loop does not assign and whose address is never taken or
+captured by a closure. Compound conditions, such as an added counter bound, are
+not reported.
 
 Await a task, wait for an event, or call `ctx.ContinueAsNew` to make the loop
 durable.
