@@ -247,6 +247,7 @@ type Orchestration struct {
 	acceptedSends map[int32]struct{}
 	entities      map[string]pendingSpan
 	entitySignals map[int32]entitySignalSpan
+	entityAcks    map[entitySignalKey]struct{}
 	pending       []pendingSpan
 
 	logicalOnce sync.Once
@@ -270,6 +271,7 @@ func (t *Tracer) StartOrchestration(
 		acceptedSends: make(map[int32]struct{}),
 		entities:      make(map[string]pendingSpan),
 		entitySignals: make(map[int32]entitySignalSpan),
+		entityAcks:    make(map[entitySignalKey]struct{}),
 	}
 	for _, events := range eventLists {
 		for _, event := range events {
@@ -284,6 +286,9 @@ func (t *Tracer) StartOrchestration(
 				o.version = started.GetVersion().GetValue()
 				o.executionID = started.GetOrchestrationInstance().GetExecutionId().GetValue()
 				o.parent = helpers.SpanContextFromTraceContext(started.GetParentTraceContext())
+			}
+			if signaled := event.GetEntityOperationSignaled(); signaled != nil {
+				o.entityAcks[entitySignalKey{eventID: event.EventId, requestID: signaled.RequestId}] = struct{}{}
 			}
 		}
 	}
@@ -608,9 +613,14 @@ func (o *Orchestration) Emit(response *protos.OrchestratorResponse) {
 	}
 	logical := o.SpanContext()
 	for _, action := range response.GetActions() {
-		if action.GetSendEntityMessage().GetEntityOperationSignaled() != nil {
+		if signaled := action.GetSendEntityMessage().GetEntityOperationSignaled(); signaled != nil {
 			if span, ok := o.entitySignals[action.Id]; ok {
-				o.pending = append(o.pending, span.pendingSpan)
+				// A replayed action can remain pending when its acknowledgement
+				// is beyond the current turn's event budget.
+				_, acknowledged := o.entityAcks[entitySignalKey{eventID: action.Id, requestID: signaled.RequestId}]
+				if !span.createdDuringReplay || !acknowledged {
+					o.pending = append(o.pending, span.pendingSpan)
+				}
 			}
 		}
 		if sent := action.GetSendEvent(); sent != nil {

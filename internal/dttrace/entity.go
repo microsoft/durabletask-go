@@ -115,6 +115,11 @@ type entitySignalSpan struct {
 	createdDuringReplay bool
 }
 
+type entitySignalKey struct {
+	eventID   int32
+	requestID string
+}
+
 // RecordEntitySignal also reserves replayed actions: a buffered event may
 // create a new action while the replay engine still considers it replaying.
 func (o *Orchestration) RecordEntitySignal(action *protos.OrchestratorAction, id api.EntityID, replaying bool) {
