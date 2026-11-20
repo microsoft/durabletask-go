@@ -210,6 +210,42 @@ func TestWorkerTracingEventSendAndReceipt(t *testing.T) {
 	}
 }
 
+func TestWorkerTracingEventSendAckDeferredByTurnBudget(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Sender", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SendEvent("receiver", "approval", nil); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	_, parentTrace := newTraceParent(trace.FlagsSampled)
+	backend := newFakeOrchestrationBackend("sender", helpers.NewExecutionStartedEvent(
+		"Sender", "sender", nil, nil, parentTrace, nil))
+	h := newTracingHarness(t, registry, true,
+		task.WithOrchestrationOptions(task.OrchestrationOptions{MaxEventsPerTurn: 1}))
+	response := backend.dispatch(t, h)
+	require.Len(t, spansNamed(h.spans(), "orchestration_event:approval"), 1)
+
+	// Deliver the accepted send's acknowledgement behind an unrelated event.
+	ack := backend.history[len(backend.history)-1]
+	require.NotNil(t, ack.GetEventSent())
+	backend.history = backend.history[:len(backend.history)-1]
+	deferred := backend.dispatch(t, h, helpers.NewEventRaisedEvent("unrelated", nil), ack)
+	require.Equal(t, int32(1), deferred.GetNumEventsProcessed().GetValue())
+	require.Len(t, deferred.Actions, 1)
+	require.Equal(t, response.Actions[0].Id, deferred.Actions[0].Id)
+	require.NotNil(t, deferred.Actions[0].GetSendEvent())
+	require.Len(t, spansNamed(h.spans(), "orchestration_event:approval"), 1,
+		"a replayed send must not export again while its acknowledgement is deferred")
+
+	// The real backend deduplicates the replayed send; retain only the original
+	// acknowledgement, still pending delivery, rather than the fake's new one.
+	backend.history = backend.history[:len(backend.history)-1]
+	backend.dispatch(t, h)
+	backend.dispatch(t, h, helpers.NewEventRaisedEvent("finish", nil))
+	require.Len(t, spansNamed(h.spans(), "orchestration_event:approval"), 1)
+}
+
 func TestWorkerTracingEventSendSameBatch(t *testing.T) {
 	registry := task.NewTaskRegistry()
 	require.NoError(t, registry.AddOrchestratorN("BatchSend", func(ctx *task.OrchestrationContext) (any, error) {
