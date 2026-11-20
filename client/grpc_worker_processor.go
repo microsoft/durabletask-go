@@ -668,7 +668,11 @@ func (w *TaskHubGrpcWorker) processEntityV2(
 			w.abandonEntity(ctx, client, completionToken)
 			return
 		}
-		w.completeEntityBatchFailure(ctx, client, request.GetInstanceId(), completionToken, err)
+		failedAt := time.Now()
+		result := newEntityBatchFailure(completionToken, err)
+		if w.completeEntityBatchResult(ctx, client, request.GetInstanceId(), result) && w.options.tracer != nil {
+			w.options.tracer.EmitEntityBatch(entityID, batch, result, failedAt, failedAt)
+		}
 		return
 	}
 	executor, ok := w.executor.(task.EntityExecutor)
@@ -746,16 +750,6 @@ func newEntityBatchFailure(completionToken string, err error) *protos.EntityBatc
 		CompletionToken: completionToken,
 		FailureDetails:  failure.FromError(err),
 	}
-}
-
-func (w *TaskHubGrpcWorker) completeEntityBatchFailure(
-	ctx context.Context,
-	client protos.TaskHubSidecarServiceClient,
-	instanceID string,
-	completionToken string,
-	err error,
-) {
-	w.completeEntityBatchResult(ctx, client, instanceID, newEntityBatchFailure(completionToken, err))
 }
 
 func validateEntityBatchResult(

@@ -20,7 +20,9 @@ import (
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/helpers"
+	"github.com/microsoft/durabletask-go/internal/largepayload"
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/microsoft/durabletask-go/payload"
 	"github.com/microsoft/durabletask-go/task"
 	"github.com/microsoft/durabletask-go/tracing"
 )
@@ -548,6 +550,40 @@ func TestWorkerTracingEntityExternalizationFailure(t *testing.T) {
 			require.Contains(t, h.spans()[0].Status().Description, "externalize failed")
 			require.Len(t, h.client.entityCompletions, 1)
 			require.NotNil(t, h.client.entityCompletions[0].FailureDetails)
+		})
+	}
+}
+
+func TestWorkerTracingEntityHydrationFailure(t *testing.T) {
+	for _, mode := range []string{"accepted", "rejected", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			h := newTracingHarness(t, task.NewTaskRegistry(), true)
+			store := payload.NewMemoryStore()
+			input, err := largepayload.Externalize(context.Background(),
+				&api.LargePayloadOptions{Store: store, Resolver: store, ThresholdBytes: 1, MaxPayloadBytes: 1024},
+				wrapperspb.String(`"large"`))
+			require.NoError(t, err)
+			resolveErr := errors.New("hydrate failed")
+			if mode == "canceled" {
+				resolveErr = context.Canceled
+			}
+			h.worker.options.largePayloads = &api.LargePayloadOptions{
+				Store: store, Resolver: &failingPayloadBackend{resolveErr: resolveErr}, ThresholdBytes: 1, MaxPayloadBytes: 1024,
+			}
+			if mode == "rejected" {
+				h.client.entityCompletionErr = errors.New("completion rejected")
+			}
+			h.worker.processEntityV2(context.Background(), h.client, "token", newFakeEntitySignalRequest("run", input))
+			if mode != "accepted" {
+				require.Empty(t, h.spans())
+				return
+			}
+			require.Len(t, h.spans(), 1)
+			span := h.spans()[0]
+			require.Equal(t, "entity:counter:run", span.Name())
+			require.Equal(t, trace.SpanKindConsumer, span.SpanKind())
+			require.Equal(t, codes.Error, span.Status().Code)
+			require.Contains(t, span.Status().Description, "hydrate failed")
 		})
 	}
 }
