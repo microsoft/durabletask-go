@@ -6,17 +6,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/helpers"
+	"github.com/microsoft/durabletask-go/internal/largepayload"
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"github.com/microsoft/durabletask-go/payload"
 	"github.com/microsoft/durabletask-go/task"
 	"github.com/microsoft/durabletask-go/tracing"
 )
@@ -69,11 +75,12 @@ func (h *tracingHarness) spans() []sdktrace.ReadOnlySpan {
 // fakeOrchestrationBackend persists history and orchestration trace context
 // between dispatches the way a Durable Task backend does.
 type fakeOrchestrationBackend struct {
-	instanceID   string
-	history      []*protos.HistoryEvent
-	traceContext *protos.OrchestrationTraceContext
-	scheduled    map[int32]*protos.TraceContext
-	pending      []*protos.HistoryEvent
+	instanceID       string
+	history          []*protos.HistoryEvent
+	traceContext     *protos.OrchestrationTraceContext
+	scheduled        map[int32]*protos.TraceContext
+	pending          []*protos.HistoryEvent
+	entityParameters *protos.OrchestratorEntityParameters
 }
 
 func newFakeOrchestrationBackend(instanceID string, started *protos.HistoryEvent) *fakeOrchestrationBackend {
@@ -100,6 +107,7 @@ func (b *fakeOrchestrationBackend) dispatch(
 		PastEvents:                append([]*protos.HistoryEvent(nil), b.history...),
 		NewEvents:                 append([]*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent()}, delivered...),
 		OrchestrationTraceContext: b.traceContext,
+		EntityParameters:          b.entityParameters,
 	}
 	before := len(h.client.orchestrationCompletions)
 	h.worker.processOrchestration(context.Background(), h.client, "token", request)
@@ -128,10 +136,456 @@ func (b *fakeOrchestrationBackend) dispatch(
 				action.Id, created.Name, created.Version, created.Input, created.InstanceId, created.ParentTraceContext))
 		case action.GetSendEvent() != nil:
 			b.history = append(b.history, tracingEventSent(action))
+		case action.GetSendEntityMessage() != nil:
+			b.history = append(b.history, tracingEntitySent(action))
 		}
 	}
 	b.traceContext = response.OrchestrationTraceContext
 	return response
+}
+
+func tracingEntitySent(action *protos.OrchestratorAction) *protos.HistoryEvent {
+	event := &protos.HistoryEvent{EventId: action.Id, Timestamp: timestamppb.Now()}
+	message := action.GetSendEntityMessage()
+	if called := message.GetEntityOperationCalled(); called != nil {
+		event.EventType = &protos.HistoryEvent_EntityOperationCalled{
+			EntityOperationCalled: proto.Clone(called).(*protos.EntityOperationCalledEvent),
+		}
+	} else if signal := message.GetEntityOperationSignaled(); signal != nil {
+		event.EventType = &protos.HistoryEvent_EntityOperationSignaled{
+			EntityOperationSignaled: proto.Clone(signal).(*protos.EntityOperationSignaledEvent),
+		}
+	} else if lock := message.GetEntityLockRequested(); lock != nil {
+		event.EventType = &protos.HistoryEvent_EntityLockRequested{
+			EntityLockRequested: proto.Clone(lock).(*protos.EntityLockRequestedEvent),
+		}
+	} else if unlock := message.GetEntityUnlockSent(); unlock != nil {
+		event.EventType = &protos.HistoryEvent_EntityUnlockSent{
+			EntityUnlockSent: proto.Clone(unlock).(*protos.EntityUnlockSentEvent),
+		}
+	}
+	return event
+}
+
+func TestWorkerTracingEntityLocksEmitNoSpans(t *testing.T) {
+	id := api.NewEntityID("counter", "key")
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Locker", func(ctx *task.OrchestrationContext) (any, error) {
+		unlock, err := ctx.LockEntities(id)
+		if err != nil {
+			return nil, err
+		}
+		_ = ctx.CallEntity(id, "get").Await(nil)
+		unlock()
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	h := newTracingHarness(t, registry, true)
+	backend := newFakeOrchestrationBackend("locker", helpers.NewExecutionStartedEvent(
+		"Locker", "locker", nil, nil, nil, nil))
+	backend.entityParameters = &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)}
+
+	response := backend.dispatch(t, h)
+	require.Len(t, response.Actions, 1)
+	lock := response.Actions[0].GetSendEntityMessage().GetEntityLockRequested()
+	require.NotNil(t, lock)
+	granted := &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.Now(),
+		EventType: &protos.HistoryEvent_EntityLockGranted{
+			EntityLockGranted: &protos.EntityLockGrantedEvent{CriticalSectionId: lock.CriticalSectionId},
+		}}
+	response = backend.dispatch(t, h, granted)
+	var called *protos.EntityOperationCalledEvent
+	for _, action := range response.Actions {
+		if c := action.GetSendEntityMessage().GetEntityOperationCalled(); c != nil {
+			called = c
+		}
+	}
+	require.NotNil(t, called)
+	completed := &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.Now(),
+		EventType: &protos.HistoryEvent_EntityOperationCompleted{
+			EntityOperationCompleted: &protos.EntityOperationCompletedEvent{RequestId: called.RequestId},
+		}}
+	response = backend.dispatch(t, h, completed)
+	unlocked := false
+	for _, action := range response.Actions {
+		unlocked = unlocked || action.GetSendEntityMessage().GetEntityUnlockSent() != nil
+	}
+	require.True(t, unlocked)
+	backend.dispatch(t, h)
+
+	// Lock acquisition and release emit no spans; calls in the critical section
+	// are traced once.
+	spans := h.spans()
+	require.Len(t, spans, 1)
+	require.Equal(t, "entity:counter:get", spans[0].Name())
+	require.Equal(t, trace.SpanKindClient, spans[0].SpanKind())
+}
+
+func TestWorkerTracingEntityCallsAndSignalsReplay(t *testing.T) {
+	for _, mode := range []string{"enabled", "disabled", "unsampled", "failed-call"} {
+		t.Run(mode, func(t *testing.T) {
+			id := api.NewEntityID("counter", "key")
+			scheduled := time.Now().UTC().Add(time.Hour)
+			registry := task.NewTaskRegistry()
+			require.NoError(t, registry.AddOrchestratorN("EntityCaller", func(ctx *task.OrchestrationContext) (any, error) {
+				if err := ctx.SignalEntity(id, "add", task.WithSignalEntityScheduledTime(scheduled)); err != nil {
+					return nil, err
+				}
+				_ = ctx.CallEntity(id, "get").Await(nil)
+				return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+			}))
+			flags := trace.FlagsSampled
+			if mode == "unsampled" {
+				flags = 0
+			}
+			_, parent := newTraceParent(flags)
+			backend := newFakeOrchestrationBackend("caller", helpers.NewExecutionStartedEvent(
+				"EntityCaller", "caller", nil, nil, parent, nil))
+			backend.entityParameters = &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)}
+			h := newTracingHarness(t, registry, mode != "disabled")
+			response := backend.dispatch(t, h)
+			require.Len(t, response.Actions, 2)
+			var called *protos.EntityOperationCalledEvent
+			for _, action := range response.Actions {
+				if c := action.GetSendEntityMessage().GetEntityOperationCalled(); c != nil {
+					called = c
+				}
+			}
+			require.NotNil(t, called)
+			want := 1
+			if mode == "disabled" || mode == "unsampled" {
+				want = 0
+			}
+			require.Len(t, spansNamed(h.spans(), "entity:counter:add"), want)
+			backend.dispatch(t, h)
+			require.Len(t, spansNamed(h.spans(), "entity:counter:add"), want)
+			require.Empty(t, spansNamed(h.spans(), "entity:counter:get"))
+			completed := &protos.HistoryEvent{Timestamp: timestamppb.Now(),
+				EventType: &protos.HistoryEvent_EntityOperationCompleted{
+					EntityOperationCompleted: &protos.EntityOperationCompletedEvent{RequestId: called.RequestId},
+				}}
+			if mode == "failed-call" {
+				completed.EventType = &protos.HistoryEvent_EntityOperationFailed{
+					EntityOperationFailed: &protos.EntityOperationFailedEvent{
+						RequestId: called.RequestId, FailureDetails: &protos.TaskFailureDetails{ErrorMessage: "entity failed"},
+					}}
+			}
+			backend.dispatch(t, h, completed)
+			require.Len(t, spansNamed(h.spans(), "entity:counter:get"), want)
+			if want != 0 {
+				signal := spansNamed(h.spans(), "entity:counter:add")[0]
+				call := spansNamed(h.spans(), "entity:counter:get")[0]
+				require.Equal(t, trace.SpanKindProducer, signal.SpanKind())
+				require.Equal(t, trace.SpanKindClient, call.SpanKind())
+				require.Equal(t, "signal_entity", spanAttribute(signal, "durabletask.task.operation"))
+				require.Equal(t, "call_entity", spanAttribute(call, "durabletask.task.operation"))
+				require.Equal(t, id.String(), spanAttribute(call, "durabletask.event.target_instance_id"))
+				require.Equal(t, scheduled.Format(time.RFC3339Nano), spanAttribute(signal, "durabletask.task.scheduled_time"))
+				require.Equal(t, response.OrchestrationTraceContext.GetSpanID().GetValue(), call.Parent().SpanID().String())
+				require.Equal(t, helpers.SpanContextFromTraceContext(parent).TraceID(), call.SpanContext().TraceID())
+				require.True(t, completed.Timestamp.AsTime().Equal(call.EndTime()))
+				if mode == "failed-call" {
+					require.Equal(t, codes.Error, call.Status().Code)
+					require.Equal(t, "entity failed", call.Status().Description)
+				}
+			}
+			backend.dispatch(t, h)
+			require.Len(t, spansNamed(h.spans(), "entity:counter:get"), want)
+		})
+	}
+}
+
+func TestWorkerTracingEntitySignalSameDispatch(t *testing.T) {
+	id := api.NewEntityID("counter", "key")
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Signal", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SignalEntity(id, "add"); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	h := newTracingHarness(t, registry, true)
+	backend := newFakeOrchestrationBackend("caller", helpers.NewExecutionStartedEvent(
+		"Signal", "caller", nil, nil, nil, nil))
+	backend.entityParameters = &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)}
+	response := backend.dispatch(t, h)
+	sent := tracingEntitySent(response.Actions[0])
+	// A fresh worker receives the same initial history plus its signal acknowledgement.
+	h = newTracingHarness(t, registry, true)
+	request := &protos.OrchestratorRequest{
+		InstanceId: "caller", EntityParameters: backend.entityParameters,
+		NewEvents: append(append([]*protos.HistoryEvent(nil), backend.history[:2]...), sent),
+	}
+	h.worker.processOrchestration(context.Background(), h.client, "token", request)
+	require.Empty(t, h.client.orchestrationCompletions[0].Actions)
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+	request.PastEvents, request.NewEvents = request.NewEvents, []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent()}
+	request.OrchestrationTraceContext = h.client.orchestrationCompletions[0].OrchestrationTraceContext
+	h.worker.processOrchestration(context.Background(), h.client, "token", request)
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+}
+
+func TestWorkerTracingEntitySignalAfterResume(t *testing.T) {
+	id := api.NewEntityID("counter", "key")
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("SignalAfterResume", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.WaitForSingleEvent("next", -1).Await(nil); err != nil {
+			return nil, err
+		}
+		if err := ctx.SignalEntity(id, "add"); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	h := newTracingHarness(t, registry, true)
+	backend := newFakeOrchestrationBackend("caller", helpers.NewExecutionStartedEvent(
+		"SignalAfterResume", "caller", nil, nil, nil, nil))
+	backend.entityParameters = &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)}
+	backend.dispatch(t, h)
+	backend.dispatch(t, h, helpers.NewSuspendOrchestrationEvent(""))
+	backend.dispatch(t, h, helpers.NewEventRaisedEvent("next", nil))
+	require.Empty(t, h.spans())
+
+	response := backend.dispatch(t, h, helpers.NewResumeOrchestrationEvent(""))
+	require.Len(t, response.Actions, 1)
+	require.NotNil(t, response.Actions[0].GetSendEntityMessage().GetEntityOperationSignaled())
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+	backend.dispatch(t, h)
+	backend.dispatch(t, h, helpers.NewEventRaisedEvent("finish", nil))
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+}
+
+func TestWorkerTracingEntitySignalCanonicalNameAndAcknowledgement(t *testing.T) {
+	id := api.EntityID{Name: "Counter", Key: "key"}
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Signal", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SignalEntity(id, "add"); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	h := newTracingHarness(t, registry, true)
+	backend := newFakeOrchestrationBackend("caller", helpers.NewExecutionStartedEvent(
+		"Signal", "caller", nil, nil, nil, nil))
+	backend.entityParameters = &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)}
+	response := backend.dispatch(t, h)
+	require.Len(t, response.Actions, 1)
+	spans := spansNamed(h.spans(), "entity:counter:add")
+	require.Len(t, spans, 1)
+	require.Equal(t, id.String(), spanAttribute(spans[0], "durabletask.event.target_instance_id"))
+
+	// Deliver the acknowledgement as new history after the signal was exported.
+	backend.history = backend.history[:len(backend.history)-1]
+	backend.dispatch(t, h, tracingEntitySent(response.Actions[0]))
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+}
+
+func TestWorkerTracingEntitySignalAcknowledgementBeyondTurnBudget(t *testing.T) {
+	id := api.NewEntityID("counter", "key")
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Signal", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SignalEntity(id, "add"); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	h := newTracingHarness(t, registry, true,
+		task.WithOrchestrationOptions(task.OrchestrationOptions{MaxEventsPerTurn: 1}))
+	backend := newFakeOrchestrationBackend("caller", helpers.NewExecutionStartedEvent(
+		"Signal", "caller", nil, nil, nil, nil))
+	backend.entityParameters = &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)}
+	response := backend.dispatch(t, h)
+	require.Len(t, response.Actions, 1)
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+
+	ack := tracingEntitySent(response.Actions[0])
+	backend.history = backend.history[:len(backend.history)-1]
+	response = backend.dispatch(t, h, helpers.NewEventRaisedEvent("other", nil), ack)
+	require.NotNil(t, response.NumEventsProcessed)
+	require.Len(t, response.Actions, 1)
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+
+	// The backend deduplicates the replayed action and redelivers its pending acknowledgement.
+	backend.history = backend.history[:len(backend.history)-1]
+	response = backend.dispatch(t, h)
+	require.Empty(t, response.Actions)
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+}
+
+func TestWorkerTracingNewEntitySignalWithDeferredAcknowledgement(t *testing.T) {
+	id := api.NewEntityID("counter", "key")
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Signal", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SignalEntity(id, "add"); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	backend := newFakeOrchestrationBackend("caller", helpers.NewExecutionStartedEvent(
+		"Signal", "caller", nil, nil, nil, nil))
+	backend.entityParameters = &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)}
+	h := newTracingHarness(t, registry, true)
+	response := backend.dispatch(t, h)
+	require.Len(t, response.Actions, 1)
+	sent := tracingEntitySent(response.Actions[0])
+
+	h = newTracingHarness(t, registry, true,
+		task.WithOrchestrationOptions(task.OrchestrationOptions{MaxEventsPerTurn: 1}))
+	request := &protos.OrchestratorRequest{
+		InstanceId:       "caller",
+		EntityParameters: backend.entityParameters,
+		NewEvents:        append(append([]*protos.HistoryEvent(nil), backend.history[:2]...), sent),
+	}
+	h.worker.processOrchestration(context.Background(), h.client, "token", request)
+	response = h.client.orchestrationCompletions[0]
+	require.NotNil(t, response.NumEventsProcessed)
+	require.Len(t, response.Actions, 1)
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+
+	request.PastEvents = request.NewEvents[:2]
+	request.NewEvents = []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), sent}
+	request.OrchestrationTraceContext = response.OrchestrationTraceContext
+	h.worker.processOrchestration(context.Background(), h.client, "token", request)
+	require.Empty(t, h.client.orchestrationCompletions[1].Actions)
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+}
+
+func TestWorkerTracingEntityOperationResults(t *testing.T) {
+	for _, mode := range []string{"enabled", "disabled", "unsampled", "rejected", "batch-failure", "malformed-results"} {
+		t.Run(mode, func(t *testing.T) {
+			var options []sdktrace.TracerProviderOption
+			if mode == "unsampled" {
+				options = append(options, tracing.WithSampler(sdktrace.NeverSample()))
+			}
+			h := newTracingHarnessWithProviderOptions(t, task.NewTaskRegistry(), mode != "disabled", options)
+			start, end := time.Now().UTC().Add(-time.Minute), time.Now().UTC().Add(-time.Second)
+			h.worker.executor = &recordingExecutor{executeEntity: func(context.Context, *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
+				if mode == "batch-failure" {
+					return nil, errors.New("batch failed")
+				}
+				if mode == "malformed-results" {
+					return &protos.EntityBatchResult{Results: []*protos.OperationResult{nil, {}}}, nil
+				}
+				return &protos.EntityBatchResult{Results: []*protos.OperationResult{
+					{ResultType: &protos.OperationResult_Success{Success: &protos.OperationResultSuccess{
+						StartTimeUtc: timestamppb.New(start), EndTimeUtc: timestamppb.New(end),
+					}}},
+					{ResultType: &protos.OperationResult_Failure{Failure: &protos.OperationResultFailure{
+						FailureDetails: &protos.TaskFailureDetails{ErrorMessage: "operation failed"},
+						StartTimeUtc:   timestamppb.New(start), EndTimeUtc: timestamppb.New(end),
+					}}},
+				}}, nil
+			}}
+			if mode == "rejected" {
+				h.client.entityCompletionErr = errors.New("completion failed")
+			}
+			request := newFakeEntitySignalRequest("add", nil)
+			request.OperationRequests = append(request.OperationRequests, &protos.HistoryEvent{
+				EventType: &protos.HistoryEvent_EntityOperationCalled{EntityOperationCalled: &protos.EntityOperationCalledEvent{
+					RequestId: uuid.NewString(), Operation: "get", ParentInstanceId: wrapperspb.String("caller"),
+				}},
+			})
+			h.worker.processEntityV2(context.Background(), h.client, "token", request)
+			if mode == "disabled" || mode == "unsampled" || mode == "rejected" {
+				require.Empty(t, h.spans())
+				return
+			}
+			require.Len(t, h.spans(), 2)
+			signal, call := h.spans()[0], h.spans()[1]
+			require.Equal(t, "entity:counter:add", signal.Name())
+			require.Equal(t, "entity:counter:get", call.Name())
+			require.Equal(t, trace.SpanKindConsumer, signal.SpanKind())
+			require.Equal(t, trace.SpanKindServer, call.SpanKind())
+			require.False(t, signal.Parent().IsValid())
+			require.False(t, call.Parent().IsValid())
+			require.Equal(t, request.InstanceId, spanAttribute(call, "durabletask.task.instance_id"))
+			require.Equal(t, "counter", spanAttribute(call, "durabletask.task.name"))
+			switch mode {
+			case "malformed-results":
+				for _, span := range h.spans() {
+					require.Equal(t, codes.Error, span.Status().Code)
+					require.Contains(t, span.Status().Description, "without success or failure")
+				}
+			case "batch-failure":
+				require.Equal(t, codes.Error, signal.Status().Code)
+				require.Contains(t, signal.Status().Description, "batch failed")
+			default:
+				require.Equal(t, codes.Ok, signal.Status().Code)
+				require.True(t, start.Equal(signal.StartTime()))
+				require.True(t, end.Equal(call.EndTime()))
+				require.Equal(t, codes.Error, call.Status().Code)
+				require.Equal(t, "operation failed", spanAttribute(call, "durabletask.entity.error_message"))
+			}
+		})
+	}
+}
+
+func TestWorkerTracingEntityExternalizationFailure(t *testing.T) {
+	for _, mode := range []string{"accepted", "rejected", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			h := newTracingHarness(t, task.NewTaskRegistry(), true)
+			storeErr := errors.New("externalize failed")
+			if mode == "canceled" {
+				storeErr = context.Canceled
+			}
+			backend := &failingPayloadBackend{storeErr: storeErr}
+			h.worker.options.largePayloads = &api.LargePayloadOptions{
+				Store: backend, Resolver: backend, ThresholdBytes: 1, MaxPayloadBytes: 1024,
+			}
+			h.worker.executor = &recordingExecutor{executeEntity: func(context.Context, *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
+				return &protos.EntityBatchResult{EntityState: wrapperspb.String("large"), Results: []*protos.OperationResult{
+					{ResultType: &protos.OperationResult_Success{Success: &protos.OperationResultSuccess{}}},
+				}}, nil
+			}}
+			if mode == "rejected" {
+				h.client.entityCompletionErr = errors.New("completion rejected")
+			}
+			h.worker.processEntityV2(context.Background(), h.client, "token", newFakeEntitySignalRequest("run", nil))
+			if mode != "accepted" {
+				require.Empty(t, h.spans())
+				require.Equal(t, 1, h.client.entityAbandonAttempts)
+				return
+			}
+			require.Len(t, h.spans(), 1)
+			require.Equal(t, codes.Error, h.spans()[0].Status().Code)
+			require.Contains(t, h.spans()[0].Status().Description, "externalize failed")
+			require.Len(t, h.client.entityCompletions, 1)
+			require.NotNil(t, h.client.entityCompletions[0].FailureDetails)
+		})
+	}
+}
+
+func TestWorkerTracingEntityHydrationFailure(t *testing.T) {
+	for _, mode := range []string{"accepted", "rejected", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			h := newTracingHarness(t, task.NewTaskRegistry(), true)
+			store := payload.NewMemoryStore()
+			input, err := largepayload.Externalize(context.Background(),
+				&api.LargePayloadOptions{Store: store, Resolver: store, ThresholdBytes: 1, MaxPayloadBytes: 1024},
+				wrapperspb.String(`"large"`))
+			require.NoError(t, err)
+			resolveErr := errors.New("hydrate failed")
+			if mode == "canceled" {
+				resolveErr = context.Canceled
+			}
+			h.worker.options.largePayloads = &api.LargePayloadOptions{
+				Store: store, Resolver: &failingPayloadBackend{resolveErr: resolveErr}, ThresholdBytes: 1, MaxPayloadBytes: 1024,
+			}
+			if mode == "rejected" {
+				h.client.entityCompletionErr = errors.New("completion rejected")
+			}
+			h.worker.processEntityV2(context.Background(), h.client, "token", newFakeEntitySignalRequest("run", input))
+			if mode != "accepted" {
+				require.Empty(t, h.spans())
+				return
+			}
+			require.Len(t, h.spans(), 1)
+			span := h.spans()[0]
+			require.Equal(t, "entity:counter:run", span.Name())
+			require.Equal(t, trace.SpanKindConsumer, span.SpanKind())
+			require.Equal(t, codes.Error, span.Status().Code)
+			require.Contains(t, span.Status().Description, "hydrate failed")
+		})
+	}
 }
 
 func tracingEventSent(action *protos.OrchestratorAction) *protos.HistoryEvent {

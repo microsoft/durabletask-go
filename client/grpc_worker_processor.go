@@ -668,7 +668,11 @@ func (w *TaskHubGrpcWorker) processEntityV2(
 			w.abandonEntity(ctx, client, completionToken)
 			return
 		}
-		w.completeEntityBatchFailure(ctx, client, request.GetInstanceId(), completionToken, err)
+		failedAt := time.Now()
+		result := newEntityBatchFailure(completionToken, err)
+		if w.completeEntityBatchResult(ctx, client, request.GetInstanceId(), result) && w.options.tracer != nil {
+			w.options.tracer.EmitEntityBatch(entityID, batch, result, failedAt, failedAt)
+		}
 		return
 	}
 	executor, ok := w.executor.(task.EntityExecutor)
@@ -677,7 +681,9 @@ func (w *TaskHubGrpcWorker) processEntityV2(
 		w.abandonEntity(ctx, client, completionToken)
 		return
 	}
+	entityStartedAt := time.Now()
 	result, err := executeEntitySafely(ctx, executor, batch)
+	entityEndedAt := time.Now()
 	if err != nil {
 		if entityProcessingCanceled(ctx, err) {
 			w.logger.Warnf("%s: entity execution canceled; abandoning work item", request.GetInstanceId())
@@ -702,11 +708,12 @@ func (w *TaskHubGrpcWorker) processEntityV2(
 			w.abandonEntity(ctx, client, completionToken)
 			return
 		}
-		w.completeEntityBatchFailure(ctx, client, request.GetInstanceId(), completionToken, err)
-		return
+		result = newEntityBatchFailure(completionToken, err)
 	}
 
-	w.completeEntityBatchResult(ctx, client, request.GetInstanceId(), result)
+	if w.completeEntityBatchResult(ctx, client, request.GetInstanceId(), result) && w.options.tracer != nil {
+		w.options.tracer.EmitEntityBatch(entityID, batch, result, entityStartedAt, entityEndedAt)
+	}
 }
 
 func executeEntitySafely(
@@ -743,16 +750,6 @@ func newEntityBatchFailure(completionToken string, err error) *protos.EntityBatc
 		CompletionToken: completionToken,
 		FailureDetails:  failure.FromError(err),
 	}
-}
-
-func (w *TaskHubGrpcWorker) completeEntityBatchFailure(
-	ctx context.Context,
-	client protos.TaskHubSidecarServiceClient,
-	instanceID string,
-	completionToken string,
-	err error,
-) {
-	w.completeEntityBatchResult(ctx, client, instanceID, newEntityBatchFailure(completionToken, err))
 }
 
 func validateEntityBatchResult(
@@ -795,7 +792,7 @@ func (w *TaskHubGrpcWorker) completeEntityBatchResult(
 	client protos.TaskHubSidecarServiceClient,
 	instanceID string,
 	result *protos.EntityBatchResult,
-) {
+) bool {
 	err := w.executeRPCWithRetry(ctx, "complete entity task", func(callCtx context.Context) error {
 		_, callErr := client.CompleteEntityTask(callCtx, result)
 		return callErr
@@ -803,11 +800,13 @@ func (w *TaskHubGrpcWorker) completeEntityBatchResult(
 	if err != nil {
 		if isWorkItemGone(err) {
 			w.logger.Warnf("%s: entity work item was no longer available before completion", instanceID)
-			return
+			return false
 		}
 		w.logger.Errorf("%s: failed to complete entity work item: %v", instanceID, err)
 		w.abandonEntity(ctx, client, result.CompletionToken)
+		return false
 	}
+	return true
 }
 
 func orchestrationWorkItemIdentity(pastEvents, newEvents []*protos.HistoryEvent) (string, string, bool) {
