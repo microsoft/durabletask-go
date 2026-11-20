@@ -25,8 +25,15 @@ type Client struct {
 
 // NewClient creates an independently owned management connection and validates
 // it with a deadline-bound Hello call.
-// A nil logger uses [api.DefaultLogger].
-func NewClient(ctx context.Context, options *Options, logger api.Logger) (*Client, error) {
+// A nil logger uses [api.DefaultLogger]. clientOptions are applied after the
+// options derived from options, so they take precedence; for example, pass
+// client.WithTracerProvider to enable client spans.
+func NewClient(
+	ctx context.Context,
+	options *Options,
+	logger api.Logger,
+	clientOptions ...durabletaskclient.TaskHubGrpcClientOption,
+) (*Client, error) {
 	if logger == nil {
 		logger = api.DefaultLogger()
 	}
@@ -59,15 +66,16 @@ func NewClient(ctx context.Context, options *Options, logger api.Logger) (*Clien
 		prepared.ChannelRecreateMinInterval,
 		logger,
 	)
-	clientOptions := []durabletaskclient.TaskHubGrpcClientOption{
+	configuredOptions := []durabletaskclient.TaskHubGrpcClientOption{
 		durabletaskclient.WithLargePayloads(prepared.LargePayloads),
 		durabletaskclient.WithDataConverter(prepared.DataConverter),
 	}
 	if prepared.Versioning != nil && prepared.Versioning.DefaultVersion != "" {
-		clientOptions = append(clientOptions, durabletaskclient.WithDefaultVersion(prepared.Versioning.DefaultVersion))
+		configuredOptions = append(configuredOptions, durabletaskclient.WithDefaultVersion(prepared.Versioning.DefaultVersion))
 	}
+	configuredOptions = append(configuredOptions, clientOptions...)
 	return &Client{
-		TaskHubGrpcClient: durabletaskclient.NewTaskHubGrpcClient(connection, logger, clientOptions...),
+		TaskHubGrpcClient: durabletaskclient.NewTaskHubGrpcClient(connection, logger, configuredOptions...),
 		connection:        connection,
 		converter:         api.NormalizeDataConverter(prepared.DataConverter),
 	}, nil
