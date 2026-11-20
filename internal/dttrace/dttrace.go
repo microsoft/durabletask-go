@@ -230,20 +230,21 @@ type pendingSpan struct {
 // orchestration span is never live: its persisted identity is restored on each
 // dispatch and the span is reconstructed only when the execution completes.
 type Orchestration struct {
-	tracer      *Tracer
-	instanceID  string
-	name        string
-	version     string
-	executionID string
-	started     bool
-	parent      trace.SpanContext
-	spanID      trace.SpanID
-	start       time.Time
-	passthrough *protos.OrchestrationTraceContext
-	scheduled   map[int32]scheduledTask
-	timers      map[int32]createdTimer
-	sentEvents  map[int32]pendingSpan
-	pending     []pendingSpan
+	tracer        *Tracer
+	instanceID    string
+	name          string
+	version       string
+	executionID   string
+	started       bool
+	parent        trace.SpanContext
+	spanID        trace.SpanID
+	start         time.Time
+	passthrough   *protos.OrchestrationTraceContext
+	scheduled     map[int32]scheduledTask
+	timers        map[int32]createdTimer
+	sentEvents    map[int32]pendingSpan
+	acceptedSends map[int32]struct{}
+	pending       []pendingSpan
 
 	logicalOnce sync.Once
 	logical     trace.SpanContext
@@ -257,15 +258,21 @@ func (t *Tracer) StartOrchestration(
 	eventLists ...[]*protos.HistoryEvent,
 ) *Orchestration {
 	o := &Orchestration{
-		tracer:      t,
-		instanceID:  instanceID,
-		passthrough: persisted,
-		scheduled:   make(map[int32]scheduledTask),
-		timers:      make(map[int32]createdTimer),
-		sentEvents:  make(map[int32]pendingSpan),
+		tracer:        t,
+		instanceID:    instanceID,
+		passthrough:   persisted,
+		scheduled:     make(map[int32]scheduledTask),
+		timers:        make(map[int32]createdTimer),
+		sentEvents:    make(map[int32]pendingSpan),
+		acceptedSends: make(map[int32]struct{}),
 	}
 	for _, events := range eventLists {
 		for _, event := range events {
+			// An acknowledgement proves acceptance even when the turn budget
+			// prevents the replay engine from consuming it in this dispatch.
+			if event.GetEventSent() != nil {
+				o.acceptedSends[event.EventId] = struct{}{}
+			}
 			if started := event.GetExecutionStarted(); started != nil {
 				o.started = true
 				o.name = started.GetName()
@@ -589,6 +596,9 @@ func (o *Orchestration) Emit(response *protos.OrchestratorResponse) {
 		if sent := action.GetSendEvent(); sent != nil {
 			span, ok := o.sentEvents[action.Id]
 			if !ok {
+				if _, accepted := o.acceptedSends[action.Id]; accepted {
+					continue
+				}
 				span = o.eventSpan(sent.GetName(), sent.GetInstance().GetInstanceId())
 			}
 			o.pending = append(o.pending, span)
