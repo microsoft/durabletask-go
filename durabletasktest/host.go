@@ -19,9 +19,12 @@
 // dependencies, register stub activities in the test's registry.
 //
 // Timers fire in real time, so tests should use short timer durations.
-// Durable entities and orchestration rewind are not supported: entity client
-// operations and rewind fail with [api.ErrFeatureNotSupported], and an
-// orchestration that calls, signals, or locks an entity fails.
+// Failed orchestrations can be rewound with the same history-safety limitations
+// as the production worker. Rewind enqueues recovery and preserves successful
+// work; purged children are recreated without their previous history.
+// Durable entities are not supported: entity client operations fail with
+// [api.ErrFeatureNotSupported], and an orchestration that calls, signals, or
+// locks an entity fails.
 package durabletasktest
 
 import (

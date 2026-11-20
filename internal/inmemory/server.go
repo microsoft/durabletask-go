@@ -2,8 +2,7 @@
 //
 // The service keeps all orchestration state in process memory and serves the
 // same gRPC protocol as the Durable Task Scheduler, so the regular client and
-// worker can run against it. Timers fire in real time. Entities and rewind are
-// not supported.
+// worker can run against it. Timers fire in real time. Entities are not supported.
 package inmemory
 
 import (

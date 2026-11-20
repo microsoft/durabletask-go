@@ -226,6 +226,18 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 		s.abandonOrchestrationLocked(token, lease)
 		return &protos.CompleteTaskResponse{}, nil
 	}
+	var rewind *protos.RewindOrchestrationAction
+	for _, action := range resp.GetActions() {
+		if replacement := action.GetRewindOrchestration(); replacement != nil {
+			if len(resp.GetActions()) != 1 {
+				return nil, status.Error(codes.InvalidArgument, "rewind must be the only orchestration action")
+			}
+			if err := validateRewindHistory(replacement.GetNewHistory()); err != nil {
+				return nil, err
+			}
+			rewind = replacement
+		}
+	}
 	delete(s.orchLeases, token)
 	inst.leased = false
 	if s.instances[inst.id] != inst || isTerminal(inst.status) {
@@ -245,6 +257,12 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 	inst.customStatus = resp.GetCustomStatus()
 	inst.updatedAt = time.Now()
 
+	if rewind != nil {
+		s.applyRewindLocked(inst, rewind)
+		s.enqueueLocked(inst)
+		s.notifyLocked()
+		return &protos.CompleteTaskResponse{}, nil
+	}
 	s.applyActionsLocked(inst, resp.GetActions())
 	s.enqueueLocked(inst)
 	s.notifyLocked()
