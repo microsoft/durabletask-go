@@ -26,6 +26,8 @@ type Task interface {
 	Await(v any) error
 }
 
+func IsCompleted(t Task) bool { return false }
+
 type WaitGroup interface {
 	Add(delta int)
 	Done()

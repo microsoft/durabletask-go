@@ -134,7 +134,7 @@ func (c *checker) inspect(node ast.Node, stack []ast.Node, file *ast.File) {
 			)
 		}
 	case *ast.ForStmt:
-		c.checkUnboundedLoop(node)
+		c.checkUnboundedLoop(node, stack)
 	case *ast.CallExpr:
 		c.checkCall(node, stack, file)
 	}

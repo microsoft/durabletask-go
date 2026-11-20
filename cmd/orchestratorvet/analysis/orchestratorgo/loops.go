@@ -12,25 +12,137 @@ import (
 // checkUnboundedLoop reports a condition-free orchestrator loop only when the
 // whole-package loop and call graph proves the body can neither leave the loop
 // nor make durable progress. Any call the analyzer cannot follow, and any use of
-// the task package, leaves the loop unreported.
-func (c *checker) checkUnboundedLoop(loop *ast.ForStmt) {
+// the task package other than the pure task.IsCompleted check, leaves the loop
+// unreported. A loop whose only condition is !task.IsCompleted(t) is held to
+// the same proof, because its condition cannot change while nothing yields.
+func (c *checker) checkUnboundedLoop(loop *ast.ForStmt, stack []ast.Node) {
+	var polled *types.Var
 	if loop.Cond != nil && !isConstantTrue(c.pass, loop.Cond) {
-		return
-	}
-	if loop.Body == nil {
-		// `for {}` with an empty body is unambiguously a spin.
-		c.reportUnboundedLoop(loop)
-		return
+		polled = c.polledTask(loop, stack)
+		if polled == nil {
+			return
+		}
 	}
 	probe := &loopProbe{
 		checker:        c,
 		visitedCallees: make(map[ast.Node]bool),
 	}
-	probe.scan(loop.Body, true)
+	if loop.Body != nil {
+		probe.scan(loop.Body, true)
+	}
+	if loop.Post != nil {
+		probe.scan(&ast.BlockStmt{List: []ast.Stmt{loop.Post}}, true)
+	}
 	if probe.inconclusive {
 		return
 	}
+	if polled != nil {
+		c.report(
+			loop.For,
+			categoryLoop,
+			nil,
+			"loop polls task.IsCompleted without awaiting a durable task or waiting for an event, "+
+				"so the task can never complete; use Await, WhenAny, or Select",
+		)
+		return
+	}
 	c.reportUnboundedLoop(loop)
+}
+
+// polledTask returns the variable t when the loop condition is exactly
+// !task.IsCompleted(t) and t is a local that the loop cannot change: it is not
+// assigned in the loop, its address is never taken, and no closure captures it.
+func (c *checker) polledTask(loop *ast.ForStmt, stack []ast.Node) *types.Var {
+	negated, ok := ast.Unparen(loop.Cond).(*ast.UnaryExpr)
+	if !ok || negated.Op != token.NOT {
+		return nil
+	}
+	call, ok := ast.Unparen(negated.X).(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 || !isTaskIsCompleted(staticFunc(c.pass, call.Fun)) {
+		return nil
+	}
+	identifier, ok := ast.Unparen(call.Args[0]).(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	variable, ok := c.pass.TypesInfo.Uses[identifier].(*types.Var)
+	if !ok || variable.IsField() {
+		return nil
+	}
+	var function ast.Node
+	for i := len(stack) - 1; i >= 0 && function == nil; i-- {
+		switch stack[i].(type) {
+		case *ast.FuncDecl, *ast.FuncLit:
+			function = stack[i]
+		}
+	}
+	if function == nil || variable.Pos() < function.Pos() || variable.Pos() >= function.End() {
+		return nil
+	}
+	if c.mayChange(function, loop, variable) {
+		return nil
+	}
+	return variable
+}
+
+// mayChange reports whether variable could be modified while loop runs.
+func (c *checker) mayChange(function ast.Node, loop *ast.ForStmt, variable *types.Var) bool {
+	uses := func(expression ast.Expr) bool {
+		identifier, ok := ast.Unparen(expression).(*ast.Ident)
+		return ok && c.pass.TypesInfo.Uses[identifier] == variable
+	}
+	changed := false
+	var walk func(node ast.Node, inLoop, inClosure bool)
+	walk = func(node ast.Node, inLoop, inClosure bool) {
+		ast.Inspect(node, func(current ast.Node) bool {
+			if changed {
+				return false
+			}
+			switch current := current.(type) {
+			case *ast.FuncLit:
+				if current != function {
+					walk(current.Body, inLoop, true)
+					return false
+				}
+			case *ast.ForStmt:
+				if current == loop && !inLoop {
+					walk(current, true, inClosure)
+					return false
+				}
+			case *ast.Ident:
+				if inClosure && c.pass.TypesInfo.Uses[current] == variable {
+					changed = true
+				}
+			case *ast.UnaryExpr:
+				if current.Op == token.AND && uses(current.X) {
+					changed = true
+				}
+			case *ast.AssignStmt:
+				if inLoop {
+					for _, target := range current.Lhs {
+						if uses(target) {
+							changed = true
+						}
+					}
+				}
+			case *ast.RangeStmt:
+				if inLoop && current.Tok == token.ASSIGN && (uses(current.Key) || uses(current.Value)) {
+					changed = true
+				}
+			}
+			return true
+		})
+	}
+	walk(function, false, false)
+	return changed
+}
+
+func isTaskIsCompleted(function *types.Func) bool {
+	if function == nil || function.Pkg() == nil || function.Pkg().Path() != taskPackagePath {
+		return false
+	}
+	signature, ok := function.Type().(*types.Signature)
+	return ok && signature.Recv() == nil && function.Name() == "IsCompleted"
 }
 
 func (c *checker) reportUnboundedLoop(loop *ast.ForStmt) {
@@ -111,6 +223,8 @@ func (p *loopProbe) scanCall(call *ast.CallExpr) {
 		return
 	}
 	switch path := function.Pkg().Path(); {
+	case isTaskIsCompleted(function):
+		// IsCompleted only reads completion state; it never yields.
 	case path == taskPackagePath:
 		// Any durable task interaction may make progress or block.
 		p.inconclusive = true
