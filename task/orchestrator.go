@@ -18,6 +18,7 @@ import (
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/contextprop"
+	"github.com/microsoft/durabletask-go/internal/dttrace"
 	"github.com/microsoft/durabletask-go/internal/failure"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
@@ -99,6 +100,10 @@ type OrchestrationContext struct {
 	criticalSectionAvailable        map[string]bool
 	criticalSectionRequestCommitted bool
 	criticalSectionAbandoned        bool
+
+	// trace observes history at its consumption point so replayed events and
+	// events left unconsumed by turn budgets never export spans.
+	trace *dttrace.Orchestration
 }
 
 // callSubOrchestratorOptions is a struct that holds the options for the CallSubOrchestrator orchestrator method.
@@ -508,6 +513,8 @@ func (ctx *OrchestrationContext) getNextHistoryEvent() (*protos.HistoryEvent, bo
 		ctx.processedEventsThisTurn++
 	}
 
+	// Resumed events were observed when first consumed, before buffering.
+	ctx.trace.Observe(event, ctx.IsReplaying)
 	ctx.historyIndex++
 	return event, true
 }

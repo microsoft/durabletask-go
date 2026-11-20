@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/dttrace"
 	"github.com/microsoft/durabletask-go/internal/failure"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/internal/tagcodec"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -187,6 +189,9 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 	}
 	ctx = api.ContextWithFields(ctx, te.contextFields)
 	ctx = helpers.ContextWithTraceContext(ctx, ts.GetParentTraceContext())
+	if span := dttrace.ActivitySpanFromContext(ctx); span != nil {
+		ctx = trace.ContextWithSpan(ctx, span)
+	}
 	ctx = api.ContextWithFields(ctx, api.ContextFields(tagcodec.DecodeContextFields(ts.GetTags())))
 	orchestrationInfo, _ := api.OrchestrationContextInfoFromContext(ctx)
 	if orchestrationInfo.InstanceID == "" {
@@ -243,7 +248,7 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 
 // ExecuteOrchestrator implements Executor and executes an orchestrator function in the current goroutine.
 func (te *taskExecutor) ExecuteOrchestrator(
-	_ context.Context,
+	ctx context.Context,
 	id api.InstanceID,
 	oldEvents []*protos.HistoryEvent,
 	newEvents []*protos.HistoryEvent,
@@ -301,6 +306,7 @@ func (te *taskExecutor) ExecuteOrchestrator(
 		te.converter,
 		entitiesSupported,
 	)
+	orchestrationCtx.trace = dttrace.OrchestrationFromContext(ctx)
 	actions := orchestrationCtx.start()
 	te.reportHistoryMetric(orchestrationCtx)
 

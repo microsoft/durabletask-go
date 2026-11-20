@@ -15,9 +15,11 @@ import (
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/dttrace"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -115,6 +117,7 @@ type taskHubGrpcWorkerOptions struct {
 	autoWorkItemFilters             bool
 	largePayloads                   *api.LargePayloadOptions
 	converter                       api.DataConverter
+	tracer                          *dttrace.Tracer
 	unversionedOrchestrators        map[string]struct{}
 	unversionedActivities           map[string]struct{}
 	reconnectRandom                 randomInt64N
@@ -510,6 +513,25 @@ func WithWorkerLargePayloads(options *api.LargePayloadOptions) TaskHubGrpcWorker
 func WithWorkerDataConverter(converter api.DataConverter) TaskHubGrpcWorkerOption {
 	return func(options *taskHubGrpcWorkerOptions) error {
 		options.converter = api.NormalizeDataConverter(converter)
+		return nil
+	}
+}
+
+// WithWorkerTracerProvider enables replay-aware Durable Task spans for
+// orchestrations, activities, sub-orchestrations, and timers. Without it the
+// worker only propagates W3C trace context and emits no spans.
+//
+// The provider must be an OpenTelemetry SDK provider configured with
+// tracing.WithIDGenerator from github.com/microsoft/durabletask-go/tracing;
+// other providers are rejected with tracing.ErrUnsupportedTracerProvider. See
+// that package for span semantics.
+func WithWorkerTracerProvider(provider trace.TracerProvider) TaskHubGrpcWorkerOption {
+	return func(options *taskHubGrpcWorkerOptions) error {
+		tracer, err := dttrace.NewTracer(provider)
+		if err != nil {
+			return err
+		}
+		options.tracer = tracer
 		return nil
 	}
 }
