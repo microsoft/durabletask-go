@@ -12,11 +12,13 @@ import (
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/contextprop"
+	"github.com/microsoft/durabletask-go/internal/dttrace"
 	"github.com/microsoft/durabletask-go/internal/failure"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/largepayload"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -260,8 +262,19 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 		}
 	}
 
+	executeCtx := ctx
+	var orchestrationTrace *dttrace.Orchestration
+	if w.options.tracer != nil {
+		orchestrationTrace = w.options.tracer.StartOrchestration(
+			request.InstanceId,
+			request.OrchestrationTraceContext,
+			pastEvents,
+			request.NewEvents,
+		)
+		executeCtx = dttrace.WithOrchestration(ctx, orchestrationTrace)
+	}
 	results, err := w.executor.ExecuteOrchestrator(
-		ctx,
+		executeCtx,
 		api.InstanceID(request.InstanceId),
 		pastEvents,
 		request.NewEvents,
@@ -313,13 +326,18 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 		if response.OrchestrationTraceContext == nil {
 			response.OrchestrationTraceContext = request.OrchestrationTraceContext
 		}
-		if err := populateOrchestratorActionTraceContexts(
-			response.Actions,
-			pastEvents,
-			request.NewEvents,
-		); err != nil {
-			w.logger.Warnf("%s: failed to populate action trace contexts: %v", request.InstanceId, err)
+		if !orchestrationTrace.Enabled() {
+			if err := populateOrchestratorActionTraceContexts(
+				response.Actions,
+				pastEvents,
+				request.NewEvents,
+			); err != nil {
+				w.logger.Warnf("%s: failed to populate action trace contexts: %v", request.InstanceId, err)
+			}
 		}
+	}
+	if orchestrationTrace.Enabled() {
+		orchestrationTrace.PrepareResponse(response)
 	}
 	if err := largepayload.TransformOrchestratorResponse(ctx, w.options.largePayloads, response); err != nil {
 		w.logger.Errorf("%s: failed to externalize orchestration response payloads: %v", request.InstanceId, err)
@@ -339,7 +357,11 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 		}
 		w.logger.Errorf("%s: failed to complete orchestration work item: %v", request.InstanceId, err)
 		w.abandonOrchestration(ctx, client, completionToken)
+		return
 	}
+	// Spans describe the response the backend accepted, after any worker-side
+	// rewrite such as the oversized-response failure.
+	orchestrationTrace.Emit(response)
 }
 
 // failOversizedOrchestratorResponse converts a response that modern DTS cannot
@@ -530,7 +552,23 @@ func (w *TaskHubGrpcWorker) processActivity(
 		request.ParentTraceContext,
 	)
 	event.GetTaskScheduled().Tags = contextprop.Clone(request.Tags)
-	result, err := w.executor.ExecuteActivity(ctx, api.InstanceID(request.OrchestrationInstance.InstanceId), event)
+	executeCtx := ctx
+	var activitySpan trace.Span
+	if w.options.tracer != nil {
+		executeCtx, activitySpan = w.options.tracer.StartActivity(
+			ctx,
+			request.Name,
+			request.Version.GetValue(),
+			request.OrchestrationInstance.InstanceId,
+			request.TaskId,
+			request.ParentTraceContext,
+		)
+	}
+	// Work that is abandoned rather than completed is reported as an error.
+	var activityFailure *protos.TaskFailureDetails
+	activityAbandoned := true
+	defer func() { dttrace.EndActivity(activitySpan, activityFailure, activityAbandoned) }()
+	result, err := w.executor.ExecuteActivity(executeCtx, api.InstanceID(request.OrchestrationInstance.InstanceId), event)
 	var delayed workItemAbandonDelayError
 	if errors.As(err, &delayed) {
 		w.logger.Warnf(
@@ -596,7 +634,9 @@ func (w *TaskHubGrpcWorker) processActivity(
 		}
 		w.logger.Errorf("%s/%s#%d: failed to complete activity work item: %v", request.OrchestrationInstance.InstanceId, request.Name, request.TaskId, err)
 		w.abandonActivity(ctx, client, completionToken)
+		return
 	}
+	activityFailure, activityAbandoned = response.FailureDetails, false
 }
 
 func (w *TaskHubGrpcWorker) processEntityV2(

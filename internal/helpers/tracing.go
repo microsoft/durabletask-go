@@ -28,6 +28,27 @@ func TraceContextFromSpan(span trace.Span) *protos.TraceContext {
 	}
 }
 
+// TraceContextFromSpanContext converts any valid span context, sampled or not,
+// into its wire form. Invalid span contexts return nil.
+func TraceContextFromSpanContext(spanContext trace.SpanContext) *protos.TraceContext {
+	if !spanContext.IsValid() {
+		return nil
+	}
+	return &protos.TraceContext{
+		TraceParent: traceParent(spanContext.TraceID(), spanContext.SpanID(), spanContext.TraceFlags()),
+		TraceState:  traceStateValue(spanContext.TraceState()),
+	}
+}
+
+// SpanContextFromTraceContext parses a wire trace context into a remote span
+// context. Missing or malformed values return an invalid span context.
+func SpanContextFromTraceContext(value *protos.TraceContext) trace.SpanContext {
+	if value == nil {
+		return trace.SpanContext{}
+	}
+	return trace.SpanContextFromContext(ContextWithTraceContext(context.Background(), value))
+}
+
 // traceParent formats the W3C traceparent header value for the given
 // version-00 components.
 func traceParent(traceID trace.TraceID, spanID trace.SpanID, flags trace.TraceFlags) string {
