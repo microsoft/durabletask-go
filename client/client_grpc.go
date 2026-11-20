@@ -75,10 +75,12 @@ func WithDataConverter(converter api.DataConverter) TaskHubGrpcClientOption {
 }
 
 // WithTracerProvider enables Durable Task PRODUCER spans for
-// ScheduleNewOrchestration ("create_orchestration:<name>") and RaiseEvent
-// ("orchestration_event:<name>"). Spans are children of the span in the call's
-// context, and a scheduled orchestration is parented to its
-// create_orchestration span. Failed calls mark the span as an error.
+// ScheduleNewOrchestration ("create_orchestration:<name>"), RaiseEvent
+// ("orchestration_event:<name>"), and SignalEntity
+// ("entity:<name>:<operation>"). Spans are children of the span in the call's
+// context, and a scheduled orchestration or entity signal request carries its
+// PRODUCER span as the parent trace context. Failed calls mark the span as an
+// error.
 //
 // Any provider is accepted; tracing.WithIDGenerator and tracing.WithSampler are
 // required only for worker tracing, and a provider configured with them can be
@@ -324,7 +326,7 @@ func (c *TaskHubGrpcClient) PurgeOrchestrationState(ctx context.Context, id api.
 }
 
 // SignalEntity sends a fire-and-forget operation to an entity.
-func (c *TaskHubGrpcClient) SignalEntity(ctx context.Context, entityID api.EntityID, operationName string, opts ...api.SignalEntityOptions) error {
+func (c *TaskHubGrpcClient) SignalEntity(ctx context.Context, entityID api.EntityID, operationName string, opts ...api.SignalEntityOptions) (err error) {
 	if err := helpers.ValidateEntityName(entityID.Name); err != nil {
 		return api.WrapInvalidArgument(err)
 	}
@@ -332,18 +334,26 @@ func (c *TaskHubGrpcClient) SignalEntity(ctx context.Context, entityID api.Entit
 		return api.WrapInvalidArgument(errors.New("entity operation name must not be empty"))
 	}
 	req := &protos.SignalEntityRequest{
-		InstanceId:         entityID.String(),
-		Name:               operationName,
-		RequestId:          uuid.NewString(),
-		RequestTime:        timestamppb.Now(),
-		ParentTraceContext: helpers.TraceContextFromSpan(trace.SpanFromContext(ctx)),
+		InstanceId:  entityID.String(),
+		Name:        operationName,
+		RequestId:   uuid.NewString(),
+		RequestTime: timestamppb.Now(),
 	}
 	for _, configure := range opts {
 		if err := configure(req, c.converter); err != nil {
 			return fmt.Errorf("failed to configure signal entity request: %w", api.WrapInvalidArgument(err))
 		}
 	}
-	var err error
+	if c.tracer != nil {
+		var span trace.Span
+		ctx, span = c.tracer.StartSignalEntity(ctx, entityID, operationName, req.ScheduledTime)
+		defer func() { dttrace.EndClientSpan(span, err) }()
+		// A traced client propagates its PRODUCER span even when unsampled so
+		// downstream spans keep the sampling decision.
+		req.ParentTraceContext = helpers.TraceContextFromSpanContext(span.SpanContext())
+	} else {
+		req.ParentTraceContext = helpers.TraceContextFromSpan(trace.SpanFromContext(ctx))
+	}
 	req.Input, err = largepayload.Externalize(ctx, c.largePayloads, req.Input)
 	if err != nil {
 		return fmt.Errorf("failed to externalize entity signal input: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/codes"
@@ -21,9 +22,22 @@ import (
 
 type tracingSchedulerClient struct {
 	protos.TaskHubSidecarServiceClient
-	start *protos.CreateInstanceRequest
-	event *protos.RaiseEventRequest
-	err   error
+	start  *protos.CreateInstanceRequest
+	event  *protos.RaiseEventRequest
+	signal *protos.SignalEntityRequest
+	err    error
+}
+
+func (c *tracingSchedulerClient) SignalEntity(
+	_ context.Context,
+	req *protos.SignalEntityRequest,
+	_ ...grpc.CallOption,
+) (*protos.SignalEntityResponse, error) {
+	c.signal = req
+	if c.err != nil {
+		return nil, c.err
+	}
+	return &protos.SignalEntityResponse{}, nil
 }
 
 func (c *tracingSchedulerClient) StartInstance(
@@ -209,4 +223,66 @@ func TestClientTracingDisabledKeepsPropagationOnly(t *testing.T) {
 			require.Nil(t, fake.start.ParentTraceContext)
 		})
 	}
+}
+
+func TestClientTracingSignalEntitySpans(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	fake := &tracingSchedulerClient{}
+	client := newTracedClient(fake, WithTracerProvider(provider))
+	caller, _ := newTraceParent(trace.FlagsSampled)
+	ctx := trace.ContextWithRemoteSpanContext(context.Background(), caller)
+	entityID := api.NewEntityID("Counter", "c1")
+	fireAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	require.NoError(t, client.SignalEntity(ctx, entityID, "add", api.WithSignalScheduledTime(fireAt)))
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	signal := spans[0]
+	require.Equal(t, "entity:counter:add", signal.Name())
+	require.Equal(t, trace.SpanKindProducer, signal.SpanKind())
+	require.Equal(t, caller.SpanID(), signal.Parent().SpanID())
+	require.Equal(t, "entity", spanAttribute(signal, "durabletask.type"))
+	require.Equal(t, "signal_entity", spanAttribute(signal, "durabletask.task.operation"))
+	require.Equal(t, entityID.String(), spanAttribute(signal, "durabletask.event.target_instance_id"))
+	require.Equal(t, fireAt.Format(time.RFC3339Nano), spanAttribute(signal, "durabletask.task.scheduled_time"))
+	require.Equal(t, codes.Unset, signal.Status().Code)
+	propagated := helpers.SpanContextFromTraceContext(fake.signal.ParentTraceContext)
+	require.Equal(t, signal.SpanContext().SpanID(), propagated.SpanID())
+	require.Equal(t, caller.TraceID(), propagated.TraceID())
+
+	fake.err = errors.New("unavailable")
+	require.Error(t, client.SignalEntity(context.Background(), entityID, "add"))
+	failed := recorder.Ended()[1]
+	require.Equal(t, codes.Error, failed.Status().Code)
+	require.Contains(t, failed.Status().Description, "unavailable")
+}
+
+func TestClientTracingSignalEntityUnsampledAndDisabled(t *testing.T) {
+	entityID := api.NewEntityID("Counter", "c1")
+	unsampled, _ := newTraceParent(0)
+
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	fake := &tracingSchedulerClient{}
+	client := newTracedClient(fake, WithTracerProvider(provider))
+	ctx := trace.ContextWithRemoteSpanContext(context.Background(), unsampled)
+	require.NoError(t, client.SignalEntity(ctx, entityID, "add"))
+	require.Empty(t, recorder.Ended())
+	propagated := helpers.SpanContextFromTraceContext(fake.signal.ParentTraceContext)
+	require.True(t, propagated.IsValid())
+	require.False(t, propagated.IsSampled())
+	require.Equal(t, unsampled.TraceID(), propagated.TraceID())
+	require.NotEqual(t, unsampled.SpanID(), propagated.SpanID())
+
+	disabled := &tracingSchedulerClient{}
+	client = newTracedClient(disabled)
+	sampled, wire := newTraceParent(trace.FlagsSampled)
+	ctx = trace.ContextWithRemoteSpanContext(context.Background(), sampled)
+	require.NoError(t, client.SignalEntity(ctx, entityID, "add"))
+	require.Equal(t, wire.GetTraceParent(), disabled.signal.ParentTraceContext.GetTraceParent())
+	ctx = trace.ContextWithRemoteSpanContext(context.Background(), unsampled)
+	require.NoError(t, client.SignalEntity(ctx, entityID, "add"))
+	require.Nil(t, disabled.signal.ParentTraceContext)
 }

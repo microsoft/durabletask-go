@@ -153,8 +153,71 @@ func tracingEntitySent(action *protos.OrchestratorAction) *protos.HistoryEvent {
 		event.EventType = &protos.HistoryEvent_EntityOperationSignaled{
 			EntityOperationSignaled: proto.Clone(signal).(*protos.EntityOperationSignaledEvent),
 		}
+	} else if lock := message.GetEntityLockRequested(); lock != nil {
+		event.EventType = &protos.HistoryEvent_EntityLockRequested{
+			EntityLockRequested: proto.Clone(lock).(*protos.EntityLockRequestedEvent),
+		}
+	} else if unlock := message.GetEntityUnlockSent(); unlock != nil {
+		event.EventType = &protos.HistoryEvent_EntityUnlockSent{
+			EntityUnlockSent: proto.Clone(unlock).(*protos.EntityUnlockSentEvent),
+		}
 	}
 	return event
+}
+
+func TestWorkerTracingEntityLocksEmitNoSpans(t *testing.T) {
+	id := api.NewEntityID("counter", "key")
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Locker", func(ctx *task.OrchestrationContext) (any, error) {
+		unlock, err := ctx.LockEntities(id)
+		if err != nil {
+			return nil, err
+		}
+		_ = ctx.CallEntity(id, "get").Await(nil)
+		unlock()
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	h := newTracingHarness(t, registry, true)
+	backend := newFakeOrchestrationBackend("locker", helpers.NewExecutionStartedEvent(
+		"Locker", "locker", nil, nil, nil, nil))
+	backend.entityParameters = &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)}
+
+	response := backend.dispatch(t, h)
+	require.Len(t, response.Actions, 1)
+	lock := response.Actions[0].GetSendEntityMessage().GetEntityLockRequested()
+	require.NotNil(t, lock)
+	granted := &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.Now(),
+		EventType: &protos.HistoryEvent_EntityLockGranted{
+			EntityLockGranted: &protos.EntityLockGrantedEvent{CriticalSectionId: lock.CriticalSectionId},
+		}}
+	response = backend.dispatch(t, h, granted)
+	var called *protos.EntityOperationCalledEvent
+	for _, action := range response.Actions {
+		if c := action.GetSendEntityMessage().GetEntityOperationCalled(); c != nil {
+			called = c
+		}
+	}
+	require.NotNil(t, called)
+	completed := &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.Now(),
+		EventType: &protos.HistoryEvent_EntityOperationCompleted{
+			EntityOperationCompleted: &protos.EntityOperationCompletedEvent{RequestId: called.RequestId},
+		}}
+	response = backend.dispatch(t, h, completed)
+	unlocked := false
+	for _, action := range response.Actions {
+		unlocked = unlocked || action.GetSendEntityMessage().GetEntityUnlockSent() != nil
+	}
+	require.True(t, unlocked)
+	backend.dispatch(t, h)
+
+	// Lock acquisition and release emit no spans; calls in the critical section
+	// are traced once.
+	require.Len(t, spansNamed(h.spans(), "entity:counter:get"), 1)
+	for _, span := range h.spans() {
+		if spanAttribute(span, "durabletask.type") == "entity" {
+			require.Equal(t, "entity:counter:get", span.Name())
+		}
+	}
 }
 
 func TestWorkerTracingEntityCallsAndSignalsReplay(t *testing.T) {
@@ -310,6 +373,7 @@ func TestWorkerTracingEntityOperationResults(t *testing.T) {
 			require.False(t, signal.Parent().IsValid())
 			require.False(t, call.Parent().IsValid())
 			require.Equal(t, request.InstanceId, spanAttribute(call, "durabletask.task.instance_id"))
+			require.Equal(t, "counter", spanAttribute(call, "durabletask.task.name"))
 			switch mode {
 			case "malformed-results":
 				for _, span := range h.spans() {

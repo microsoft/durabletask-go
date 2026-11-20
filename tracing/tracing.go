@@ -59,8 +59,10 @@
 //     independent roots, sampled by the provider's root policy, not children
 //     of orchestration/client spans. No synthetic parent or span link is added.
 //     Entity execution spans are reconstructed, not active in handler contexts.
-//     Client SignalEntity continues to propagate caller context on its RPC
-//     request without emitting a span; entity locks emit no spans.
+//     Client SignalEntity (with client.WithTracerProvider) emits a PRODUCER
+//     "entity:<name>:<operation>" span and propagates it on the request.
+//     Entity lock acquisition and release emit no spans, matching
+//     DurableTask.Core; entity calls made inside a critical section are traced.
 //   - Abandoned dispatches export no orchestration telemetry. Replay
 //     suppression is best effort and is not exactly-once delivery: a dispatch
 //     whose completion succeeds but is retried by the backend may export again.
