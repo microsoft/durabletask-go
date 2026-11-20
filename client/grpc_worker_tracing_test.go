@@ -269,10 +269,11 @@ func TestWorkerTracingEventsBufferingAndTurnBudget(t *testing.T) {
 			}
 			require.Len(t, spansNamed(h.spans(), "orchestration_event:forwarded"), want)
 			backend.dispatch(t, h)
-			if mode == "suspended" {
+			switch mode {
+			case "suspended":
 				require.Empty(t, h.spans(), "buffered receipts must not manufacture send spans")
 				backend.dispatch(t, h, helpers.NewResumeOrchestrationEvent(""))
-			} else if mode == "buffered" {
+			case "buffered":
 				require.Empty(t, h.spans(), "receipts without a waiter must not manufacture send spans")
 				backend.dispatch(t, h, helpers.NewEventRaisedEvent("ready", nil))
 			}
@@ -291,9 +292,10 @@ func TestWorkerTracingEventsDisabledOrMissingContext(t *testing.T) {
 				return nil, ctx.SendEvent("receiver", "approval", 42)
 			}))
 			_, parentTrace := newTraceParent(trace.FlagsSampled)
-			if mode == "missing-context" {
+			switch mode {
+			case "missing-context":
 				parentTrace = nil
-			} else if mode == "unsampled" {
+			case "unsampled":
 				_, parentTrace = newTraceParent(0)
 			}
 			h := newTracingHarness(t, registry, mode != "disabled")
