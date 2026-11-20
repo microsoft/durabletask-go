@@ -47,6 +47,11 @@ func (t *Tracer) EmitEntityBatch(id api.EntityID, request *protos.EntityBatchReq
 				startTime, endTime = failed.StartTimeUtc, failed.EndTimeUtc
 			} else if success := opResult.GetSuccess(); success != nil {
 				startTime, endTime = success.StartTimeUtc, success.EndTimeUtc
+			} else {
+				failure = &protos.TaskFailureDetails{
+					ErrorType:    "InvalidEntityOperationResult",
+					ErrorMessage: "entity executor returned an operation result without success or failure",
+				}
 			}
 			if startTime != nil {
 				opStart = startTime.AsTime()

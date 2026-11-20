@@ -704,8 +704,7 @@ func (w *TaskHubGrpcWorker) processEntityV2(
 			w.abandonEntity(ctx, client, completionToken)
 			return
 		}
-		w.completeEntityBatchFailure(ctx, client, request.GetInstanceId(), completionToken, err)
-		return
+		result = newEntityBatchFailure(completionToken, err)
 	}
 
 	if w.completeEntityBatchResult(ctx, client, request.GetInstanceId(), result) && w.options.tracer != nil {

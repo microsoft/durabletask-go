@@ -262,7 +262,7 @@ func TestWorkerTracingEntitySignalSameDispatch(t *testing.T) {
 }
 
 func TestWorkerTracingEntityOperationResults(t *testing.T) {
-	for _, mode := range []string{"enabled", "disabled", "unsampled", "rejected", "batch-failure"} {
+	for _, mode := range []string{"enabled", "disabled", "unsampled", "rejected", "batch-failure", "malformed-results"} {
 		t.Run(mode, func(t *testing.T) {
 			var options []sdktrace.TracerProviderOption
 			if mode == "unsampled" {
@@ -273,6 +273,9 @@ func TestWorkerTracingEntityOperationResults(t *testing.T) {
 			h.worker.executor = &recordingExecutor{executeEntity: func(context.Context, *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
 				if mode == "batch-failure" {
 					return nil, errors.New("batch failed")
+				}
+				if mode == "malformed-results" {
+					return &protos.EntityBatchResult{Results: []*protos.OperationResult{nil, {}}}, nil
 				}
 				return &protos.EntityBatchResult{Results: []*protos.OperationResult{
 					{ResultType: &protos.OperationResult_Success{Success: &protos.OperationResultSuccess{
@@ -307,16 +310,57 @@ func TestWorkerTracingEntityOperationResults(t *testing.T) {
 			require.False(t, signal.Parent().IsValid())
 			require.False(t, call.Parent().IsValid())
 			require.Equal(t, request.InstanceId, spanAttribute(call, "durabletask.task.instance_id"))
-			if mode == "batch-failure" {
+			switch mode {
+			case "malformed-results":
+				for _, span := range h.spans() {
+					require.Equal(t, codes.Error, span.Status().Code)
+					require.Contains(t, span.Status().Description, "without success or failure")
+				}
+			case "batch-failure":
 				require.Equal(t, codes.Error, signal.Status().Code)
 				require.Contains(t, signal.Status().Description, "batch failed")
-			} else {
+			default:
 				require.Equal(t, codes.Ok, signal.Status().Code)
 				require.True(t, start.Equal(signal.StartTime()))
 				require.True(t, end.Equal(call.EndTime()))
 				require.Equal(t, codes.Error, call.Status().Code)
 				require.Equal(t, "operation failed", spanAttribute(call, "durabletask.entity.error_message"))
 			}
+		})
+	}
+}
+
+func TestWorkerTracingEntityExternalizationFailure(t *testing.T) {
+	for _, mode := range []string{"accepted", "rejected", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			h := newTracingHarness(t, task.NewTaskRegistry(), true)
+			storeErr := errors.New("externalize failed")
+			if mode == "canceled" {
+				storeErr = context.Canceled
+			}
+			backend := &failingPayloadBackend{storeErr: storeErr}
+			h.worker.options.largePayloads = &api.LargePayloadOptions{
+				Store: backend, Resolver: backend, ThresholdBytes: 1, MaxPayloadBytes: 1024,
+			}
+			h.worker.executor = &recordingExecutor{executeEntity: func(context.Context, *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
+				return &protos.EntityBatchResult{EntityState: wrapperspb.String("large"), Results: []*protos.OperationResult{
+					{ResultType: &protos.OperationResult_Success{Success: &protos.OperationResultSuccess{}}},
+				}}, nil
+			}}
+			if mode == "rejected" {
+				h.client.entityCompletionErr = errors.New("completion rejected")
+			}
+			h.worker.processEntityV2(context.Background(), h.client, "token", newFakeEntitySignalRequest("run", nil))
+			if mode != "accepted" {
+				require.Empty(t, h.spans())
+				require.Equal(t, 1, h.client.entityAbandonAttempts)
+				return
+			}
+			require.Len(t, h.spans(), 1)
+			require.Equal(t, codes.Error, h.spans()[0].Status().Code)
+			require.Contains(t, h.spans()[0].Status().Description, "externalize failed")
+			require.Len(t, h.client.entityCompletions, 1)
+			require.NotNil(t, h.client.entityCompletions[0].FailureDetails)
 		})
 	}
 }
