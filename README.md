@@ -640,7 +640,7 @@ For more information, read the [export history guide](./exporthistory/README.md)
 
 ## Testing orchestrations
 
-The `durabletasktest` package runs your orchestrations and activities in your test process. It starts an in-memory Durable Task service, a worker for your registry, and a connected client. The parts talk over an in-memory gRPC transport, so the test needs no emulator, network port, or Azure resource. The worker, executor, and client are the same code that runs against DTS.
+The `durabletasktest` package runs your orchestrations, activities, and entities in your test process. It starts an in-memory Durable Task service, a worker for your registry, and a connected client. The parts talk over an in-memory gRPC transport, so the test needs no emulator, network port, or Azure resource. The worker, executor, and client are the same code that runs against DTS.
 
 ```go
 func TestGreeting(t *testing.T) {
@@ -659,7 +659,7 @@ func TestGreeting(t *testing.T) {
 }
 ```
 
-To isolate an orchestration from its dependencies, register stub activities and sub-orchestrators in the test registry. You can use the client to raise events, suspend, resume, terminate, restart, rewind, query, and purge instances, and read history.
+To isolate an orchestration from its dependencies, register stub activities and sub-orchestrators in the test registry. You can use the client to raise events, suspend, resume, terminate, restart, rewind, query, and purge instances, and read history. Register entities in the same registry to test entity calls, signals, and critical sections. You can use the client to signal, get, query, and clean entities.
 
 `RewindInstance` enqueues recovery of a failed orchestration, preserving successful work and recursively recovering failed sub-orchestrations. Wait for completion to observe recovery. Outstanding timers retain their deadlines, and activities can run again if their results are unavailable. Purged children without retained results are recreated from their recorded inputs without their previous history; conflicting child IDs prevent rewind. The same worker [history-safety limitations](./durabletaskscheduler/README.md#rewind) apply.
 
@@ -668,7 +668,6 @@ The in-memory service has these limits:
 - Timers use the Go runtime clock. With Go 1.25 or later, `testing/synctest`
   can advance timers without waiting in real time while the test goroutines are
   blocked. The `durabletasktest` tests include a 24-hour timer example.
-- Durable entities aren't supported. Entity client calls return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails.
 - State is kept in memory only. It is discarded when the host closes.
 
 ## Development

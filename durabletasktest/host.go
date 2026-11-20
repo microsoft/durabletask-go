@@ -1,7 +1,7 @@
-// Package durabletasktest runs orchestrations and activities in process for tests.
+// Package durabletasktest runs orchestrations, activities, and entities in process for tests.
 //
 // A [Host] starts an in-memory Durable Task service, a worker for the
-// orchestrators and activities in a [task.TaskRegistry], and a client
+// orchestrators, activities, and entities in a [task.TaskRegistry], and a client
 // connected to the same service. Communication uses an in-memory gRPC
 // transport, so no network ports or external services are required.
 //
@@ -26,9 +26,9 @@
 // again if their results are unavailable. Purged children without retained
 // results are recreated without their previous history; conflicting child IDs
 // prevent rewind.
-// Durable entities are not supported: entity client operations fail with
-// [api.ErrFeatureNotSupported], and an orchestration that calls, signals, or
-// locks an entity fails.
+// Durable entities are supported, including entity critical sections:
+// signals and calls to a locked entity from outside its critical section wait
+// until the lock is released.
 package durabletasktest
 
 import (

@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -17,7 +18,7 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
-// GetWorkItems streams orchestration and activity work items to a worker.
+// GetWorkItems streams orchestration, activity, and entity work items to a worker.
 // Work items that are still in flight when the stream ends are returned to the queue.
 func (s *Server) GetWorkItems(req *protos.GetWorkItemsRequest, stream grpc.ServerStreamingServer[protos.WorkItem]) error {
 	ctx := stream.Context()
@@ -31,6 +32,7 @@ func (s *Server) GetWorkItems(req *protos.GetWorkItemsRequest, stream grpc.Serve
 	limits := workItemLimits{
 		orchestrations: req.GetMaxConcurrentOrchestrationWorkItems(),
 		activities:     req.GetMaxConcurrentActivityWorkItems(),
+		entities:       req.GetMaxConcurrentEntityWorkItems(),
 	}
 	ping := time.NewTicker(s.healthPingInterval)
 	defer ping.Stop()
@@ -65,6 +67,7 @@ func (s *Server) GetWorkItems(req *protos.GetWorkItemsRequest, stream grpc.Serve
 type workItemLimits struct {
 	orchestrations int32
 	activities     int32
+	entities       int32
 }
 
 func (s *Server) nextWorkItemLocked(
@@ -101,7 +104,20 @@ func (s *Server) nextWorkItemLocked(
 			}
 		}
 	}
-	return nil
+	if !streamHasCapacity(limits.entities, countEntityLeases(s.entityLeases, streamID)) {
+		return nil
+	}
+	return s.nextEntityWorkItemLocked(filters, streamID)
+}
+
+func countEntityLeases(leases map[string]*entityLease, streamID uint64) int {
+	count := 0
+	for _, lease := range leases {
+		if lease.streamID == streamID {
+			count++
+		}
+	}
+	return count
 }
 
 func streamHasCapacity(limit int32, inFlight int) bool {
@@ -148,6 +164,8 @@ func (s *Server) leaseOrchestrationLocked(inst *instance, streamID uint64) *prot
 		ExecutionId: wrapperspb.String(inst.executionID),
 		PastEvents:  slices.Clone(inst.history),
 		NewEvents:   events,
+		// Entity messages are delivered in order, so no reorder window is needed.
+		EntityParameters: &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)},
 	}
 	item := &protos.WorkItem{
 		Request:         &protos.WorkItem_OrchestratorRequest{OrchestratorRequest: request},
@@ -217,6 +235,11 @@ func (s *Server) releaseStream(streamID uint64) {
 		if lease.streamID == streamID {
 			delete(s.actLeases, token)
 			s.actQueue = append(s.actQueue, lease.item)
+		}
+	}
+	for token, lease := range s.entityLeases {
+		if lease.streamID == streamID {
+			s.abandonEntityLocked(token, lease)
 		}
 	}
 	s.notifyLocked()
@@ -413,10 +436,8 @@ func (s *Server) applyActionsLocked(inst *instance, actions []*protos.Orchestrat
 			*protos.OrchestratorAction_CreateSubOrchestration,
 			*protos.OrchestratorAction_SendEvent,
 			*protos.OrchestratorAction_TerminateOrchestration,
+			*protos.OrchestratorAction_SendEntityMessage,
 			*protos.OrchestratorAction_CompleteOrchestration:
-		case *protos.OrchestratorAction_SendEntityMessage:
-			s.failUnsupportedLocked(inst, "durable entities are not supported by the in-memory test backend")
-			return
 		default:
 			s.failUnsupportedLocked(inst, "orchestrator action %T is not supported by the in-memory test backend",
 				action.GetOrchestratorActionType())
@@ -454,6 +475,8 @@ func (s *Server) applyActionsLocked(inst *instance, actions []*protos.Orchestrat
 			if target, ok := s.instances[terminate.GetInstanceId()]; ok {
 				s.terminateLocked(target, terminate.GetReason(), terminate.GetRecurse())
 			}
+		case *protos.OrchestratorAction_SendEntityMessage:
+			s.sendEntityMessageLocked(inst, id, a.SendEntityMessage)
 		case *protos.OrchestratorAction_CompleteOrchestration:
 			complete = a.CompleteOrchestration
 		}
