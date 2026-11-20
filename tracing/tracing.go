@@ -54,6 +54,14 @@
 //     reports the activity's own outcome, whether or not that outcome reaches
 //     the backend. Work the worker rejects before running activity code, such
 //     as a version mismatch with task.VersionFailureReject, exports no span.
+//   - Orchestrator SendEvent actions emit "orchestration_event:<event>"
+//     PRODUCER spans under the sending orchestration when accepted. Replayed
+//     sends and later history acknowledgements emit nothing. A new send whose
+//     acknowledgement arrives in the same dispatch is exported with that
+//     dispatch.
+//   - Event receipt does not emit a consumer span. The event protocol carries
+//     no trace context, so sends cannot parent or link the receiving
+//     orchestration to the sender's event span.
 //   - Abandoned orchestration dispatches export no orchestration telemetry.
 //   - Telemetry is best effort, not exactly once, in both directions. A
 //     completion the backend retries may export its spans again. A completion
