@@ -1,7 +1,8 @@
 // Package tracingtree provides the application-process OpenTelemetry plumbing
 // used by the Durable Task Scheduler tracing tests: a process-wide in-memory
 // exporter and the caller span whose W3C context the SDK propagates to DTS.
-// Durable operation spans are emitted by DTS service-side, not by the Go worker.
+// Without explicit tracing options, durable operation spans are emitted by DTS
+// service-side, not by the Go worker.
 package tracingtree
 
 import (

@@ -1,6 +1,9 @@
 // Package tracing configures opt-in OpenTelemetry spans for Durable Task
 // clients and workers.
 //
+// The tracing README contains the span catalog, OTLP sample, and a parity
+// comparison with durabletask-python and durabletask-dotnet's gRPC SDK.
+//
 // By default clients and workers only propagate W3C trace context and emit no
 // spans. Enable worker spans with client.WithWorkerTracerProvider and a
 // provider built with [WithIDGenerator] and [WithSampler]:
