@@ -230,19 +230,21 @@ type pendingSpan struct {
 // orchestration span is never live: its persisted identity is restored on each
 // dispatch and the span is reconstructed only when the execution completes.
 type Orchestration struct {
-	tracer      *Tracer
-	instanceID  string
-	name        string
-	version     string
-	executionID string
-	started     bool
-	parent      trace.SpanContext
-	spanID      trace.SpanID
-	start       time.Time
-	passthrough *protos.OrchestrationTraceContext
-	scheduled   map[int32]scheduledTask
-	timers      map[int32]createdTimer
-	pending     []pendingSpan
+	tracer        *Tracer
+	instanceID    string
+	name          string
+	version       string
+	executionID   string
+	started       bool
+	parent        trace.SpanContext
+	spanID        trace.SpanID
+	start         time.Time
+	passthrough   *protos.OrchestrationTraceContext
+	scheduled     map[int32]scheduledTask
+	timers        map[int32]createdTimer
+	sentEvents    map[int32]pendingSpan
+	acceptedSends map[int32]struct{}
+	pending       []pendingSpan
 
 	logicalOnce sync.Once
 	logical     trace.SpanContext
@@ -256,14 +258,21 @@ func (t *Tracer) StartOrchestration(
 	eventLists ...[]*protos.HistoryEvent,
 ) *Orchestration {
 	o := &Orchestration{
-		tracer:      t,
-		instanceID:  instanceID,
-		passthrough: persisted,
-		scheduled:   make(map[int32]scheduledTask),
-		timers:      make(map[int32]createdTimer),
+		tracer:        t,
+		instanceID:    instanceID,
+		passthrough:   persisted,
+		scheduled:     make(map[int32]scheduledTask),
+		timers:        make(map[int32]createdTimer),
+		sentEvents:    make(map[int32]pendingSpan),
+		acceptedSends: make(map[int32]struct{}),
 	}
 	for _, events := range eventLists {
 		for _, event := range events {
+			// An acknowledgement proves acceptance even when the turn budget
+			// prevents the replay engine from consuming it in this dispatch.
+			if event.GetEventSent() != nil {
+				o.acceptedSends[event.EventId] = struct{}{}
+			}
 			if started := event.GetExecutionStarted(); started != nil {
 				o.started = true
 				o.name = started.GetName()
@@ -490,6 +499,44 @@ func (o *Orchestration) fireTimer(fired *protos.TimerFiredEvent, end time.Time, 
 	})
 }
 
+func (o *Orchestration) eventSpan(name, target string) pendingSpan {
+	now := time.Now()
+	attrs := taskAttributes(typeEvent, name, "", o.instanceID)
+	if o.executionID != "" {
+		attrs = append(attrs, AttrExecutionID.String(o.executionID))
+	}
+	if target != "" {
+		attrs = append(attrs, AttrEventTargetInstanceID.String(target))
+	}
+	return pendingSpan{
+		name: SpanName(typeOrchestrationEvent, name, ""), kind: trace.SpanKindProducer,
+		spanID: RandomSpanID(), start: now, end: now, attrs: attrs,
+	}
+}
+
+// RecordSendEvent remembers a non-replayed send in case its matching history
+// is consumed in this dispatch instead of leaving an action in the response.
+func (o *Orchestration) RecordSendEvent(action *protos.OrchestratorAction, replaying bool) {
+	if !o.Enabled() || replaying {
+		return
+	}
+	sent := action.GetSendEvent()
+	o.sentEvents[action.Id] = o.eventSpan(sent.GetName(), sent.GetInstance().GetInstanceId())
+}
+
+// ConfirmSendEvent queues a send only after the replay engine validates its
+// history match. An acknowledgement of a send from an earlier dispatch emits
+// nothing: that send was already exported with its accepted response.
+func (o *Orchestration) ConfirmSendEvent(eventID int32, replaying bool) {
+	if !o.Enabled() {
+		return
+	}
+	if span, ok := o.sentEvents[eventID]; ok && !replaying {
+		o.pending = append(o.pending, span)
+	}
+	delete(o.sentEvents, eventID)
+}
+
 // PrepareResponse persists the orchestration span identity on response and
 // assigns scheduling span IDs to new activity and sub-orchestration actions.
 // Continue-as-new and rewind responses carry a fresh identity so the next
@@ -545,6 +592,19 @@ func (o *Orchestration) Emit(response *protos.OrchestratorResponse) {
 		return
 	}
 	logical := o.SpanContext()
+	for _, action := range response.GetActions() {
+		if sent := action.GetSendEvent(); sent != nil {
+			span, ok := o.sentEvents[action.Id]
+			if !ok {
+				if _, accepted := o.acceptedSends[action.Id]; accepted {
+					continue
+				}
+				span = o.eventSpan(sent.GetName(), sent.GetInstance().GetInstanceId())
+			}
+			o.pending = append(o.pending, span)
+		}
+	}
+	o.sentEvents = nil
 	for _, span := range o.pending {
 		o.tracer.emit(span.name, span.kind, logical, trace.TraceID{}, span.spanID,
 			span.start, span.end, span.attrs, span.failure)
