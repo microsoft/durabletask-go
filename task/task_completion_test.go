@@ -72,8 +72,10 @@ func TestIsCompletedOutcomes(t *testing.T) {
 			ctx.scheduler = newCoroutineScheduler(ctx)
 			ctx.scheduler.current = &coroutine{}
 			task := newTaskInScope(ctx, ctx.scope)
-			if IsCompleted(task) || IsCompleted(task) {
-				t.Fatal("pending task reported complete")
+			for i := 0; i < 2; i++ {
+				if IsCompleted(task) {
+					t.Fatal("pending task reported complete")
+				}
 			}
 			test.finish(task)
 			for i := 0; i < 2; i++ {
@@ -154,7 +156,11 @@ func TestIsCompletedAtReplayPosition(t *testing.T) {
 		if ctx.WhenAny(first, second) != first {
 			return nil, errors.New("unexpected first task")
 		}
-		firstReady := IsCompleted(first) && IsCompleted(first)
+		firstReady := IsCompleted(first)
+		firstReadyAgain := IsCompleted(first)
+		if firstReady != firstReadyAgain {
+			return nil, errors.New("first task completion changed between reads")
+		}
 		secondBeforeYield := IsCompleted(second)
 		var firstResult string
 		if err := first.Await(&firstResult); err != nil {
