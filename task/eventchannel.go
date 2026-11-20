@@ -118,7 +118,7 @@ func (c *eventSelectCase[T]) owner() *OrchestrationContext {
 	return c.channel.ctx
 }
 
-func (c *eventSelectCase[T]) ready() (bool, uint64) {
+func (c *eventSelectCase[T]) ready(*selection) (bool, uint64) {
 	event, ok := c.channel.peek()
 	if !ok {
 		return false, 0
@@ -126,20 +126,23 @@ func (c *eventSelectCase[T]) ready() (bool, uint64) {
 	return true, event.order
 }
 
-func (c *eventSelectCase[T]) subscribe(coroutine *coroutine) {
-	c.channel.ctx.addEventWaiter(c.channel.key, coroutine)
+func (c *eventSelectCase[T]) subscribe(s *selection) {
+	c.channel.ctx.addEventWaiter(c.channel.key, s.coroutine)
 }
 
-func (c *eventSelectCase[T]) unsubscribe(coroutine *coroutine) {
-	c.channel.ctx.removeEventWaiter(c.channel.key, coroutine)
+func (c *eventSelectCase[T]) unsubscribe(s *selection) {
+	c.channel.ctx.removeEventWaiter(c.channel.key, s.coroutine)
 }
 
-func (c *eventSelectCase[T]) invoke() {
+func (c *eventSelectCase[T]) commit(s *selection) bool {
 	value, ok := c.channel.TryReceive()
 	if !ok {
 		panic("selected event channel no longer has a buffered value")
 	}
-	if c.handler != nil {
-		c.handler(value)
-	}
+	s.finish(c, func() {
+		if c.handler != nil {
+			c.handler(value)
+		}
+	})
+	return true
 }

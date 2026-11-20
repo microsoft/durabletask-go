@@ -30,6 +30,12 @@ type coroutineOutput struct {
 	Sum      int    `json:"sum"`
 }
 
+type coroutineResult struct {
+	index int
+	value int
+	err   error
+}
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -107,17 +113,23 @@ func CoroutineFanInOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	}
 
 	doubled := make([]int, len(input.Values))
+	results := task.NewChannel[coroutineResult](ctx, 0)
+	workCtx, cancelWork := ctx.WithCancel()
 	waitGroup := ctx.NewWaitGroup()
 	waitGroup.Add(len(input.Values))
 	for i, value := range input.Values {
 		i, value := i, value
-		ctx.Go(func(ctx *task.OrchestrationContext) {
+		ctx.Go(func(*task.OrchestrationContext) {
 			defer waitGroup.Done()
 			var result int
-			if err := ctx.CallActivity("DoubleValue", task.WithActivityInput(value)).Await(&result); err != nil {
+			err := workCtx.CallActivity("DoubleValue", task.WithActivityInput(value)).Await(&result)
+			if errors.Is(err, task.ErrTaskCanceled) {
+				return
+			}
+			if err := results.SendErr(workCtx, coroutineResult{index: i, value: result, err: err}); err != nil &&
+				!errors.Is(err, task.ErrTaskCanceled) {
 				panic(err)
 			}
-			doubled[i] = result
 		})
 	}
 
@@ -125,17 +137,42 @@ func CoroutineFanInOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	timer := timerCtx.CreateTimer(input.ApprovalWindow)
 	approvals := task.NewEventChannel[string](ctx, "Approval")
 	selected := "timeout"
-	ctx.Select(
-		task.OnEvent(approvals, func(value string) {
-			selected = "event:" + value
-			cancelTimer()
-		}),
-		task.OnTask(timer, func(task.Task) {
-			selected = "timeout"
-		}),
-	)
+	decisionMade := false
+	received := 0
+	var failure error
+	for (received < len(input.Values) || !decisionMade) && failure == nil {
+		var cases []task.SelectCase
+		if received < len(input.Values) {
+			cases = append(cases, task.OnReceive(results, func(result coroutineResult) {
+				failure = result.err
+				doubled[result.index] = result.value
+				received++
+			}))
+		}
+		if !decisionMade {
+			cases = append(cases,
+				task.OnEvent(approvals, func(value string) {
+					selected = "event:" + value
+					decisionMade = true
+					cancelTimer()
+				}),
+				task.OnTask(timer, func(task.Task) {
+					selected = "timeout"
+					decisionMade = true
+				}),
+			)
+		}
+		ctx.Select(cases...)
+	}
 
+	if failure != nil {
+		cancelWork()
+		cancelTimer()
+	}
 	waitGroup.Wait(ctx)
+	if failure != nil {
+		return nil, failure
+	}
 	sum := 0
 	for _, value := range doubled {
 		sum += value
