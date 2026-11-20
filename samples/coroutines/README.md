@@ -4,9 +4,11 @@
 
 - Starts bounded orchestration coroutines with `ctx.Go`.
 - Coordinates coroutine completion with `ctx.NewWaitGroup`.
-- Uses `Select` on a typed event channel and a durable timer from a child
-  cancellation scope.
+- Sends activity results through an unbuffered `task.NewChannel`.
+- Uses `Select` to receive branch results alongside a typed external event
+  channel and a durable timer from a child cancellation scope.
 - Cancels the losing timer when the approval event wins.
+- Cancels branch operations and joins their uncanceled wrappers on failure.
 - Validates the returned doubled values and selected event outcome.
 
 ## Prerequisites
@@ -33,6 +35,12 @@ it prints:
 ```text
 SAMPLE_OK coroutines
 ```
+
+Channel operations yield to the SDK scheduler, not Go's native channel
+scheduler. Once all branches are waiting and available history is exhausted,
+the worker unloads the entire execution and dispatches its pending activities.
+Replay recreates the branches and their channel exchanges; no goroutine remains
+alive waiting for an activity on another worker.
 
 ## Cleanup
 

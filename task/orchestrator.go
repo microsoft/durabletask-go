@@ -436,6 +436,11 @@ func (ctx *OrchestrationContext) start() (actions []*protos.OrchestratorAction) 
 			break
 		}
 		if !ok {
+			if !terminal && !ctx.isSuspended && !ctx.maxEventsPerTurnExceeded &&
+				ctx.scheduler.hasChannelDeadlock() {
+				_ = ctx.setFailed(ErrOrchestrationDeadlock)
+				markTerminal()
+			}
 			break
 		}
 		if ctx.isTerminated && !terminal {
