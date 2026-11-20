@@ -659,12 +659,14 @@ func TestGreeting(t *testing.T) {
 }
 ```
 
-To isolate an orchestration from its dependencies, register stub activities and sub-orchestrators in the test registry. You can use the client to raise events, suspend, resume, terminate, restart, query, and purge instances, and read history.
+To isolate an orchestration from its dependencies, register stub activities and sub-orchestrators in the test registry. You can use the client to raise events, suspend, resume, terminate, restart, rewind, query, and purge instances, and read history.
+
+`RewindInstance` enqueues recovery of a failed orchestration, preserving successful work and recursively recovering failed sub-orchestrations. Wait for completion to observe recovery. Purged children are recreated from their recorded inputs without their previous history. The same worker [history-safety limitations](./durabletaskscheduler/README.md#rewind) apply.
 
 The in-memory service has these limits:
 
 - Timers fire in real time. Use short durations in tests.
-- Durable entities and rewind aren't supported. Entity client calls and `RewindInstance` return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails.
+- Durable entities aren't supported. Entity client calls return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails.
 - State is kept in memory only. It is discarded when the host closes.
 
 ## Development
