@@ -2,7 +2,8 @@
 //
 // The service keeps all orchestration state in process memory and serves the
 // same gRPC protocol as the Durable Task Scheduler, so the regular client and
-// worker can run against it. Timers fire in real time. Entities are not supported.
+// worker can run against it, including durable entities and rewind. Timers fire
+// in real time.
 package inmemory
 
 import (
@@ -44,6 +45,10 @@ type Server struct {
 	actQueue     []*activityItem
 	orchLeases   map[string]*orchestrationLease
 	actLeases    map[string]*activityLease
+	entities     map[string]*entity
+	entityQueue  []*entity
+	entityLeases map[string]*entityLease
+	timers       []*time.Timer
 	changed      chan struct{}
 	closed       bool
 	nextStreamID uint64
@@ -100,6 +105,8 @@ func NewServer() *Server {
 		instances:          make(map[string]*instance),
 		orchLeases:         make(map[string]*orchestrationLease),
 		actLeases:          make(map[string]*activityLease),
+		entities:           make(map[string]*entity),
+		entityLeases:       make(map[string]*entityLease),
 		changed:            make(chan struct{}),
 	}
 }
@@ -120,6 +127,10 @@ func (s *Server) Close() {
 	for _, inst := range s.instances {
 		inst.stopTimers()
 	}
+	for _, t := range s.timers {
+		t.Stop()
+	}
+	s.timers = nil
 	s.notifyLocked()
 }
 
