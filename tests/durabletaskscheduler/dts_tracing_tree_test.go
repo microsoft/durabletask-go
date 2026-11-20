@@ -19,10 +19,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Tracing on the Durable Task Scheduler surface is owned by the scheduler service, not by
-// this SDK: the Go process only runs the client and the worker, and neither creates
-// orchestration, activity, or timer spans. These tests therefore assert the two halves of
-// the contract that this SDK is actually responsible for:
+// Without opt-in tracing, the Go client and worker propagate trace context but do
+// not emit orchestration, activity, or timer spans. These disabled-mode tests
+// assert the two halves of that default contract:
 //
 //  1. The caller's W3C trace context reaches the scheduler and is durably recorded on the
 //     history, so the scheduler-side span tree is rooted in the caller's trace.
@@ -103,10 +102,8 @@ func requireTraceContextsShareTrace(t *testing.T, events []*api.HistoryEvent, wa
 	}
 }
 
-// requireNoWorkerEmittedSpans asserts the documented Durable Task Scheduler limitation: the
-// Go worker and client do not emit durabletask spans, because the scheduler service owns
-// orchestration, activity, and timer span emission. This also guards against a regression
-// that would duplicate the service-side spans locally.
+// requireNoWorkerEmittedSpans asserts that clients and workers without explicit
+// tracing options emit no durabletask spans, even with a global OTel provider.
 func requireNoWorkerEmittedSpans(t *testing.T, exporter *tracetest.InMemoryExporter) {
 	t.Helper()
 	spans := exporter.GetSpans().Snapshots()

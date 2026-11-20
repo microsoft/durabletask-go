@@ -1,20 +1,37 @@
 # Distributed tracing sample
 
-Demonstrates application trace propagation into Durable Task Scheduler using
-OTLP/HTTP and a real OpenTelemetry collector.
+Demonstrates opt-in, replay-aware Durable Task Scheduler tracing using the
+application's OpenTelemetry provider, OTLP/HTTP, and a real collector.
 
 ## Features
 
 - Starts a caller span and schedules an orchestration under that trace.
 - Uses a local loopback HTTP target instead of an external dependency.
-- Exports application spans over OTLP/HTTP to a collector.
-- Verifies the collector file exporter received the caller and local HTTP spans
-  under the same trace ID.
+- Enables worker spans with `client.WithWorkerTracerProvider` and client
+  PRODUCER spans with `client.WithTracerProvider`.
+- Exports orchestration, activity scheduling/execution, timer, and application
+  spans over OTLP/HTTP to a collector.
+- Verifies the collector file exporter received these spans under the caller's
+  trace ID.
 - Reads DTS history and verifies persisted trace context shares the caller trace.
 
-DTS orchestration/activity/timer spans are service-owned. This sample validates
-the trace context recorded in history and does not claim that the local worker
-duplicates service spans.
+Tracing remains disabled unless explicitly enabled. The sample configures its
+provider with **both** `tracing.WithIDGenerator(nil)` and
+`tracing.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample()))`. These wrappers
+let the worker reconstruct completed spans with persisted identities and make
+consistent sampling decisions across replay; do not replace them with the raw
+SDK options. The same provider is also installed globally for HTTP instrumentation.
+
+The exported tree is caller -> create-orchestration PRODUCER -> orchestration
+SERVER -> activity CLIENT -> activity SERVER -> application HTTP spans, with a
+timer INTERNAL span under the orchestration. The worker exports the orchestration
+when it finishes and durable scheduling/timer spans after accepted completions,
+not on every replay. The application flushes the provider after worker shutdown
+and owns its final shutdown.
+
+These are application-process spans, separate from any scheduler-service
+telemetry. See the [tracing guide](../../tracing/README.md) for span semantics,
+SDK parity, and delivery/propagation limitations.
 
 ## Prerequisites
 
