@@ -22,7 +22,7 @@ const (
 )
 
 func entitySpanName(id api.EntityID, operation string) string {
-	return typeEntity + ":" + id.Name + ":" + operation
+	return typeEntity + ":" + helpers.ToLowerInvariant(id.Name) + ":" + operation
 }
 
 func entityAttributes(signal bool) []attribute.KeyValue {
@@ -110,15 +110,21 @@ func (o *Orchestration) completeEntity(requestID string, end time.Time, replayin
 	o.pending = append(o.pending, span)
 }
 
-// RecordEntitySignal reserves a span only for a non-replayed signal.
+type entitySignalSpan struct {
+	pendingSpan
+	createdDuringReplay bool
+}
+
+// RecordEntitySignal also reserves replayed actions: a buffered event may
+// create a new action while the replay engine still considers it replaying.
 func (o *Orchestration) RecordEntitySignal(action *protos.OrchestratorAction, id api.EntityID, replaying bool) {
-	if !o.Enabled() || replaying {
+	if !o.Enabled() {
 		return
 	}
 	signal := action.GetSendEntityMessage().GetEntityOperationSignaled()
 	span := o.entitySpan(id, signal.Operation, true, action.Id, time.Now(), signal.ScheduledTime)
 	span.end = span.start
-	o.entitySignals[action.Id] = span
+	o.entitySignals[action.Id] = entitySignalSpan{pendingSpan: span, createdDuringReplay: replaying}
 }
 
 // ConfirmEntitySignal queues a signal consumed in the same dispatch only after
@@ -127,8 +133,8 @@ func (o *Orchestration) ConfirmEntitySignal(eventID int32, replaying bool) {
 	if !o.Enabled() {
 		return
 	}
-	if span, ok := o.entitySignals[eventID]; ok && !replaying {
-		o.pending = append(o.pending, span)
+	if span, ok := o.entitySignals[eventID]; ok && !span.createdDuringReplay && !replaying {
+		o.pending = append(o.pending, span.pendingSpan)
 	}
 	delete(o.entitySignals, eventID)
 }

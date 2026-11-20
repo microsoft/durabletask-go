@@ -322,6 +322,61 @@ func TestWorkerTracingEntitySignalSameDispatch(t *testing.T) {
 	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
 }
 
+func TestWorkerTracingEntitySignalAfterResume(t *testing.T) {
+	id := api.NewEntityID("counter", "key")
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("SignalAfterResume", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.WaitForSingleEvent("next", -1).Await(nil); err != nil {
+			return nil, err
+		}
+		if err := ctx.SignalEntity(id, "add"); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	h := newTracingHarness(t, registry, true)
+	backend := newFakeOrchestrationBackend("caller", helpers.NewExecutionStartedEvent(
+		"SignalAfterResume", "caller", nil, nil, nil, nil))
+	backend.entityParameters = &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)}
+	backend.dispatch(t, h)
+	backend.dispatch(t, h, helpers.NewSuspendOrchestrationEvent(""))
+	backend.dispatch(t, h, helpers.NewEventRaisedEvent("next", nil))
+	require.Empty(t, h.spans())
+
+	response := backend.dispatch(t, h, helpers.NewResumeOrchestrationEvent(""))
+	require.Len(t, response.Actions, 1)
+	require.NotNil(t, response.Actions[0].GetSendEntityMessage().GetEntityOperationSignaled())
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+	backend.dispatch(t, h)
+	backend.dispatch(t, h, helpers.NewEventRaisedEvent("finish", nil))
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+}
+
+func TestWorkerTracingEntitySignalCanonicalNameAndAcknowledgement(t *testing.T) {
+	id := api.EntityID{Name: "Counter", Key: "key"}
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Signal", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SignalEntity(id, "add"); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	h := newTracingHarness(t, registry, true)
+	backend := newFakeOrchestrationBackend("caller", helpers.NewExecutionStartedEvent(
+		"Signal", "caller", nil, nil, nil, nil))
+	backend.entityParameters = &protos.OrchestratorEntityParameters{EntityMessageReorderWindow: durationpb.New(0)}
+	response := backend.dispatch(t, h)
+	require.Len(t, response.Actions, 1)
+	spans := spansNamed(h.spans(), "entity:counter:add")
+	require.Len(t, spans, 1)
+	require.Equal(t, id.String(), spanAttribute(spans[0], "durabletask.event.target_instance_id"))
+
+	// Deliver the acknowledgement as new history after the signal was exported.
+	backend.history = backend.history[:len(backend.history)-1]
+	backend.dispatch(t, h, tracingEntitySent(response.Actions[0]))
+	require.Len(t, spansNamed(h.spans(), "entity:counter:add"), 1)
+}
+
 func TestWorkerTracingEntityOperationResults(t *testing.T) {
 	for _, mode := range []string{"enabled", "disabled", "unsampled", "rejected", "batch-failure", "malformed-results"} {
 		t.Run(mode, func(t *testing.T) {

@@ -246,7 +246,7 @@ type Orchestration struct {
 	sentEvents    map[int32]pendingSpan
 	acceptedSends map[int32]struct{}
 	entities      map[string]pendingSpan
-	entitySignals map[int32]pendingSpan
+	entitySignals map[int32]entitySignalSpan
 	pending       []pendingSpan
 
 	logicalOnce sync.Once
@@ -269,7 +269,7 @@ func (t *Tracer) StartOrchestration(
 		sentEvents:    make(map[int32]pendingSpan),
 		acceptedSends: make(map[int32]struct{}),
 		entities:      make(map[string]pendingSpan),
-		entitySignals: make(map[int32]pendingSpan),
+		entitySignals: make(map[int32]entitySignalSpan),
 	}
 	for _, events := range eventLists {
 		for _, event := range events {
@@ -610,7 +610,7 @@ func (o *Orchestration) Emit(response *protos.OrchestratorResponse) {
 	for _, action := range response.GetActions() {
 		if action.GetSendEntityMessage().GetEntityOperationSignaled() != nil {
 			if span, ok := o.entitySignals[action.Id]; ok {
-				o.pending = append(o.pending, span)
+				o.pending = append(o.pending, span.pendingSpan)
 			}
 		}
 		if sent := action.GetSendEvent(); sent != nil {
