@@ -41,6 +41,13 @@
 //     accepted by the backend. Replayed history exports nothing.
 //   - Activity executions are live SERVER spans that are active in the
 //     activity's context, so application spans nest under them.
+//   - Orchestrator SendEvent actions emit "orchestration_event:<event>"
+//     PRODUCER spans under the sending orchestration when accepted. Replayed
+//     sends and later history acknowledgements emit nothing. A new send
+//     matched to history in the same dispatch also emits once.
+//   - Event receipt does not emit a consumer span. The event protocol carries
+//     no trace context, so sends cannot parent or link the receiving
+//     orchestration to the sender's event span.
 //   - Abandoned dispatches export no orchestration telemetry. Replay
 //     suppression is best effort and is not exactly-once delivery: a dispatch
 //     whose completion succeeds but is retried by the backend may export again.

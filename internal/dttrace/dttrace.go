@@ -242,6 +242,7 @@ type Orchestration struct {
 	passthrough *protos.OrchestrationTraceContext
 	scheduled   map[int32]scheduledTask
 	timers      map[int32]createdTimer
+	sentEvents  map[int32]pendingSpan
 	pending     []pendingSpan
 
 	logicalOnce sync.Once
@@ -261,6 +262,7 @@ func (t *Tracer) StartOrchestration(
 		passthrough: persisted,
 		scheduled:   make(map[int32]scheduledTask),
 		timers:      make(map[int32]createdTimer),
+		sentEvents:  make(map[int32]pendingSpan),
 	}
 	for _, events := range eventLists {
 		for _, event := range events {
@@ -490,6 +492,44 @@ func (o *Orchestration) fireTimer(fired *protos.TimerFiredEvent, end time.Time, 
 	})
 }
 
+func (o *Orchestration) eventSpan(name, target string) pendingSpan {
+	now := time.Now()
+	attrs := taskAttributes(typeEvent, name, "", o.instanceID)
+	if o.executionID != "" {
+		attrs = append(attrs, AttrExecutionID.String(o.executionID))
+	}
+	if target != "" {
+		attrs = append(attrs, AttrEventTargetInstanceID.String(target))
+	}
+	return pendingSpan{
+		name: SpanName(typeOrchestrationEvent, name, ""), kind: trace.SpanKindProducer,
+		spanID: RandomSpanID(), start: now, end: now, attrs: attrs,
+	}
+}
+
+// RecordSendEvent remembers a non-replayed send in case its matching history
+// is consumed in this dispatch instead of leaving an action in the response.
+func (o *Orchestration) RecordSendEvent(action *protos.OrchestratorAction, replaying bool) {
+	if !o.Enabled() || replaying {
+		return
+	}
+	sent := action.GetSendEvent()
+	o.sentEvents[action.Id] = o.eventSpan(sent.GetName(), sent.GetInstance().GetInstanceId())
+}
+
+// ConfirmSendEvent queues a send only after the replay engine validates its
+// history match. An acknowledgement of a send from an earlier dispatch emits
+// nothing: that send was already exported with its accepted response.
+func (o *Orchestration) ConfirmSendEvent(eventID int32, replaying bool) {
+	if !o.Enabled() {
+		return
+	}
+	if span, ok := o.sentEvents[eventID]; ok && !replaying {
+		o.pending = append(o.pending, span)
+	}
+	delete(o.sentEvents, eventID)
+}
+
 // PrepareResponse persists the orchestration span identity on response and
 // assigns scheduling span IDs to new activity and sub-orchestration actions.
 // Continue-as-new and rewind responses carry a fresh identity so the next
@@ -545,6 +585,16 @@ func (o *Orchestration) Emit(response *protos.OrchestratorResponse) {
 		return
 	}
 	logical := o.SpanContext()
+	for _, action := range response.GetActions() {
+		if sent := action.GetSendEvent(); sent != nil {
+			span, ok := o.sentEvents[action.Id]
+			if !ok {
+				span = o.eventSpan(sent.GetName(), sent.GetInstance().GetInstanceId())
+			}
+			o.pending = append(o.pending, span)
+		}
+	}
+	o.sentEvents = nil
 	for _, span := range o.pending {
 		o.tracer.emit(span.name, span.kind, logical, trace.TraceID{}, span.spanID,
 			span.start, span.end, span.attrs, span.failure)

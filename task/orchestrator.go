@@ -1259,6 +1259,7 @@ func (ctx *OrchestrationContext) SendEvent(instanceID api.InstanceID, eventName 
 	action := helpers.NewSendEventAction(string(instanceID), eventName, wrapperspb.String(string(raw)))
 	action.Id = engine.getNextSequenceNumber()
 	engine.pendingActions[action.Id] = action
+	engine.trace.RecordSendEvent(action, engine.IsReplaying)
 	return nil
 }
 
@@ -1442,6 +1443,7 @@ func (ctx *OrchestrationContext) onEventSent(eventID int32, event *protos.EventS
 		)
 	}
 	delete(ctx.pendingActions, eventID)
+	ctx.trace.ConfirmSendEvent(eventID, ctx.IsReplaying)
 	return nil
 }
 
