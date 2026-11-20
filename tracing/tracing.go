@@ -3,22 +3,24 @@
 //
 // By default workers only propagate W3C trace context and emit no spans.
 // Enable spans with client.WithWorkerTracerProvider and a provider built with
-// [WithIDGenerator]:
+// [WithIDGenerator] and [WithSampler]:
 //
 //	provider := sdktrace.NewTracerProvider(
 //		tracing.WithIDGenerator(nil),
+//		tracing.WithSampler(nil),
 //		sdktrace.WithBatcher(exporter),
 //	)
 //	worker, err := durabletaskscheduler.NewWorker(..., client.WithWorkerTracerProvider(provider))
 //
-// The application owns the provider's resource, sampler, processors, exporter,
-// and shutdown. Spans use the "durabletask" instrumentation scope.
+// The application owns the provider's resource, sampling policy, processors,
+// exporter, and shutdown. Spans use the "durabletask" instrumentation scope.
 //
 // Orchestrations replay from history, so the worker never keeps a live
 // orchestration span between dispatches. It persists the span's ID and start
 // time with the backend and reconstructs completed spans with their original
-// identity. Reconstruction needs the provider to honor requested span IDs,
-// which is why [WithIDGenerator] is required; the worker rejects other
+// identity. Reconstruction needs the provider to honor requested span IDs and
+// to report sampling decisions without starting spans, which is why
+// [WithIDGenerator] and [WithSampler] are required; the worker rejects other
 // providers instead of exporting a disconnected span tree. Consequently:
 //
 //   - The orchestration span is exported once, when the execution completes,
@@ -32,8 +34,13 @@
 //     suppression is best effort and is not exactly-once delivery: a dispatch
 //     whose completion succeeds but is retried by the backend may export again.
 //   - Orchestration spans join the trace context recorded when the
-//     orchestration was scheduled. Orchestrations scheduled without trace
-//     context produce no orchestration, scheduling, or timer spans.
+//     orchestration was scheduled. An orchestration scheduled without trace
+//     context becomes the root of a new trace. Its trace ID is derived from
+//     the persisted span identity, and its sampling decision comes from the
+//     sampler passed to [WithSampler], which is consulted again on later
+//     dispatches. Use a sampler whose root decision depends only on the trace
+//     ID, such as the OpenTelemetry SDK's built-in samplers, so every dispatch
+//     agrees.
 //   - Span identity persistence depends on the backend returning the
 //     orchestration trace context on later dispatches. Continue-as-new and
 //     rewind start a new orchestration span identity.
@@ -49,7 +56,7 @@ import (
 )
 
 // ErrUnsupportedTracerProvider is returned when worker tracing is enabled with
-// a provider that does not use [WithIDGenerator].
+// a provider that does not use both [WithIDGenerator] and [WithSampler].
 var ErrUnsupportedTracerProvider = dttrace.ErrUnsupportedTracerProvider
 
 // NewIDGenerator wraps base so Durable Task can reconstruct spans with their
@@ -64,4 +71,19 @@ func NewIDGenerator(base sdktrace.IDGenerator) sdktrace.IDGenerator {
 // using sdktrace.WithIDGenerator, which would replace this one.
 func WithIDGenerator(base sdktrace.IDGenerator) sdktrace.TracerProviderOption {
 	return sdktrace.WithIDGenerator(NewIDGenerator(base))
+}
+
+// NewSampler wraps base so Durable Task can learn sampling decisions for
+// reconstructed root orchestration spans without starting spans. All other
+// spans are sampled exactly as base decides. A nil base uses
+// sdktrace.ParentBased(sdktrace.AlwaysSample()), the OpenTelemetry SDK default.
+func NewSampler(base sdktrace.Sampler) sdktrace.Sampler {
+	return dttrace.Sampler{Base: base}
+}
+
+// WithSampler returns the tracer provider option required by Durable Task
+// tracing. Pass the application's sampler as base instead of also using
+// sdktrace.WithSampler, which would replace this one.
+func WithSampler(base sdktrace.Sampler) sdktrace.TracerProviderOption {
+	return sdktrace.WithSampler(NewSampler(base))
 }

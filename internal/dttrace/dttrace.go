@@ -2,13 +2,16 @@ package dttrace
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"strconv"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -39,46 +42,64 @@ const (
 )
 
 // ErrUnsupportedTracerProvider reports a provider that cannot reconstruct spans
-// with persisted IDs, which would otherwise export a disconnected span tree.
+// with persisted IDs and sampling decisions, which would otherwise export a
+// disconnected span tree.
 var ErrUnsupportedTracerProvider = errors.New(
-	"durabletask tracing requires an OpenTelemetry SDK tracer provider configured with tracing.WithIDGenerator")
+	"durabletask tracing requires an OpenTelemetry SDK tracer provider configured with " +
+		"tracing.WithIDGenerator and tracing.WithSampler")
 
 // Tracer emits Durable Task spans through a validated tracer provider.
 type Tracer struct {
 	tracer trace.Tracer
 }
 
-// NewTracer validates that provider honors persisted span IDs.
+// NewTracer validates that provider honors persisted span IDs and answers
+// sampling queries.
 func NewTracer(provider trace.TracerProvider) (*Tracer, error) {
 	if provider == nil {
 		return nil, errors.New("tracer provider cannot be nil")
 	}
 	tracer := provider.Tracer(ScopeName)
-	if !honorsSpanIDOverride(tracer) {
+	if !supportsReconstruction(tracer) {
 		return nil, ErrUnsupportedTracerProvider
 	}
 	return &Tracer{tracer: tracer}, nil
 }
 
-// honorsSpanIDOverride starts, but never ends, an unsampled probe span. Unended
-// spans are not exported.
-func honorsSpanIDOverride(tracer trace.Tracer) bool {
+// supportsReconstruction starts, but never ends, a probe span under an
+// unsampled parent. With the Durable Task sampler installed the probe is
+// dropped before any span processor sees it.
+func supportsReconstruction(tracer trace.Tracer) bool {
 	want := RandomSpanID()
 	parent := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID: RandomTraceID(),
 		SpanID:  RandomSpanID(),
 		Remote:  true,
 	})
-	ctx := trace.ContextWithRemoteSpanContext(withSpanIDOverride(context.Background(), want), parent)
-	_, span := tracer.Start(ctx, "durabletask.probe")
-	return span.SpanContext().SpanID() == want
+	query := &samplingQuery{}
+	ctx := context.WithValue(withIDOverride(context.Background(), trace.TraceID{}, want), samplingQueryKey{}, query)
+	_, span := tracer.Start(trace.ContextWithRemoteSpanContext(ctx, parent), "durabletask.probe")
+	return query.answered && span.SpanContext().SpanID() == want
+}
+
+// reconstructionContext returns a private context that starts a span with a
+// persisted identity: a child of parent when it is valid, otherwise a root
+// span in traceID.
+func reconstructionContext(parent trace.SpanContext, traceID trace.TraceID, spanID trace.SpanID) context.Context {
+	ctx := withIDOverride(context.Background(), traceID, spanID)
+	if parent.IsValid() {
+		ctx = trace.ContextWithRemoteSpanContext(ctx, parent)
+	}
+	return ctx
 }
 
 // emit reconstructs and ends one span with a persisted identity and timestamps.
+// traceID is used only when parent is invalid and the span is a trace root.
 func (t *Tracer) emit(
 	name string,
 	kind trace.SpanKind,
 	parent trace.SpanContext,
+	traceID trace.TraceID,
 	spanID trace.SpanID,
 	start, end time.Time,
 	attrs []attribute.KeyValue,
@@ -87,7 +108,7 @@ func (t *Tracer) emit(
 	if end.Before(start) {
 		end = start
 	}
-	ctx := trace.ContextWithRemoteSpanContext(withSpanIDOverride(context.Background(), spanID), parent)
+	ctx := reconstructionContext(parent, traceID, spanID)
 	_, span := t.tracer.Start(ctx, name,
 		trace.WithSpanKind(kind),
 		trace.WithTimestamp(start),
@@ -214,6 +235,7 @@ type Orchestration struct {
 	name        string
 	version     string
 	executionID string
+	started     bool
 	parent      trace.SpanContext
 	spanID      trace.SpanID
 	start       time.Time
@@ -221,6 +243,9 @@ type Orchestration struct {
 	scheduled   map[int32]scheduledTask
 	timers      map[int32]createdTimer
 	pending     []pendingSpan
+
+	logicalOnce sync.Once
+	logical     trace.SpanContext
 }
 
 // StartOrchestration restores the persisted orchestration span identity, or
@@ -240,6 +265,7 @@ func (t *Tracer) StartOrchestration(
 	for _, events := range eventLists {
 		for _, event := range events {
 			if started := event.GetExecutionStarted(); started != nil {
+				o.started = true
 				o.name = started.GetName()
 				o.version = started.GetVersion().GetValue()
 				o.executionID = started.GetOrchestrationInstance().GetExecutionId().GetValue()
@@ -268,18 +294,87 @@ func parseSpanID(value string) (trace.SpanID, bool) {
 	return spanID, spanID.IsValid()
 }
 
-// Enabled reports whether this execution has a valid parent trace to join.
-// Without one the worker keeps propagation-only behavior.
+// Enabled reports whether this dispatch belongs to a traceable execution.
 func (o *Orchestration) Enabled() bool {
-	return o != nil && o.parent.IsValid()
+	return o != nil && o.started
 }
 
 // SpanContext returns the non-recording logical orchestration span context.
+// An execution scheduled with trace context joins that trace. Otherwise the
+// orchestration is the root of its own trace, whose ID is derived from the
+// persisted span identity so every dispatch and worker agrees on it.
 func (o *Orchestration) SpanContext() trace.SpanContext {
 	if !o.Enabled() {
 		return trace.SpanContext{}
 	}
-	return o.parent.WithSpanID(o.spanID).WithRemote(true)
+	o.logicalOnce.Do(func() {
+		if o.parent.IsValid() {
+			o.logical = o.parent.WithSpanID(o.spanID).WithRemote(true)
+			return
+		}
+		o.logical = o.tracer.rootSpanContext(
+			rootTraceID(o.instanceID, o.executionID, o.spanID),
+			o.spanID,
+			SpanName(typeOrchestration, o.name, o.version),
+			o.attributes(),
+		).WithRemote(true)
+	})
+	return o.logical
+}
+
+// rootSpanContext asks the provider's sampler for a root orchestration span's
+// sampling decision and tracestate. The Durable Task sampler drops the query
+// span, so it never records, reaches span processors, or exports. The decision
+// is re-evaluated on every dispatch, so it is only stable for samplers whose
+// root decision depends on the trace ID.
+func (t *Tracer) rootSpanContext(
+	traceID trace.TraceID,
+	spanID trace.SpanID,
+	name string,
+	attrs []attribute.KeyValue,
+) trace.SpanContext {
+	query := &samplingQuery{}
+	ctx := context.WithValue(withIDOverride(context.Background(), traceID, spanID), samplingQueryKey{}, query)
+	t.tracer.Start(ctx, name,
+		trace.WithNewRoot(),
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(attrs...),
+	)
+	var flags trace.TraceFlags
+	if query.answered && query.result.Decision == sdktrace.RecordAndSample {
+		flags = trace.FlagsSampled
+	}
+	return trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: flags,
+		TraceState: query.result.Tracestate,
+	})
+}
+
+// rootTraceID derives a stable trace ID for an orchestration execution that
+// was scheduled without trace context.
+func rootTraceID(instanceID, executionID string, spanID trace.SpanID) trace.TraceID {
+	hash := sha256.New()
+	hash.Write([]byte(instanceID))
+	hash.Write([]byte{0})
+	hash.Write([]byte(executionID))
+	hash.Write([]byte{0})
+	hash.Write(spanID[:])
+	var traceID trace.TraceID
+	copy(traceID[:], hash.Sum(nil))
+	if !traceID.IsValid() {
+		traceID[len(traceID)-1] = 1
+	}
+	return traceID
+}
+
+func (o *Orchestration) attributes() []attribute.KeyValue {
+	attrs := taskAttributes(typeOrchestration, o.name, o.version, o.instanceID)
+	if o.executionID != "" {
+		attrs = append(attrs, AttrExecutionID.String(o.executionID))
+	}
+	return attrs
 }
 
 // Observe records one consumed history event. Completions consumed as new
@@ -451,7 +546,8 @@ func (o *Orchestration) Emit(response *protos.OrchestratorResponse) {
 	}
 	logical := o.SpanContext()
 	for _, span := range o.pending {
-		o.tracer.emit(span.name, span.kind, logical, span.spanID, span.start, span.end, span.attrs, span.failure)
+		o.tracer.emit(span.name, span.kind, logical, trace.TraceID{}, span.spanID,
+			span.start, span.end, span.attrs, span.failure)
 	}
 	o.pending = nil
 
@@ -464,17 +560,13 @@ func (o *Orchestration) Emit(response *protos.OrchestratorResponse) {
 	if complete == nil {
 		return
 	}
-	attrs := taskAttributes(typeOrchestration, o.name, o.version, o.instanceID)
-	if o.executionID != "" {
-		attrs = append(attrs, AttrExecutionID.String(o.executionID))
-	}
-	attrs = append(attrs, AttrStatus.String(statusName(complete.OrchestrationStatus)))
+	attrs := append(o.attributes(), AttrStatus.String(statusName(complete.OrchestrationStatus)))
 	var failure *protos.TaskFailureDetails
 	if complete.OrchestrationStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED {
 		failure = failureOrDefault(complete.FailureDetails)
 	}
 	o.tracer.emit(SpanName(typeOrchestration, o.name, o.version), trace.SpanKindServer,
-		o.parent, o.spanID, o.start, time.Now(), attrs, failure)
+		o.parent, logical.TraceID(), o.spanID, o.start, time.Now(), attrs, failure)
 }
 
 func statusName(status protos.OrchestrationStatus) string {

@@ -34,11 +34,23 @@ func newTracingHarness(
 	executorOptions ...task.TaskExecutorOption,
 ) *tracingHarness {
 	t.Helper()
+	return newTracingHarnessWithProviderOptions(t, registry, enabled, nil, executorOptions...)
+}
+
+func newTracingHarnessWithProviderOptions(
+	t *testing.T,
+	registry *task.TaskRegistry,
+	enabled bool,
+	providerOptions []sdktrace.TracerProviderOption,
+	executorOptions ...task.TaskExecutorOption,
+) *tracingHarness {
+	t.Helper()
 	recorder := tracetest.NewSpanRecorder()
-	provider := sdktrace.NewTracerProvider(
+	provider := sdktrace.NewTracerProvider(append([]sdktrace.TracerProviderOption{
 		tracing.WithIDGenerator(nil),
+		tracing.WithSampler(nil),
 		sdktrace.WithSpanProcessor(recorder),
-	)
+	}, providerOptions...)...)
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 	client := new(fakeSchedulerClient)
 	var options []TaskHubGrpcWorkerOption
@@ -168,7 +180,14 @@ func TestWorkerTracerProviderRejectsUnsupportedProviders(t *testing.T) {
 		"default-sdk":  sdktrace.NewTracerProvider(),
 		"replaced-idgen": sdktrace.NewTracerProvider(
 			tracing.WithIDGenerator(nil),
+			tracing.WithSampler(nil),
 			sdktrace.WithIDGenerator(fixedIDGenerator{}),
+		),
+		"missing-sampler": sdktrace.NewTracerProvider(tracing.WithIDGenerator(nil)),
+		"replaced-sampler": sdktrace.NewTracerProvider(
+			tracing.WithIDGenerator(nil),
+			tracing.WithSampler(nil),
+			sdktrace.WithSampler(sdktrace.AlwaysSample()),
 		),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -304,6 +323,64 @@ func TestWorkerTracingReplayAwareLifecycle(t *testing.T) {
 	for _, spanContext := range orchestrationSpanContexts {
 		require.Equal(t, persisted.SpanID.GetValue(), spanContext.SpanID().String())
 		require.True(t, spanContext.IsRemote())
+	}
+}
+
+func TestWorkerTracingRootTraceWithoutScheduledContext(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	var logical []trace.SpanContext
+	require.NoError(t, registry.AddOrchestratorN("Root", func(ctx *task.OrchestrationContext) (any, error) {
+		logical = append(logical, trace.SpanContextFromContext(ctx.Context()))
+		if err := ctx.CallActivity("Work").Await(nil); err != nil {
+			return nil, err
+		}
+		return nil, ctx.CreateTimer(time.Millisecond).Await(nil)
+	}))
+	backend := newFakeOrchestrationBackend("root", helpers.NewExecutionStartedEvent(
+		"Root", "root", nil, nil, nil, nil))
+
+	// Fresh workers per dispatch: the trace can only be recovered from the
+	// persisted orchestration identity.
+	first := newTracingHarness(t, registry, true)
+	response := backend.dispatch(t, first)
+	require.Empty(t, first.spans())
+	persisted := response.OrchestrationTraceContext
+	require.NotNil(t, persisted)
+	scheduled := helpers.SpanContextFromTraceContext(response.Actions[0].GetScheduleTask().ParentTraceContext)
+	require.True(t, scheduled.IsValid())
+	require.True(t, scheduled.IsSampled())
+
+	second := newTracingHarness(t, registry, true)
+	response = backend.dispatch(t, second, helpers.NewTaskCompletedEvent(response.Actions[0].Id, nil))
+	clientSpans := second.spans()
+	require.Len(t, clientSpans, 1)
+	require.Equal(t, scheduled.SpanID(), clientSpans[0].SpanContext().SpanID())
+	require.Equal(t, scheduled.TraceID(), clientSpans[0].SpanContext().TraceID())
+	require.Equal(t, persisted.SpanID.GetValue(), clientSpans[0].Parent().SpanID().String())
+	timer := response.Actions[0].GetCreateTimer()
+	require.NotNil(t, timer)
+
+	third := newTracingHarness(t, registry, true)
+	backend.dispatch(t, third, helpers.NewTimerFiredEvent(response.Actions[0].Id, timer.FireAt, nil))
+	timerSpans := spansNamed(third.spans(), "orchestration:Root:timer")
+	require.Len(t, timerSpans, 1)
+	require.Equal(t, scheduled.TraceID(), timerSpans[0].SpanContext().TraceID())
+	orchestration := spansNamed(third.spans(), "orchestration:Root")
+	require.Len(t, orchestration, 1)
+	require.False(t, orchestration[0].Parent().IsValid())
+	require.Equal(t, scheduled.TraceID(), orchestration[0].SpanContext().TraceID())
+	require.Equal(t, persisted.SpanID.GetValue(), orchestration[0].SpanContext().SpanID().String())
+	require.True(t, persisted.SpanStartTime.AsTime().Equal(orchestration[0].StartTime()))
+	require.Equal(t, "Completed", spanAttribute(orchestration[0], "durabletask.task.status"))
+
+	require.NotEmpty(t, logical)
+	for _, spanContext := range logical {
+		require.Equal(t, scheduled.TraceID(), spanContext.TraceID())
+		require.Equal(t, persisted.SpanID.GetValue(), spanContext.SpanID().String())
+	}
+	// Root sampling queries never reach span processors.
+	for _, h := range []*tracingHarness{first, second, third} {
+		require.Len(t, h.recorder.Started(), len(h.recorder.Ended()))
 	}
 }
 
@@ -554,6 +631,18 @@ func TestWorkerTracingSamplingAndDisabledMode(t *testing.T) {
 		scheduled := helpers.SpanContextFromTraceContext(response.Actions[0].GetScheduleTask().ParentTraceContext)
 		require.False(t, scheduled.IsSampled())
 		require.Equal(t, "vendor=value", scheduled.TraceState().String())
+		backend.dispatch(t, h, helpers.NewTaskCompletedEvent(0, nil))
+		require.Empty(t, h.spans())
+	})
+	t.Run("root unsampled", func(t *testing.T) {
+		h := newTracingHarnessWithProviderOptions(t, registry, true,
+			[]sdktrace.TracerProviderOption{tracing.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample()))})
+		backend := newFakeOrchestrationBackend("root-unsampled", helpers.NewExecutionStartedEvent(
+			"Work", "root-unsampled", nil, nil, nil, nil))
+		response := backend.dispatch(t, h)
+		scheduled := helpers.SpanContextFromTraceContext(response.Actions[0].GetScheduleTask().ParentTraceContext)
+		require.True(t, scheduled.IsValid())
+		require.False(t, scheduled.IsSampled())
 		backend.dispatch(t, h, helpers.NewTaskCompletedEvent(0, nil))
 		require.Empty(t, h.spans())
 	})

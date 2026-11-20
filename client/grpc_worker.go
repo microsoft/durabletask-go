@@ -522,9 +522,10 @@ func WithWorkerDataConverter(converter api.DataConverter) TaskHubGrpcWorkerOptio
 // worker only propagates W3C trace context and emits no spans.
 //
 // The provider must be an OpenTelemetry SDK provider configured with
-// tracing.WithIDGenerator from github.com/microsoft/durabletask-go/tracing;
-// other providers are rejected with tracing.ErrUnsupportedTracerProvider. See
-// that package for span semantics.
+// tracing.WithIDGenerator and tracing.WithSampler from
+// github.com/microsoft/durabletask-go/tracing; other providers are rejected
+// with tracing.ErrUnsupportedTracerProvider. See that package for span
+// semantics.
 func WithWorkerTracerProvider(provider trace.TracerProvider) TaskHubGrpcWorkerOption {
 	return func(options *taskHubGrpcWorkerOptions) error {
 		tracer, err := dttrace.NewTracer(provider)
