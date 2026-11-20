@@ -33,25 +33,6 @@ func entityAttributes(signal bool) []attribute.KeyValue {
 	return []attribute.KeyValue{AttrType.String(typeEntity), AttrOperation.String(operation)}
 }
 
-// StartSignalEntity starts the PRODUCER span for a client entity signal as a
-// child of the span in ctx. The returned context carries the new span so it is
-// propagated on the signal request.
-func (t *ClientTracer) StartSignalEntity(
-	ctx context.Context,
-	id api.EntityID,
-	operation string,
-	scheduled *timestamppb.Timestamp,
-) (context.Context, trace.Span) {
-	attrs := append(entityAttributes(true), AttrEventTargetInstanceID.String(id.String()))
-	if scheduled != nil {
-		attrs = append(attrs, AttrScheduledTime.String(scheduled.AsTime().UTC().Format(time.RFC3339Nano)))
-	}
-	return t.tracer.Start(ctx, entitySpanName(id, operation),
-		trace.WithSpanKind(trace.SpanKindProducer),
-		trace.WithAttributes(attrs...),
-	)
-}
-
 // EmitEntityBatch exports operation execution spans after an accepted V2 batch.
 // V2 operation messages have no trace context, so these are independent roots.
 func (t *Tracer) EmitEntityBatch(id api.EntityID, request *protos.EntityBatchRequest, result *protos.EntityBatchResult, start, end time.Time) {

@@ -212,12 +212,10 @@ func TestWorkerTracingEntityLocksEmitNoSpans(t *testing.T) {
 
 	// Lock acquisition and release emit no spans; calls in the critical section
 	// are traced once.
-	require.Len(t, spansNamed(h.spans(), "entity:counter:get"), 1)
-	for _, span := range h.spans() {
-		if spanAttribute(span, "durabletask.type") == "entity" {
-			require.Equal(t, "entity:counter:get", span.Name())
-		}
-	}
+	spans := h.spans()
+	require.Len(t, spans, 1)
+	require.Equal(t, "entity:counter:get", spans[0].Name())
+	require.Equal(t, trace.SpanKindClient, spans[0].SpanKind())
 }
 
 func TestWorkerTracingEntityCallsAndSignalsReplay(t *testing.T) {

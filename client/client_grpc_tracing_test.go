@@ -3,8 +3,8 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/codes"
@@ -225,64 +225,54 @@ func TestClientTracingDisabledKeepsPropagationOnly(t *testing.T) {
 	}
 }
 
-func TestClientTracingSignalEntitySpans(t *testing.T) {
-	recorder := tracetest.NewSpanRecorder()
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
-	fake := &tracingSchedulerClient{}
-	client := newTracedClient(fake, WithTracerProvider(provider))
-	caller, _ := newTraceParent(trace.FlagsSampled)
-	ctx := trace.ContextWithRemoteSpanContext(context.Background(), caller)
+func TestClientSignalEntityPropagatesCallerWithoutCreatingSpan(t *testing.T) {
 	entityID := api.NewEntityID("Counter", "c1")
-	fireAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, enabled := range []bool{false, true} {
+		for _, sampled := range []bool{false, true} {
+			name := fmt.Sprintf("provider=%t/sampled=%t", enabled, sampled)
+			t.Run(name, func(t *testing.T) {
+				recorder := tracetest.NewSpanRecorder()
+				provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+				t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+				fake := &tracingSchedulerClient{}
+				var opts []TaskHubGrpcClientOption
+				if enabled {
+					opts = append(opts, WithTracerProvider(provider))
+				}
+				client := newTracedClient(fake, opts...)
+				var flags trace.TraceFlags
+				if sampled {
+					flags = trace.FlagsSampled
+				}
+				caller, wire := newTraceParent(flags)
+				ctx := trace.ContextWithRemoteSpanContext(context.Background(), caller)
 
-	require.NoError(t, client.SignalEntity(ctx, entityID, "add", api.WithSignalScheduledTime(fireAt)))
-
-	spans := recorder.Ended()
-	require.Len(t, spans, 1)
-	signal := spans[0]
-	require.Equal(t, "entity:counter:add", signal.Name())
-	require.Equal(t, trace.SpanKindProducer, signal.SpanKind())
-	require.Equal(t, caller.SpanID(), signal.Parent().SpanID())
-	require.Equal(t, "entity", spanAttribute(signal, "durabletask.type"))
-	require.Equal(t, "signal_entity", spanAttribute(signal, "durabletask.task.operation"))
-	require.Equal(t, entityID.String(), spanAttribute(signal, "durabletask.event.target_instance_id"))
-	require.Equal(t, fireAt.Format(time.RFC3339Nano), spanAttribute(signal, "durabletask.task.scheduled_time"))
-	require.Equal(t, codes.Unset, signal.Status().Code)
-	propagated := helpers.SpanContextFromTraceContext(fake.signal.ParentTraceContext)
-	require.Equal(t, signal.SpanContext().SpanID(), propagated.SpanID())
-	require.Equal(t, caller.TraceID(), propagated.TraceID())
-
-	fake.err = errors.New("unavailable")
-	require.Error(t, client.SignalEntity(context.Background(), entityID, "add"))
-	failed := recorder.Ended()[1]
-	require.Equal(t, codes.Error, failed.Status().Code)
-	require.Contains(t, failed.Status().Description, "unavailable")
+				require.NoError(t, client.SignalEntity(ctx, entityID, "add"))
+				if sampled {
+					require.Equal(t, wire.GetTraceParent(), fake.signal.ParentTraceContext.GetTraceParent())
+					require.Equal(t, wire.GetTraceState().GetValue(), fake.signal.ParentTraceContext.GetTraceState().GetValue())
+				} else {
+					require.Nil(t, fake.signal.ParentTraceContext)
+				}
+				require.Empty(t, recorder.Ended())
+			})
+		}
+	}
 }
 
-func TestClientTracingSignalEntityUnsampledAndDisabled(t *testing.T) {
-	entityID := api.NewEntityID("Counter", "c1")
-	unsampled, _ := newTraceParent(0)
-
+func TestClientSignalEntityPreservesOptionTraceContext(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 	fake := &tracingSchedulerClient{}
 	client := newTracedClient(fake, WithTracerProvider(provider))
-	ctx := trace.ContextWithRemoteSpanContext(context.Background(), unsampled)
-	require.NoError(t, client.SignalEntity(ctx, entityID, "add"))
-	require.Empty(t, recorder.Ended())
-	propagated := helpers.SpanContextFromTraceContext(fake.signal.ParentTraceContext)
-	require.True(t, propagated.IsValid())
-	require.False(t, propagated.IsSampled())
-	require.Equal(t, unsampled.TraceID(), propagated.TraceID())
-	require.NotEqual(t, unsampled.SpanID(), propagated.SpanID())
+	_, explicit := newTraceParent(trace.FlagsSampled)
+	option := func(req *protos.SignalEntityRequest, _ api.DataConverter) error {
+		req.ParentTraceContext = explicit
+		return nil
+	}
 
-	disabled := &tracingSchedulerClient{}
-	client = newTracedClient(disabled)
-	sampled, wire := newTraceParent(trace.FlagsSampled)
-	ctx = trace.ContextWithRemoteSpanContext(context.Background(), sampled)
-	require.NoError(t, client.SignalEntity(ctx, entityID, "add"))
-	require.Equal(t, wire.GetTraceParent(), disabled.signal.ParentTraceContext.GetTraceParent())
-	ctx = trace.ContextWithRemoteSpanContext(context.Background(), unsampled)
-	require.NoError(t, client.SignalEntity(ctx, entityID, "add"))
-	require.Nil(t, disabled.signal.ParentTraceContext)
+	require.NoError(t, client.SignalEntity(context.Background(), api.NewEntityID("Counter", "c1"), "add", option))
+	require.Equal(t, explicit, fake.signal.ParentTraceContext)
+	require.Empty(t, recorder.Ended())
 }
