@@ -48,6 +48,19 @@
 //   - Event receipt does not emit a consumer span. The event protocol carries
 //     no trace context, so sends cannot parent or link the receiving
 //     orchestration to the sender's event span.
+//   - Entity spans use "entity:<name>:<operation>" and the
+//     "durabletask.task.operation" attribute ("signal_entity" or "call_entity"),
+//     matching DurableTask.Core. Orchestration signals emit PRODUCER spans
+//     when accepted; calls emit CLIENT spans when a new completion is consumed.
+//     Replayed history emits neither. Entity execution emits CONSUMER spans
+//     for signals and SERVER spans for calls after an accepted batch, using
+//     operation-result timestamps and error status.
+//   - V2 entity messages carry no trace context. Entity execution spans are
+//     independent roots, sampled by the provider's root policy, not children
+//     of orchestration/client spans. No synthetic parent or span link is added.
+//     Entity execution spans are reconstructed, not active in handler contexts.
+//     Client SignalEntity continues to propagate caller context on its RPC
+//     request without emitting a span; entity locks emit no spans.
 //   - Abandoned dispatches export no orchestration telemetry. Replay
 //     suppression is best effort and is not exactly-once delivery: a dispatch
 //     whose completion succeeds but is retried by the backend may export again.

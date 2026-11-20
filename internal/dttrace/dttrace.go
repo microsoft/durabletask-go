@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
@@ -244,6 +245,8 @@ type Orchestration struct {
 	timers        map[int32]createdTimer
 	sentEvents    map[int32]pendingSpan
 	acceptedSends map[int32]struct{}
+	entities      map[string]pendingSpan
+	entitySignals map[int32]pendingSpan
 	pending       []pendingSpan
 
 	logicalOnce sync.Once
@@ -265,6 +268,8 @@ func (t *Tracer) StartOrchestration(
 		timers:        make(map[int32]createdTimer),
 		sentEvents:    make(map[int32]pendingSpan),
 		acceptedSends: make(map[int32]struct{}),
+		entities:      make(map[string]pendingSpan),
+		entitySignals: make(map[int32]pendingSpan),
 	}
 	for _, events := range eventLists {
 		for _, event := range events {
@@ -426,6 +431,16 @@ func (o *Orchestration) Observe(event *protos.HistoryEvent, replaying bool) {
 		o.timers[event.EventId] = createdTimer{start: timestamp, fireAt: event.GetTimerCreated().GetFireAt()}
 	case event.GetTimerFired() != nil:
 		o.fireTimer(event.GetTimerFired(), timestamp, replaying)
+	case event.GetEntityOperationCalled() != nil:
+		called := event.GetEntityOperationCalled()
+		if id, err := api.EntityIDFromString(called.GetTargetInstanceId().GetValue()); err == nil {
+			o.entities[called.RequestId] = o.entitySpan(id, called.Operation, false, event.EventId, timestamp, called.ScheduledTime)
+		}
+	case event.GetEntityOperationCompleted() != nil:
+		o.completeEntity(event.GetEntityOperationCompleted().RequestId, timestamp, replaying, nil)
+	case event.GetEntityOperationFailed() != nil:
+		failed := event.GetEntityOperationFailed()
+		o.completeEntity(failed.RequestId, timestamp, replaying, failureOrDefault(failed.FailureDetails))
 	}
 }
 
@@ -593,6 +608,11 @@ func (o *Orchestration) Emit(response *protos.OrchestratorResponse) {
 	}
 	logical := o.SpanContext()
 	for _, action := range response.GetActions() {
+		if action.GetSendEntityMessage().GetEntityOperationSignaled() != nil {
+			if span, ok := o.entitySignals[action.Id]; ok {
+				o.pending = append(o.pending, span)
+			}
+		}
 		if sent := action.GetSendEvent(); sent != nil {
 			span, ok := o.sentEvents[action.Id]
 			if !ok {
@@ -605,6 +625,7 @@ func (o *Orchestration) Emit(response *protos.OrchestratorResponse) {
 		}
 	}
 	o.sentEvents = nil
+	o.entitySignals = nil
 	for _, span := range o.pending {
 		o.tracer.emit(span.name, span.kind, logical, trace.TraceID{}, span.spanID,
 			span.start, span.end, span.attrs, span.failure)
