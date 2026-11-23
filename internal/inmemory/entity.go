@@ -3,9 +3,9 @@ package inmemory
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -596,12 +596,14 @@ func (s *Server) GetEntity(_ context.Context, req *protos.GetEntityRequest) (*pr
 }
 
 // QueryEntities returns entities that match a query, ordered by instance ID.
+// The continuation token encodes the last returned instance ID, so a query
+// resumes after it even if entities are added or removed between pages.
 func (s *Server) QueryEntities(_ context.Context, req *protos.QueryEntitiesRequest) (*protos.QueryEntitiesResponse, error) {
 	query := req.GetQuery()
-	offset := 0
+	var cursor string
 	if token := query.GetContinuationToken().GetValue(); token != "" {
-		var err error
-		if offset, err = strconv.Atoi(token); err != nil || offset < 0 {
+		var ok bool
+		if cursor, ok = decodeEntityCursor(token); !ok {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid continuation token %q", token)
 		}
 	}
@@ -614,6 +616,9 @@ func (s *Server) QueryEntities(_ context.Context, req *protos.QueryEntitiesReque
 	defer s.mu.Unlock()
 	var matches []*entity
 	for _, e := range s.entities {
+		if cursor != "" && e.id <= cursor {
+			continue
+		}
 		if e.state == nil && !query.GetIncludeTransient() {
 			continue
 		}
@@ -632,17 +637,27 @@ func (s *Server) QueryEntities(_ context.Context, req *protos.QueryEntitiesReque
 	slices.SortFunc(matches, func(a, b *entity) int { return cmp.Compare(a.id, b.id) })
 
 	resp := &protos.QueryEntitiesResponse{}
-	if offset >= len(matches) {
-		return resp, nil
+	if len(matches) > pageSize {
+		matches = matches[:pageSize]
+		resp.ContinuationToken = wrapperspb.String(encodeEntityCursor(matches[pageSize-1].id))
 	}
-	end := min(offset+pageSize, len(matches))
-	for _, e := range matches[offset:end] {
+	for _, e := range matches {
 		resp.Entities = append(resp.Entities, e.metadata(query.GetIncludeState()))
 	}
-	if end < len(matches) {
-		resp.ContinuationToken = wrapperspb.String(strconv.Itoa(end))
-	}
 	return resp, nil
+}
+
+func encodeEntityCursor(instanceID string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(instanceID))
+}
+
+func decodeEntityCursor(token string) (string, bool) {
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return "", false
+	}
+	id, _, ok := normalizeEntityID(string(decoded))
+	return id, ok && id == string(decoded)
 }
 
 // CleanEntityStorage releases locks held by orchestrations that are no longer

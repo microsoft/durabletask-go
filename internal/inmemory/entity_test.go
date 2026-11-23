@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -432,5 +434,49 @@ func TestFailedSignalBatchNotifiesWorkItemStreams(t *testing.T) {
 	case <-changed:
 	default:
 		t.Fatal("completing a failed batch must wake streams waiting for a free entity slot")
+	}
+}
+
+func TestQueryEntitiesResumesAfterLastReturnedEntity(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	s.mu.Lock()
+	for _, key := range []string{"a", "b", "c"} {
+		s.getOrCreateEntityLocked("@counter@"+key, "counter").state = wrapperspb.String("1")
+	}
+	s.mu.Unlock()
+
+	query := func(token *wrapperspb.StringValue) *protos.QueryEntitiesResponse {
+		resp, err := s.QueryEntities(context.Background(), &protos.QueryEntitiesRequest{Query: &protos.EntityQuery{
+			PageSize:          wrapperspb.Int32(1),
+			ContinuationToken: token,
+		}})
+		require.NoError(t, err)
+		return resp
+	}
+	ids := func(resp *protos.QueryEntitiesResponse) []string {
+		var ids []string
+		for _, e := range resp.GetEntities() {
+			ids = append(ids, e.GetInstanceId())
+		}
+		return ids
+	}
+	first := query(nil)
+	require.Equal(t, []string{"@counter@a"}, ids(first))
+	s.mu.Lock()
+	delete(s.entities, "@counter@a")
+	s.mu.Unlock()
+
+	second := query(first.GetContinuationToken())
+	assert.Equal(t, []string{"@counter@b"}, ids(second), "removing a returned entity doesn't skip the next one")
+	third := query(second.GetContinuationToken())
+	assert.Equal(t, []string{"@counter@c"}, ids(third))
+	assert.Nil(t, third.GetContinuationToken())
+
+	for _, token := range []string{"1", "not base64!", encodeEntityCursor("not-an-entity")} {
+		_, err := s.QueryEntities(context.Background(), &protos.QueryEntitiesRequest{Query: &protos.EntityQuery{
+			ContinuationToken: wrapperspb.String(token),
+		}})
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "token %q", token)
 	}
 }
