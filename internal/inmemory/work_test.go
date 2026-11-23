@@ -1,16 +1,131 @@
 package inmemory
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
+
+type testWorkItemStream struct {
+	grpc.ServerStream
+	ctx   context.Context
+	items chan *protos.WorkItem
+}
+
+func (s *testWorkItemStream) Context() context.Context { return s.ctx }
+
+func (s *testWorkItemStream) Send(item *protos.WorkItem) error {
+	select {
+	case s.items <- item:
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+
+// openTestStream serves GetWorkItems on a test stream. The returned function
+// closes the stream and waits until its leases are released.
+func openTestStream(t *testing.T, s *Server) (*testWorkItemStream, func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	stream := &testWorkItemStream{ctx: ctx, items: make(chan *protos.WorkItem)}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = s.GetWorkItems(&protos.GetWorkItemsRequest{}, stream)
+	}()
+	closeStream := func() {
+		cancel()
+		<-done
+	}
+	t.Cleanup(closeStream)
+	return stream, closeStream
+}
+
+func (s *testWorkItemStream) receive(t *testing.T) *protos.WorkItem {
+	t.Helper()
+	select {
+	case item := <-s.items:
+		return item
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "timed out waiting for a work item")
+		return nil
+	}
+}
+
+func TestClosedStreamLeasesAreRedeliveredAndOldTokensRejected(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	ctx := t.Context()
+
+	_, err := s.StartInstance(ctx, &protos.CreateInstanceRequest{InstanceId: "id", Name: "orchestrator"})
+	require.NoError(t, err)
+	first, closeFirst := openTestStream(t, s)
+	start := first.receive(t)
+	require.NotNil(t, start.GetOrchestratorRequest())
+	_, err = s.CompleteOrchestratorTask(ctx, &protos.OrchestratorResponse{
+		CompletionToken: start.GetCompletionToken(),
+		Actions: []*protos.OrchestratorAction{{
+			Id: 0,
+			OrchestratorActionType: &protos.OrchestratorAction_ScheduleTask{
+				ScheduleTask: &protos.ScheduleTaskAction{Name: "activity"},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	oldActivity := first.receive(t)
+	require.NotNil(t, oldActivity.GetActivityRequest())
+	_, err = s.RaiseEvent(ctx, &protos.RaiseEventRequest{InstanceId: "id", Name: "A"})
+	require.NoError(t, err)
+	oldOrchestration := first.receive(t)
+	require.NotNil(t, oldOrchestration.GetOrchestratorRequest())
+	// B arrives while A's turn is leased.
+	_, err = s.RaiseEvent(ctx, &protos.RaiseEventRequest{InstanceId: "id", Name: "B"})
+	require.NoError(t, err)
+
+	closeFirst()
+	second, _ := openTestStream(t, s)
+	var orchestration, activity *protos.WorkItem
+	for orchestration == nil || activity == nil {
+		item := second.receive(t)
+		if item.GetOrchestratorRequest() != nil {
+			orchestration = item
+		} else {
+			activity = item
+		}
+	}
+
+	var raised []string
+	for _, event := range orchestration.GetOrchestratorRequest().GetNewEvents() {
+		if e := event.GetEventRaised(); e != nil {
+			raised = append(raised, e.GetName())
+		}
+	}
+	assert.Equal(t, []string{"A", "B"}, raised)
+	assert.Equal(t, "activity", activity.GetActivityRequest().GetName())
+	assert.NotEqual(t, oldOrchestration.GetCompletionToken(), orchestration.GetCompletionToken())
+	assert.NotEqual(t, oldActivity.GetCompletionToken(), activity.GetCompletionToken())
+
+	_, err = s.CompleteOrchestratorTask(ctx, &protos.OrchestratorResponse{CompletionToken: oldOrchestration.GetCompletionToken()})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	_, err = s.CompleteActivityTask(ctx, &protos.ActivityResponse{CompletionToken: oldActivity.GetCompletionToken()})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	_, err = s.CompleteOrchestratorTask(ctx, &protos.OrchestratorResponse{CompletionToken: orchestration.GetCompletionToken()})
+	require.NoError(t, err)
+	_, err = s.CompleteActivityTask(ctx, &protos.ActivityResponse{CompletionToken: activity.GetCompletionToken()})
+	require.NoError(t, err)
+}
 
 func TestContinueAsNewDropsPreviousExecutionResults(t *testing.T) {
 	s := NewServer()
