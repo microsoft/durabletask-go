@@ -218,11 +218,11 @@ func (s *Server) lockRequestActiveLocked(request *protos.EntityLockRequestedEven
 }
 
 // takeBatch removes the signals and calls that are ready to run, stopping at
-// the next lock or unlock message or when the next operation would make the
-// work item larger than maxBytes. The first operation is always taken so that
-// the entity makes progress.
-func (e *entity) takeBatch(baseSize, maxBytes int) []*protos.HistoryEvent {
-	var batch []*protos.HistoryEvent
+// the next lock or unlock message or at the first operation that would make
+// the work item larger than maxBytes; that operation stays queued for the next
+// batch. An operation that can't fit even in an otherwise empty work item is
+// removed and returned in rejected so that it can't stall the entity.
+func (e *entity) takeBatch(baseSize, maxBytes int) (batch, rejected []*protos.HistoryEvent) {
 	var kept []*protos.HistoryEvent
 	// Adding operations can lengthen the EntityRequest and WorkItem length prefixes.
 	size := baseSize + 2*binary.MaxVarintLen32
@@ -236,17 +236,41 @@ func (e *entity) takeBatch(baseSize, maxBytes int) []*protos.HistoryEvent {
 			stop = i
 			break
 		}
-		size += operationRequestSize(event)
-		if len(batch) > 0 && size > maxBytes {
-			stop = i
-			break
+		opSize := operationRequestSize(event)
+		if size+opSize > maxBytes {
+			if len(batch) > 0 {
+				stop = i
+				break
+			}
+			rejected = append(rejected, event)
+			continue
 		}
+		size += opSize
 		batch = append(batch, event)
 	}
-	if len(batch) > 0 {
+	if len(batch) > 0 || len(rejected) > 0 {
 		e.queue = append(kept, e.queue[stop:]...)
 	}
-	return batch
+	return batch, rejected
+}
+
+// rejectOversizedOperationsLocked fails calls whose request can't fit in an
+// entity work item. Oversized signals are dropped.
+func (s *Server) rejectOversizedOperationsLocked(e *entity, events []*protos.HistoryEvent) {
+	for _, event := range events {
+		called := event.GetEntityOperationCalled()
+		if called == nil {
+			continue
+		}
+		s.respondToCallerLocked(called, &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.Now(), EventType: &protos.HistoryEvent_EntityOperationFailed{
+			EntityOperationFailed: &protos.EntityOperationFailedEvent{
+				RequestId: called.GetRequestId(),
+				FailureDetails: failureDetails("EntityOperationTooLarge",
+					"operation %q on entity %q exceeds the %d-byte entity work item limit",
+					called.GetOperation(), e.id, s.maxEntityWorkItemBytes),
+			},
+		}})
+	}
 }
 
 // operationRequestSize returns the bytes an operation adds to an EntityRequest.
@@ -273,8 +297,11 @@ func (s *Server) nextEntityWorkItemLocked(filters *protos.WorkItemFilters, strea
 			}},
 			CompletionToken: token,
 		}
-		events := e.takeBatch(proto.Size(item), s.maxEntityWorkItemBytes)
+		events, rejected := e.takeBatch(proto.Size(item), s.maxEntityWorkItemBytes)
+		s.rejectOversizedOperationsLocked(e, rejected)
 		if len(events) == 0 {
+			// Rejecting operations can leave a lock or unlock message ready.
+			s.pumpEntityLocked(e)
 			return s.nextEntityWorkItemLocked(filters, streamID)
 		}
 		e.leased = true

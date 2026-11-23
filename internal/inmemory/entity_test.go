@@ -152,6 +152,50 @@ func TestEntityWorkItemsAreBoundedBySize(t *testing.T) {
 	}
 }
 
+func TestOversizedEntityOperationsAreRejected(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxEntityWorkItemBytes = 1024
+
+	// The signal fits within the limit on its own but not once wrapped in a work item.
+	oversized := signalEvent("oversized")
+	oversized.GetEntityOperationSignaled().Input = wrapperspb.String("")
+	padding := s.maxEntityWorkItemBytes - 8 - operationRequestSize(oversized)
+	oversized.GetEntityOperationSignaled().Input = wrapperspb.String(strings.Repeat("x", padding))
+	require.LessOrEqual(t, operationRequestSize(oversized), s.maxEntityWorkItemBytes)
+
+	caller := s.newInstanceLocked("caller", "orchestrator", nil, nil, nil, nil, nil, nil)
+	caller.pending = nil
+	call := &protos.HistoryEvent{EventType: &protos.HistoryEvent_EntityOperationCalled{
+		EntityOperationCalled: &protos.EntityOperationCalledEvent{
+			RequestId:        "call-1",
+			Operation:        "oversizedCall",
+			Input:            wrapperspb.String(strings.Repeat("x", s.maxEntityWorkItemBytes)),
+			ParentInstanceId: wrapperspb.String("caller"),
+		},
+	}}
+
+	s.deliverEntityLocked("@counter@a", oversized)
+	s.deliverEntityLocked("@counter@a", call)
+	s.deliverEntityLocked("@counter@a", signalEvent("next"))
+
+	item := s.nextEntityWorkItemLocked(nil, 1)
+	require.NotNil(t, item, "the entity keeps making progress after rejecting oversized operations")
+	assert.LessOrEqual(t, proto.Size(item), s.maxEntityWorkItemBytes)
+	requests := item.GetEntityRequestV2().GetOperationRequests()
+	require.Len(t, requests, 1)
+	assert.Equal(t, "next", requests[0].GetEntityOperationSignaled().GetOperation())
+	assert.Empty(t, s.entities["@counter@a"].queue)
+
+	require.Len(t, caller.pending, 1)
+	failed := caller.pending[0].GetEntityOperationFailed()
+	require.NotNil(t, failed, "the oversized call fails instead of being dispatched")
+	assert.Equal(t, "call-1", failed.GetRequestId())
+	assert.Equal(t, "EntityOperationTooLarge", failed.GetFailureDetails().GetErrorType())
+}
+
 func TestReleaseStreamRequeuesEntityWorkItems(t *testing.T) {
 	s := NewServer()
 	defer s.Close()
