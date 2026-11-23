@@ -249,12 +249,68 @@ func (te *taskExecutor) ExecuteOrchestrator(
 	newEvents []*protos.HistoryEvent,
 	entityParameters *protos.OrchestratorEntityParameters,
 ) (*ExecutionResults, error) {
+	results, orchestrationCtx, err := te.prepareOrchestrator(id, oldEvents, newEvents, entityParameters)
+	if results != nil || err != nil {
+		return results, err
+	}
+	actions := orchestrationCtx.start()
+	return te.orchestratorResults(orchestrationCtx, actions), nil
+}
+
+// StartOrchestratorSession implements SessionExecutor. It runs the first turn
+// like ExecuteOrchestrator, but keeps the orchestration loaded when the turn
+// can be continued with new events.
+func (te *taskExecutor) StartOrchestratorSession(
+	_ context.Context,
+	id api.InstanceID,
+	oldEvents []*protos.HistoryEvent,
+	newEvents []*protos.HistoryEvent,
+	entityParameters *protos.OrchestratorEntityParameters,
+) (*ExecutionResults, OrchestratorSession, error) {
+	results, orchestrationCtx, err := te.prepareOrchestrator(id, oldEvents, newEvents, entityParameters)
+	if results != nil || err != nil {
+		return results, nil, err
+	}
+	session := &orchestratorSession{executor: te, ctx: orchestrationCtx}
+	orchestrationCtx.begin()
+	return session.finishTurn(orchestrationCtx.run())
+}
+
+// orchestratorResults builds the response for one completed turn.
+func (te *taskExecutor) orchestratorResults(
+	orchestrationCtx *OrchestrationContext,
+	actions []*protos.OrchestratorAction,
+) *ExecutionResults {
+	te.reportHistoryMetric(orchestrationCtx)
+
+	results := &ExecutionResults{
+		Response: &protos.OrchestratorResponse{
+			InstanceId:   string(orchestrationCtx.ID),
+			Actions:      actions,
+			CustomStatus: wrapperspb.String(orchestrationCtx.customStatus),
+		},
+	}
+	if orchestrationCtx.maxEventsPerTurnExceeded && !orchestrationCtx.hasCompletionAction() {
+		results.Response.NumEventsProcessed = wrapperspb.Int32(int32(orchestrationCtx.processedEventsThisTurn))
+	}
+	return results
+}
+
+// prepareOrchestrator checks the work item before any orchestrator code runs.
+// It returns either a final result or error, or a new orchestration context.
+func (te *taskExecutor) prepareOrchestrator(
+	id api.InstanceID,
+	oldEvents []*protos.HistoryEvent,
+	newEvents []*protos.HistoryEvent,
+	entityParameters *protos.OrchestratorEntityParameters,
+) (*ExecutionResults, *OrchestrationContext, error) {
 	entitiesSupported, err := validateEntityParameters(entityParameters)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if isRewindRequest(oldEvents, newEvents) {
-		return buildRewindResult(id, oldEvents, newEvents)
+		results, err := buildRewindResult(id, oldEvents, newEvents)
+		return results, nil, err
 	}
 	started := startedEvent(oldEvents, newEvents)
 	name := started.GetName()
@@ -262,7 +318,7 @@ func (te *taskExecutor) ExecuteOrchestrator(
 	if versionErr := te.versioning.check(version); versionErr != nil &&
 		!allowsUnversionedTask(te.unversionedOrchestrators, name, version) {
 		if te.versioning.FailureStrategy == VersionFailureReject {
-			return nil, versionErr
+			return nil, nil, versionErr
 		}
 		return &ExecutionResults{
 			Response: &protos.OrchestratorResponse{
@@ -277,11 +333,11 @@ func (te *taskExecutor) ExecuteOrchestrator(
 					),
 				},
 			},
-		}, nil
+		}, nil, nil
 	}
 	if te.orchestratorNotFound == OrchestratorNotFoundReject && name != "" {
 		if !te.Registry.hasOrchestrator(name, version) {
-			return nil, newTaskNotRegisteredError(
+			return nil, nil, newTaskNotRegisteredError(
 				orchestratorTaskNotFoundErrorType,
 				name,
 				version,
@@ -301,20 +357,7 @@ func (te *taskExecutor) ExecuteOrchestrator(
 		te.converter,
 		entitiesSupported,
 	)
-	actions := orchestrationCtx.start()
-	te.reportHistoryMetric(orchestrationCtx)
-
-	results := &ExecutionResults{
-		Response: &protos.OrchestratorResponse{
-			InstanceId:   string(id),
-			Actions:      actions,
-			CustomStatus: wrapperspb.String(orchestrationCtx.customStatus),
-		},
-	}
-	if orchestrationCtx.maxEventsPerTurnExceeded && !orchestrationCtx.hasCompletionAction() {
-		results.Response.NumEventsProcessed = wrapperspb.Int32(int32(orchestrationCtx.processedEventsThisTurn))
-	}
-	return results, nil
+	return nil, orchestrationCtx, nil
 }
 
 func validateEntityParameters(parameters *protos.OrchestratorEntityParameters) (bool, error) {
@@ -545,9 +588,9 @@ func (te *taskExecutor) reportHistoryMetric(ctx *OrchestrationContext) {
 		InstanceID:           ctx.ID,
 		OrchestrationName:    ctx.Name,
 		OrchestrationVersion: ctx.Version,
-		HistoryLength:        ctx.HistoryLength(),
+		HistoryLength:        ctx.historyLength(),
 		ProcessedEvents:      ctx.processedEventsThisTurn,
-		HistoryLimitExceeded: ctx.HistoryLimitExceeded(),
+		HistoryLimitExceeded: ctx.maxHistoryEventsExceeded,
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {

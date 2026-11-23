@@ -333,7 +333,9 @@ func TestWorkerGracefulStopKeepsRejectedItemLeaseUntilAbandoned(t *testing.T) {
 				require.True(t, worker.Running())
 
 				if stop == "shutdown deadline" {
-					shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), time.Second)
+					// Stay below the 1 s RPC timeout of the blocked abandon. With equal
+					// timeouts, synctest fires both at once, and the run can end first.
+					shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), 500*time.Millisecond)
 					defer stopShutdown()
 					require.ErrorIs(t, worker.Shutdown(shutdownCtx), context.DeadlineExceeded)
 				} else {

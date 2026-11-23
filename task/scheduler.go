@@ -3,6 +3,7 @@ package task
 import (
 	"container/heap"
 	"fmt"
+	"slices"
 )
 
 type coroutineQueue []*coroutine
@@ -175,6 +176,23 @@ func (s *coroutineScheduler) isRootCompleted() bool {
 
 func (s *coroutineScheduler) isStopping() bool {
 	return s.stopping
+}
+
+// dropCompleted forgets finished coroutines between session turns, so a long
+// session does not keep their closures. Cancellation and shutdown skip
+// finished coroutines, so this changes no behavior.
+func (s *coroutineScheduler) dropCompleted() {
+	finished := func(c *coroutine) bool { return c.state == coroutineCompleted && c != s.root }
+	scopes := make(map[*cancellationScope]struct{})
+	for _, c := range s.all {
+		if finished(c) && c.scope != nil {
+			scopes[c.scope] = struct{}{}
+		}
+	}
+	for scope := range scopes {
+		scope.coroutines = slices.DeleteFunc(scope.coroutines, finished)
+	}
+	s.all = slices.DeleteFunc(s.all, finished)
 }
 
 func (s *coroutineScheduler) shutdown() {
