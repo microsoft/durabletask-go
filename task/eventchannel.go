@@ -135,14 +135,26 @@ func (c *eventSelectCase[T]) unsubscribe(s *selection) {
 }
 
 func (c *eventSelectCase[T]) commit(s *selection) bool {
-	value, ok := c.channel.TryReceive()
-	if !ok {
-		panic("selected event channel no longer has a buffered value")
-	}
+	value := c.takeValue()
 	s.finish(c, func() {
 		if c.handler != nil {
 			c.handler(value)
 		}
 	})
 	return true
+}
+
+func (c *eventSelectCase[T]) invoke() {
+	value := c.takeValue()
+	if c.handler != nil {
+		c.handler(value)
+	}
+}
+
+func (c *eventSelectCase[T]) takeValue() T {
+	value, ok := c.channel.TryReceive()
+	if !ok {
+		panic("selected event channel no longer has a buffered value")
+	}
+	return value
 }

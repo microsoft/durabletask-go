@@ -358,8 +358,8 @@ commit their channel cases before either callback runs. Each callback executes
 in its own selecting coroutine. Task and external event readiness is ordered
 by history; channel readiness is ordered deterministically by the SDK scheduler.
 Argument order breaks ties, but does not give a stop event priority over an
-earlier ready result. Create distinct cases for each alternative within a
-single `Select`; a case can be reused by later calls.
+earlier ready result. A repeated case within one `Select` is treated as its
+first occurrence and registered only once; cases can also be reused by later calls.
 
 Channel waits yield to the SDK, allowing other branches to schedule activities.
 When all branches are waiting and available history is exhausted, the execution

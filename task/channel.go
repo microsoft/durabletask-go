@@ -1,8 +1,8 @@
 package task
 
 import (
+	"container/list"
 	"errors"
-	"slices"
 )
 
 // ErrOrchestrationDeadlock identifies channel waits that cannot make progress:
@@ -19,8 +19,8 @@ type Channel[T any] struct {
 	ctx       *OrchestrationContext
 	capacity  int
 	buffer    []channelValue[T]
-	senders   []*channelOperation[T]
-	receivers []*channelOperation[T]
+	senders   list.List
+	receivers list.List
 }
 
 type channelValue[T any] struct {
@@ -29,19 +29,12 @@ type channelValue[T any] struct {
 }
 
 type channelOperation[T any] struct {
-	selection *selection
-	candidate *channelSelectCase[T]
-	matches   []*channelMatch[T]
-	order     uint64
-	ready     bool
-}
-
-// Each potential rendezvous has one globally unique readiness order shared by
-// both endpoints. This prevents cyclic preferences between competing selects.
-type channelMatch[T any] struct {
-	sender   *channelOperation[T]
-	receiver *channelOperation[T]
-	order    uint64
+	selection  *selection
+	candidate  *channelSelectCase[T]
+	element    *list.Element
+	registered uint64
+	order      uint64
+	ready      bool
 }
 
 // NewChannel creates a fresh orchestration-local channel. Zero capacity
@@ -130,32 +123,17 @@ func (c *channelSelectCase[T]) subscribe(s *selection) {
 	if c.operations == nil {
 		c.operations = make(map[*selection]*channelOperation[T])
 	}
-	op := &channelOperation[T]{selection: s, candidate: c}
+	op := &channelOperation[T]{
+		selection: s, candidate: c,
+		registered: c.channel.ctx.scheduler.nextCompletionID(),
+	}
 	c.operations[s] = op
 	channel := c.channel
-	peers := channel.senders
 	if c.send {
-		peers = channel.receivers
-		channel.senders = append(channel.senders, op)
+		op.element = channel.senders.PushBack(op)
 	} else {
-		channel.receivers = append(channel.receivers, op)
+		op.element = channel.receivers.PushBack(op)
 	}
-	if channel.capacity == 0 {
-		for _, peer := range peers {
-			if peer.selection == s || !peer.selection.pending() {
-				continue
-			}
-			match := &channelMatch[T]{order: channel.ctx.scheduler.nextCompletionID()}
-			if c.send {
-				match.sender, match.receiver = op, peer
-			} else {
-				match.sender, match.receiver = peer, op
-			}
-			op.matches = append(op.matches, match)
-			peer.matches = append(peer.matches, match)
-		}
-	}
-	channel.notify()
 }
 
 func (c *channelSelectCase[T]) unsubscribe(s *selection) {
@@ -166,31 +144,25 @@ func (c *channelSelectCase[T]) unsubscribe(s *selection) {
 	delete(c.operations, s)
 	channel := c.channel
 	if c.send {
-		channel.senders = slices.DeleteFunc(channel.senders, func(other *channelOperation[T]) bool {
-			return other == op
-		})
+		channel.senders.Remove(op.element)
 	} else {
-		channel.receivers = slices.DeleteFunc(channel.receivers, func(other *channelOperation[T]) bool {
-			return other == op
-		})
+		channel.receivers.Remove(op.element)
 	}
-	for _, match := range op.matches {
-		peer := match.sender
-		if c.send {
-			peer = match.receiver
-		}
-		peer.matches = slices.DeleteFunc(peer.matches, func(other *channelMatch[T]) bool {
-			return other == match
-		})
-	}
-	op.matches = nil
-	channel.notify()
 }
 
-func (op *channelOperation[T]) firstMatch() *channelMatch[T] {
-	for _, match := range op.matches {
-		if match.sender.selection.pending() && match.receiver.selection.pending() {
-			return match
+// Derive the oldest compatible peer on demand instead of retaining every
+// possible edge. Pairs are ordered by (later registration, earlier registration).
+// Both endpoints see the same order; argument order breaks ties between the
+// consecutively registered alternatives of one selection.
+func (op *channelOperation[T]) firstPeer() *channelOperation[T] {
+	peers := &op.candidate.channel.senders
+	if op.candidate.send {
+		peers = &op.candidate.channel.receivers
+	}
+	for element := peers.Front(); element != nil; element = element.Next() {
+		peer := element.Value.(*channelOperation[T])
+		if peer.selection != op.selection && peer.selection.pending() {
+			return peer
 		}
 	}
 	return nil
@@ -202,8 +174,8 @@ func (c *channelSelectCase[T]) ready(s *selection) (bool, uint64) {
 		return false, 0
 	}
 	if c.channel.capacity == 0 {
-		if match := op.firstMatch(); match != nil {
-			return true, match.order
+		if peer := op.firstPeer(); peer != nil {
+			return true, max(op.registered, peer.registered)
 		}
 		return false, 0
 	}
@@ -219,13 +191,10 @@ func (c *channelSelectCase[T]) ready(s *selection) (bool, uint64) {
 func (c *channelSelectCase[T]) commit(s *selection) bool {
 	channel := c.channel
 	if channel.capacity == 0 {
-		match := c.operations[s].firstMatch()
-		if match == nil {
+		op := c.operations[s]
+		peer := op.firstPeer()
+		if peer == nil {
 			return false
-		}
-		peer := match.sender
-		if c.send {
-			peer = match.receiver
 		}
 		// Do not steal a waiting peer from an earlier ready task, event, or
 		// rendezvous. Let that coroutine resolve its preferred case first.
@@ -234,15 +203,19 @@ func (c *channelSelectCase[T]) commit(s *selection) bool {
 			return false
 		}
 		// A case can have multiple peers; both must prefer this exact match.
-		if peer.firstMatch() != match {
+		if peer.firstPeer() != op {
 			channel.ctx.scheduler.makeRunnable(peer.selection.coroutine)
 			return false
 		}
-		value := match.sender.candidate.value
-		sendHandler := match.sender.candidate.onSend
-		receiveHandler := match.receiver.candidate.onReceive
-		match.sender.selection.finish(match.sender.candidate, sendHandler)
-		match.receiver.selection.finish(match.receiver.candidate, func() {
+		sender, receiver := peer, op
+		if c.send {
+			sender, receiver = op, peer
+		}
+		value := sender.candidate.value
+		sendHandler := sender.candidate.onSend
+		receiveHandler := receiver.candidate.onReceive
+		sender.selection.finish(sender.candidate, sendHandler)
+		receiver.selection.finish(receiver.candidate, func() {
 			if receiveHandler != nil {
 				receiveHandler(value)
 			}
@@ -257,20 +230,21 @@ func (c *channelSelectCase[T]) commit(s *selection) bool {
 		s.finish(c, c.onSend)
 	} else {
 		value := channel.buffer[0].value
-		channel.buffer = slices.Delete(channel.buffer, 0, 1)
+		channel.buffer[0] = channelValue[T]{}
+		channel.buffer = channel.buffer[1:]
 		s.finish(c, func() {
 			if c.onReceive != nil {
 				c.onReceive(value)
 			}
 		})
 	}
-	channel.notify()
 	return true
 }
 
 func (c *Channel[T]) notify() {
 	slots := c.capacity - len(c.buffer)
-	for _, op := range c.senders {
+	for element := c.senders.Front(); element != nil; element = element.Next() {
+		op := element.Value.(*channelOperation[T])
 		if !op.selection.pending() {
 			continue
 		}
@@ -284,10 +258,16 @@ func (c *Channel[T]) notify() {
 			}
 			op.ready = ready
 		}
-		c.ctx.scheduler.makeRunnable(op.selection.coroutine)
+		if ready, _ := op.candidate.ready(op.selection); ready {
+			c.ctx.scheduler.makeRunnable(op.selection.coroutine)
+		}
 	}
-	for _, op := range c.receivers {
+	for element := c.receivers.Front(); element != nil; element = element.Next() {
+		op := element.Value.(*channelOperation[T])
 		if op.selection.pending() {
+			if ready, _ := op.candidate.ready(op.selection); !ready {
+				continue
+			}
 			c.ctx.scheduler.makeRunnable(op.selection.coroutine)
 		}
 	}
@@ -331,3 +311,5 @@ func (s *coroutineScheduler) hasChannelDeadlock() bool {
 }
 
 func (*channelSelectCase[T]) channelCase() {}
+
+func (c *channelSelectCase[T]) channelNotifier() channelNotifier { return c.channel }

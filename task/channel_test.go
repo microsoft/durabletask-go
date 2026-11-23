@@ -1,6 +1,7 @@
 package task
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -44,8 +45,8 @@ func TestChannelRendezvousAndBufferedFIFO(t *testing.T) {
 				})
 				results := []int{channel.Receive(ctx), channel.Receive(ctx), channel.Receive(ctx)}
 				wg.Wait(ctx)
-				assert.Empty(t, channel.senders)
-				assert.Empty(t, channel.receivers)
+				assert.Zero(t, channel.senders.Len())
+				assert.Zero(t, channel.receivers.Len())
 				assert.Empty(t, channel.buffer)
 				return results, nil
 			})
@@ -78,10 +79,10 @@ func TestChannelSelectRendezvousCommitsOnlyWinningCases(t *testing.T) {
 			OnReceive(first, func(value int) { received = value }),
 		)
 		wg.Wait(ctx)
-		assert.Empty(t, first.senders)
-		assert.Empty(t, first.receivers)
-		assert.Empty(t, second.senders)
-		assert.Empty(t, second.receivers)
+		assert.Zero(t, first.senders.Len())
+		assert.Zero(t, first.receivers.Len())
+		assert.Zero(t, second.senders.Len())
+		assert.Zero(t, second.receivers.Len())
 		return []any{sent, received}, nil
 	})
 	response := executeOrchestrationTurn(t, registry, "instance", nil, channelStart())
@@ -311,8 +312,8 @@ func TestChannelWaitCancellationAndReuse(t *testing.T) {
 					// Yield until the wrapper has registered its channel wait.
 					ctx.Go(func(*OrchestrationContext) { cancel() })
 					wg.Wait(ctx)
-					assert.Empty(t, channel.senders)
-					assert.Empty(t, channel.receivers)
+					assert.Zero(t, channel.senders.Len())
+					assert.Zero(t, channel.receivers.Len())
 					assert.True(t, child.IsCanceled())
 					assert.False(t, ctx.IsCanceled())
 					if sending && capacity > 0 {
@@ -388,8 +389,8 @@ func TestChannelWaitWithExternalEventUnloadsAndResumes(t *testing.T) {
 	})
 	first := executeOrchestrationTurn(t, registry, "instance", nil, channelStart())
 	require.Empty(t, first.Actions)
-	require.Empty(t, channel.senders)
-	require.Empty(t, channel.receivers)
+	require.Zero(t, channel.senders.Len())
+	require.Zero(t, channel.receivers.Len())
 	second := executeOrchestrationTurn(t, registry, "instance", channelStart(), []*protos.HistoryEvent{
 		helpers.NewOrchestratorStartedEvent(),
 		helpers.NewEventRaisedEvent("value", wrapperspb.String("9")),
@@ -467,8 +468,8 @@ func TestChannelRejectsForeignOwnersBeforeRegistering(t *testing.T) {
 			defer func() { recovered = recover() }()
 			ctx.Select(OnSend(channel, 1, nil), OnReceive(channel, nil))
 		}()
-		assert.Empty(t, channel.senders)
-		assert.Empty(t, channel.receivers)
+		assert.Zero(t, channel.senders.Len())
+		assert.Zero(t, channel.receivers.Len())
 		assert.Empty(t, channel.buffer)
 		return recovered, nil
 	})
@@ -530,10 +531,158 @@ func TestChannelSelectSnapshotsCasesBeforeYielding(t *testing.T) {
 			channel.Send(ctx, 1)
 		})
 		wg.Wait(ctx)
-		assert.Empty(t, channel.senders)
-		assert.Empty(t, channel.receivers)
+		assert.Zero(t, channel.senders.Len())
+		assert.Zero(t, channel.receivers.Len())
 		return "done", nil
 	})
 	response := executeOrchestrationTurn(t, registry, "instance", nil, channelStart())
 	require.Equal(t, `"done"`, completionResult(t, response))
+}
+
+type countedChannelCase struct {
+	SelectCase
+	polls *int
+}
+
+func (c *countedChannelCase) ready(s *selection) (bool, uint64) {
+	(*c.polls)++
+	return c.SelectCase.ready(s)
+}
+
+func (*countedChannelCase) channelCase() {}
+
+func (c *countedChannelCase) channelNotifier() channelNotifier {
+	return c.SelectCase.(interface{ channelNotifier() channelNotifier }).channelNotifier()
+}
+
+func TestChannelSameSideWaitersDoNotResumeBeforeDurableDispatch(t *testing.T) {
+	const count = 128
+	for _, capacity := range []int{0, 1} {
+		for _, send := range []bool{false, true} {
+			t.Run(fmt.Sprintf("capacity=%d/send=%t", capacity, send), func(t *testing.T) {
+				polls := 0
+				registry := channelRegistry(t, func(ctx *OrchestrationContext) (any, error) {
+					channel := NewChannel[int](ctx, capacity)
+					if send && capacity > 0 {
+						channel.Send(ctx, 0)
+					}
+					for range count {
+						ctx.Go(func(branch *OrchestrationContext) {
+							candidate := OnReceive(channel, nil)
+							if send {
+								candidate = OnSend(channel, 1, nil)
+							}
+							branch.Select(&countedChannelCase{SelectCase: candidate, polls: &polls})
+						})
+					}
+					return nil, ctx.CallActivity("pending").Await(nil)
+				})
+				response := executeOrchestrationTurn(t, registry, "instance", nil, channelStart())
+				require.Len(t, response.Actions, 1)
+				require.Equal(t, "pending", response.Actions[0].GetScheduleTask().Name)
+				require.Equal(t, count, polls, "each blocked branch should run once, not resume for other blocked waiters")
+			})
+		}
+	}
+}
+
+func TestChannelBufferedDrainClearsValuesWithoutMovingTail(t *testing.T) {
+	registry := channelRegistry(t, func(ctx *OrchestrationContext) (any, error) {
+		channel := NewChannel[*int](ctx, 256)
+		for i := range 256 {
+			channel.Send(ctx, &i)
+		}
+		backing := channel.buffer
+		for i := range 256 {
+			value := channel.Receive(ctx)
+			assert.Equal(t, i, *value)
+			assert.Nil(t, backing[i].value)
+			if i < 255 {
+				assert.Equal(t, i+1, *backing[i+1].value, "unconsumed values must not move")
+			}
+		}
+		return len(channel.buffer), nil
+	})
+	response := executeOrchestrationTurn(t, registry, "instance", nil, channelStart())
+	require.Equal(t, "0", completionResult(t, response))
+}
+
+func BenchmarkChannelCompetingSelects(b *testing.B) {
+	for _, count := range []int{16, 128, 1024} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			registry := NewTaskRegistry()
+			if err := registry.AddOrchestratorN("channels", func(ctx *OrchestrationContext) (any, error) {
+				channel := NewChannel[int](ctx, 0)
+				sends := make([]SelectCase, count)
+				receives := make([]SelectCase, count)
+				for i := range count {
+					sends[i] = OnSend(channel, i, nil)
+					receives[i] = OnReceive(channel, nil)
+				}
+				group := ctx.NewWaitGroup()
+				group.Add(1)
+				ctx.Go(func(branch *OrchestrationContext) {
+					defer group.Done()
+					branch.Select(sends...)
+				})
+				ctx.Select(receives...)
+				group.Wait(ctx)
+				return nil, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			executor := NewTaskExecutor(registry)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				result, err := executor.ExecuteOrchestrator(
+					context.Background(), "instance", nil, channelStart(), nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(result.Response.Actions) != 1 ||
+					result.Response.Actions[0].GetCompleteOrchestration().GetOrchestrationStatus() !=
+						protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED {
+					b.Fatal("competing selects did not complete")
+				}
+			}
+
+		})
+	}
+}
+
+func TestChannelManyAlternativesCommitOnePairInRegistrationOrder(t *testing.T) {
+	registry := channelRegistry(t, func(ctx *OrchestrationContext) (any, error) {
+		channel := NewChannel[int](ctx, 0)
+		received, sends, receives := -1, 0, 0
+		sendCases, receiveCases := make([]SelectCase, 128), make([]SelectCase, 128)
+		for i := range sendCases {
+			sendCases[i] = OnSend(channel, i, func() { sends++ })
+			receiveCases[i] = OnReceive(channel, func(value int) {
+				received = value
+				receives++
+			})
+		}
+		group := ctx.NewWaitGroup()
+		group.Add(1)
+		ctx.Go(func(branch *OrchestrationContext) {
+			defer group.Done()
+			branch.Select(sendCases...)
+		})
+		ctx.Select(receiveCases...)
+		group.Wait(ctx)
+		return []int{received, sends, receives, channel.senders.Len(), channel.receivers.Len()}, nil
+	})
+	for range 10 {
+		for _, replay := range []bool{false, true} {
+			var oldEvents, newEvents []*protos.HistoryEvent
+			if replay {
+				oldEvents = channelStart()
+			} else {
+				newEvents = channelStart()
+			}
+			response := executeOrchestrationTurn(t, registry, "instance", oldEvents, newEvents)
+			require.Equal(t, "[0,1,1,0,0]", completionResult(t, response))
+		}
+	}
 }

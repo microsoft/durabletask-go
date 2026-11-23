@@ -445,3 +445,101 @@ func TestEventChannelReceiveErrReturnsPayloadError(t *testing.T) {
 		t.Fatalf("result = %s, want %s", got, want)
 	}
 }
+
+type observedSelectCase struct {
+	SelectCase
+	subscriptions int
+}
+
+func (c *observedSelectCase) subscribe(s *selection) {
+	c.subscriptions++
+	c.SelectCase.subscribe(s)
+}
+
+func (c *observedSelectCase) invoke() {
+	c.SelectCase.(interface{ invoke() }).invoke()
+}
+
+func TestSelectRepeatedTaskAndEventCasesRetainFirstOccurrence(t *testing.T) {
+	for _, event := range []bool{false, true} {
+		for _, ready := range []bool{false, true} {
+			t.Run(fmt.Sprintf("event=%t/ready=%t", event, ready), func(t *testing.T) {
+				registry := NewTaskRegistry()
+				if err := registry.AddOrchestratorN("repeated-case", func(ctx *OrchestrationContext) (any, error) {
+					calls := 0
+					var candidate SelectCase
+					if event {
+						channel := NewEventChannel[int](ctx, "value")
+						if ready {
+							queue := list.New()
+							queue.PushBack(&bufferedEvent{
+								event: helpers.NewEventRaisedEvent("value", wrapperspb.String("42")),
+								order: ctx.scheduler.nextCompletionID(),
+							})
+							ctx.bufferedExternalEvents["VALUE"] = queue
+						}
+						candidate = OnEvent(channel, func(int) { calls++ })
+					} else {
+						state := newTaskInScope(ctx, ctx.scope)
+						if ready {
+							state.complete(nil)
+						} else {
+							ctx.Go(func(*OrchestrationContext) { state.complete(nil) })
+						}
+						candidate = OnTask(state, func(Task) { calls++ })
+					}
+					observed := &observedSelectCase{SelectCase: candidate}
+					ctx.Select(observed, observed)
+					wantSubscriptions := 1
+					if ready {
+						wantSubscriptions = 0
+					}
+					if calls != 1 || observed.subscriptions != wantSubscriptions {
+						return nil, fmt.Errorf("calls=%d subscriptions=%d, want 1 and %d",
+							calls, observed.subscriptions, wantSubscriptions)
+					}
+					if len(ctx.scope.waiters) != 0 || len(ctx.eventWaiters) != 0 {
+						return nil, errors.New("selection left waiters registered")
+					}
+					return calls, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				events := []*protos.HistoryEvent{
+					helpers.NewOrchestratorStartedEvent(),
+					helpers.NewExecutionStartedEvent("repeated-case", "instance", nil, nil, nil, nil),
+				}
+				if event && !ready {
+					events = append(events, helpers.NewEventRaisedEvent("value", wrapperspb.String("42")))
+				}
+				for _, replay := range []bool{false, true} {
+					var oldEvents, newEvents []*protos.HistoryEvent
+					if replay {
+						oldEvents = events
+					} else {
+						newEvents = events
+					}
+					response := executeOrchestrationTurn(t, registry, "instance", oldEvents, newEvents)
+					if got := completionResult(t, response); got != "1" {
+						t.Fatalf("result=%s replay=%t, want 1", got, replay)
+					}
+				}
+
+			})
+		}
+	}
+}
+
+func BenchmarkSelectReadyTask(b *testing.B) {
+	ctx := newTestOrchestrationContext(NewTaskRegistry(), "instance", nil, nil)
+	ctx.scheduler = newCoroutineScheduler(ctx)
+	ctx.scheduler.current = &coroutine{scope: ctx.scope, state: coroutineRunning}
+	state := newTaskInScope(ctx, ctx.scope)
+	state.complete(nil)
+	candidate := OnTask(state, nil)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		ctx.Select(candidate, candidate)
+	}
+}

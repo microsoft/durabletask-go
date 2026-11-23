@@ -59,6 +59,28 @@ func (s *selection) cleanup() {
 		candidate.unsubscribe(s)
 	}
 	s.ctx.scope.removeWaiter(s.coroutine)
+	s.notifyChannels()
+}
+
+type channelNotifier interface {
+	notify()
+}
+
+func (s *selection) notifyChannels() {
+	var notified map[channelNotifier]struct{}
+	for _, candidate := range s.cases {
+		if c, ok := candidate.(interface{ channelNotifier() channelNotifier }); ok {
+			channel := c.channelNotifier()
+			if _, exists := notified[channel]; exists {
+				continue
+			}
+			if notified == nil {
+				notified = make(map[channelNotifier]struct{})
+			}
+			notified[channel] = struct{}{}
+			channel.notify()
+		}
+	}
 }
 
 type taskSelectCase struct {
@@ -93,12 +115,14 @@ func (c *taskSelectCase) unsubscribe(s *selection) {
 }
 
 func (c *taskSelectCase) commit(s *selection) bool {
-	s.finish(c, func() {
-		if c.handler != nil {
-			c.handler(c.task)
-		}
-	})
+	s.finish(c, c.invoke)
 	return true
+}
+
+func (c *taskSelectCase) invoke() {
+	if c.handler != nil {
+		c.handler(c.task)
+	}
 }
 
 // WhenAny blocks until the first task completes and returns that task. If
@@ -145,6 +169,7 @@ func (ctx *OrchestrationContext) WhenAll(tasks ...Task) error {
 // Task and event cases are ordered by history; channel cases are ordered by
 // deterministic scheduler readiness. Argument order breaks ties, not priority.
 // Losing cases do not receive values or send messages.
+// Repeated cases are treated as their first occurrence.
 func (ctx *OrchestrationContext) Select(cases ...SelectCase) {
 	ctx.selectCase(cases)
 }
@@ -170,26 +195,49 @@ func (ctx *OrchestrationContext) selectCaseErr(cases []SelectCase) (SelectCase, 
 	if current.scope.isCanceled() || ctx.scope.isCanceled() {
 		return nil, ErrTaskCanceled
 	}
-	seen := make(map[SelectCase]struct{}, len(cases))
+	taskOrEventOnly := true
 	for _, candidate := range cases {
 		if candidate.owner() != engine {
 			panic("Select case belongs to a different orchestration")
 		}
-		if _, exists := seen[candidate]; exists {
-			panic("Select case used more than once")
+		if _, ok := candidate.(interface{ channelCase() }); ok {
+			taskOrEventOnly = false
 		}
-		seen[candidate] = struct{}{}
+	}
+	if taskOrEventOnly {
+		// Ready task/event cases need no snapshot or waiter registrations.
+		var selected SelectCase
+		var selectedOrder uint64
+		for _, candidate := range cases {
+			if ready, order := candidate.ready(nil); ready &&
+				(selected == nil || order < selectedOrder) {
+				selected, selectedOrder = candidate, order
+			}
+		}
+		if selected != nil {
+			selected.(interface{ invoke() }).invoke()
+			return selected, nil
+		}
 	}
 	s := &selection{ctx: ctx, coroutine: current, cases: slices.Clone(cases)}
+	seen := make(map[SelectCase]struct{}, len(cases))
+	s.cases = slices.DeleteFunc(s.cases, func(candidate SelectCase) bool {
+		if _, exists := seen[candidate]; exists {
+			return true
+		}
+		seen[candidate] = struct{}{}
+		return false
+	})
 	current.selection = s
 	defer func() {
 		s.cleanup()
 		current.selection = nil
 	}()
 	ctx.scope.addWaiter(current)
-	for _, candidate := range cases {
+	for _, candidate := range s.cases {
 		candidate.subscribe(s)
 	}
+	s.notifyChannels()
 	for {
 		// A committed rendezvous is not undone by cancellation applied before
 		// the other coroutine resumes.
