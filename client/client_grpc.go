@@ -80,7 +80,8 @@ func WithDataConverter(converter api.DataConverter) TaskHubGrpcClientOption {
 // context, and a scheduled orchestration is parented to its
 // create_orchestration span. Failed calls mark the span as an error.
 //
-// Any provider is accepted; tracing.WithIDGenerator and tracing.WithSampler are
+// Any provider is accepted, including otel.GetTracerProvider();
+// tracing.WithIDGenerator and tracing.WithSampler are
 // required only for worker tracing, and a provider configured with them can be
 // shared with the worker. The application owns the provider's configuration and
 // shutdown. Without this option, or with a nil provider, the client emits no

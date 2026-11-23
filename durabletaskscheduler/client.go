@@ -25,9 +25,11 @@ type Client struct {
 
 // NewClient creates an independently owned management connection and validates
 // it with a deadline-bound Hello call.
-// A nil logger uses [api.DefaultLogger]. clientOptions are applied after the
-// options derived from options, so they take precedence; for example, pass
-// client.WithTracerProvider to enable client spans.
+// A nil logger uses [api.DefaultLogger]. clientOptions configure client
+// behavior that Options does not cover, such as client.WithTracerProvider to
+// enable client spans. Configure data conversion, large payloads, and the
+// default version through Options rather than the equivalent client options;
+// for example, ScheduledTasks always encodes with Options.DataConverter.
 func NewClient(
 	ctx context.Context,
 	options *Options,

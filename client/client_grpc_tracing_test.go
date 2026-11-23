@@ -77,6 +77,7 @@ func TestClientTracingProducerSpans(t *testing.T) {
 
 	require.Equal(t, "create_orchestration:Orch@(1.0)", create.Name())
 	require.Equal(t, trace.SpanKindProducer, create.SpanKind())
+	require.Equal(t, "Microsoft.DurableTask", create.InstrumentationScope().Name)
 	require.Equal(t, caller.SpanID(), create.Parent().SpanID())
 	require.Equal(t, caller.TraceID(), create.SpanContext().TraceID())
 	require.Equal(t, "orchestration", spanAttribute(create, "durabletask.type"))
@@ -99,25 +100,54 @@ func TestClientTracingProducerSpans(t *testing.T) {
 }
 
 func TestClientTracingFailedCallsMarkSpansAsErrors(t *testing.T) {
-	recorder := tracetest.NewSpanRecorder()
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
-	fake := &tracingSchedulerClient{err: errors.New("unavailable")}
-	client := newTracedClient(fake, WithTracerProvider(provider))
+	failingStore := &failingPayloadBackend{storeErr: errors.New("store unavailable")}
+	for name, test := range map[string]struct {
+		fake          *tracingSchedulerClient
+		opts          []TaskHubGrpcClientOption
+		errorContains string
+	}{
+		"rpc": {
+			fake:          &tracingSchedulerClient{err: errors.New("unavailable")},
+			errorContains: "unavailable",
+		},
+		"payload-externalization": {
+			fake: &tracingSchedulerClient{},
+			opts: []TaskHubGrpcClientOption{WithLargePayloads(&api.LargePayloadOptions{
+				Store:           failingStore,
+				Resolver:        failingStore,
+				ThresholdBytes:  1,
+				MaxPayloadBytes: 1024,
+			})},
+			errorContains: "store unavailable",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+			client := newTracedClient(test.fake, append(test.opts, WithTracerProvider(provider))...)
 
-	_, err := client.ScheduleNewOrchestration(context.Background(), "Orch")
-	require.Error(t, err)
-	require.Error(t, client.RaiseEvent(context.Background(), "instance-1", "Approved"))
+			_, err := client.ScheduleNewOrchestration(context.Background(), "Orch", api.WithRawInput("input"))
+			require.ErrorContains(t, err, test.errorContains)
+			err = client.RaiseEvent(context.Background(), "instance-1", "Approved", api.WithRawEventData("data"))
+			require.ErrorContains(t, err, test.errorContains)
 
-	spans := recorder.Ended()
-	require.Len(t, spans, 2)
-	for _, span := range spans {
-		require.Equal(t, codes.Error, span.Status().Code, span.Name())
-		require.Contains(t, span.Status().Description, "unavailable")
-		require.Len(t, span.Events(), 1)
-		require.Equal(t, "exception", span.Events()[0].Name)
+			spans := recorder.Ended()
+			require.Len(t, spans, 2)
+			for _, span := range spans {
+				require.Equal(t, codes.Error, span.Status().Code, span.Name())
+				require.Contains(t, span.Status().Description, test.errorContains)
+				require.Len(t, span.Events(), 1)
+				require.Equal(t, "exception", span.Events()[0].Name)
+			}
+			require.Equal(t, "create_orchestration:Orch", spans[0].Name())
+			require.Empty(t, spanAttribute(spans[0], "durabletask.task.version"))
+			require.Equal(t, "orchestration_event:Approved", spans[1].Name())
+			if test.fake.err == nil {
+				require.Nil(t, test.fake.start, "no RPC after a payload failure")
+				require.Nil(t, test.fake.event, "no RPC after a payload failure")
+			}
+		})
 	}
-	require.Equal(t, "create_orchestration:Orch", spans[0].Name())
-	require.Empty(t, spanAttribute(spans[0], "durabletask.task.version"))
 }
 
 func TestClientTracingUnsampledCallerPropagatesProducerContext(t *testing.T) {

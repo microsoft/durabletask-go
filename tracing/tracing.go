@@ -12,8 +12,11 @@
 //	)
 //	worker, err := durabletaskscheduler.NewWorker(..., client.WithWorkerTracerProvider(provider))
 //
-// Enable client spans with client.WithTracerProvider, which accepts any
-// provider:
+// Enable client spans with client.WithTracerProvider. Client spans are
+// started live and never reconstructed, so any provider works, including
+// otel.GetTracerProvider(), the global delegating provider. The client and
+// worker can also share one provider configured with [WithIDGenerator] and
+// [WithSampler]:
 //
 //	c, err := durabletaskscheduler.NewClient(ctx, options, logger, client.WithTracerProvider(provider))
 //
@@ -21,7 +24,8 @@
 // an "@(<version>)" suffix when versioned) for each ScheduleNewOrchestration
 // call and parents the new orchestration to it, and a PRODUCER span named
 // "orchestration_event:<event>" for each RaiseEvent call. Both are children of
-// the span in the call's context, and failed calls record an error status.
+// the span in the call's context, and failed calls, including payload
+// externalization failures, record an error status.
 //
 // The application owns the provider's resource, sampling policy, processors,
 // exporter, and shutdown. Spans use the "Microsoft.DurableTask"

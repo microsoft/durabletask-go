@@ -33,7 +33,8 @@ func NewClientTracer(provider trace.TracerProvider) *ClientTracer {
 
 // StartCreateOrchestration starts the PRODUCER span for scheduling an
 // orchestration as a child of the span in ctx. The returned context carries
-// the new span so it becomes the orchestration's parent trace context.
+// the new span so it becomes the orchestration's parent trace context. An
+// empty executionID, the usual case, omits the execution ID attribute.
 func (t *ClientTracer) StartCreateOrchestration(
 	ctx context.Context,
 	name, version, instanceID, executionID string,
