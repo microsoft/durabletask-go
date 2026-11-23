@@ -3,11 +3,13 @@ package inmemory
 import (
 	"context"
 	"slices"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -26,6 +28,10 @@ func (s *Server) GetWorkItems(req *protos.GetWorkItemsRequest, stream grpc.Serve
 	defer s.releaseStream(streamID)
 
 	filters := req.GetWorkItemFilters()
+	limits := workItemLimits{
+		orchestrations: req.GetMaxConcurrentOrchestrationWorkItems(),
+		activities:     req.GetMaxConcurrentActivityWorkItems(),
+	}
 	ping := time.NewTicker(s.healthPingInterval)
 	defer ping.Stop()
 	for {
@@ -34,7 +40,7 @@ func (s *Server) GetWorkItems(req *protos.GetWorkItemsRequest, stream grpc.Serve
 			s.mu.Unlock()
 			return status.Error(codes.Unavailable, "in-memory service is closed")
 		}
-		item := s.nextWorkItemLocked(filters, streamID)
+		item := s.nextWorkItemLocked(filters, streamID, limits)
 		changed := s.changed
 		s.mu.Unlock()
 
@@ -56,32 +62,69 @@ func (s *Server) GetWorkItems(req *protos.GetWorkItemsRequest, stream grpc.Serve
 	}
 }
 
-func (s *Server) nextWorkItemLocked(filters *protos.WorkItemFilters, streamID uint64) *protos.WorkItem {
-	for i, inst := range s.orchQueue {
-		if !matchesOrchestrationFilter(filters, inst) {
-			continue
+type workItemLimits struct {
+	orchestrations int32
+	activities     int32
+}
+
+func (s *Server) nextWorkItemLocked(
+	filters *protos.WorkItemFilters,
+	streamID uint64,
+	limits workItemLimits,
+) *protos.WorkItem {
+	if streamHasCapacity(limits.orchestrations, countOrchestrationLeases(s.orchLeases, streamID)) {
+		for i, inst := range s.orchQueue {
+			if !matchesOrchestrationFilter(filters, inst) {
+				continue
+			}
+			s.orchQueue = slices.Delete(s.orchQueue, i, i+1)
+			inst.queued = false
+			if s.instances[inst.id] != inst || inst.leased || len(inst.pending) == 0 {
+				// A stale queue entry; look again from the start.
+				return s.nextWorkItemLocked(filters, streamID, limits)
+			}
+			return s.leaseOrchestrationLocked(inst, streamID)
 		}
-		s.orchQueue = slices.Delete(s.orchQueue, i, i+1)
-		inst.queued = false
-		if s.instances[inst.id] != inst || inst.leased || len(inst.pending) == 0 {
-			// A stale queue entry; look again from the start.
-			return s.nextWorkItemLocked(filters, streamID)
-		}
-		return s.leaseOrchestrationLocked(inst, streamID)
 	}
-	for i, item := range s.actQueue {
-		if !matchesActivityFilter(filters, item.request) {
-			continue
-		}
-		s.actQueue = slices.Delete(s.actQueue, i, i+1)
-		token := newID()
-		s.actLeases[token] = &activityLease{item: item, streamID: streamID}
-		return &protos.WorkItem{
-			Request:         &protos.WorkItem_ActivityRequest{ActivityRequest: item.request},
-			CompletionToken: token,
+	if streamHasCapacity(limits.activities, countActivityLeases(s.actLeases, streamID)) {
+		for i, item := range s.actQueue {
+			if !matchesActivityFilter(filters, item.request) {
+				continue
+			}
+			s.actQueue = slices.Delete(s.actQueue, i, i+1)
+			token := newID()
+			s.actLeases[token] = &activityLease{item: item, streamID: streamID}
+			return &protos.WorkItem{
+				Request:         &protos.WorkItem_ActivityRequest{ActivityRequest: item.request},
+				CompletionToken: token,
+			}
 		}
 	}
 	return nil
+}
+
+func streamHasCapacity(limit int32, inFlight int) bool {
+	return limit <= 0 || inFlight < int(limit)
+}
+
+func countOrchestrationLeases(leases map[string]*orchestrationLease, streamID uint64) int {
+	count := 0
+	for _, lease := range leases {
+		if lease.streamID == streamID {
+			count++
+		}
+	}
+	return count
+}
+
+func countActivityLeases(leases map[string]*activityLease, streamID uint64) int {
+	count := 0
+	for _, lease := range leases {
+		if lease.streamID == streamID {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *Server) leaseOrchestrationLocked(inst *instance, streamID uint64) *protos.WorkItem {
@@ -93,23 +136,39 @@ func (s *Server) leaseOrchestrationLocked(inst *instance, streamID uint64) *prot
 	inst.leased = true
 	token := newID()
 	s.orchLeases[token] = &orchestrationLease{inst: inst, events: events, streamID: streamID}
-	return &protos.WorkItem{
-		Request: &protos.WorkItem_OrchestratorRequest{OrchestratorRequest: &protos.OrchestratorRequest{
-			InstanceId:  inst.id,
-			ExecutionId: wrapperspb.String(inst.executionID),
-			PastEvents:  slices.Clone(inst.history),
-			NewEvents:   events,
-		}},
+	request := &protos.OrchestratorRequest{
+		InstanceId:  inst.id,
+		ExecutionId: wrapperspb.String(inst.executionID),
+		PastEvents:  slices.Clone(inst.history),
+		NewEvents:   events,
+	}
+	item := &protos.WorkItem{
+		Request:         &protos.WorkItem_OrchestratorRequest{OrchestratorRequest: request},
 		CompletionToken: token,
 	}
+	if len(request.PastEvents) > 0 && proto.Size(item) > maxOrchestrationWorkItemSize {
+		request.PastEvents = nil
+		request.RequiresHistoryStreaming = true
+	}
+	return item
 }
 
 func matchesOrchestrationFilter(filters *protos.WorkItemFilters, inst *instance) bool {
-	if filters == nil {
+	if filters == nil || len(filters.GetOrchestrations()) == 0 {
 		return true
 	}
+	if slices.ContainsFunc(filters.GetOrchestrations(), func(filter *protos.OrchestrationFilter) bool {
+		return strings.EqualFold(filter.GetName(), helpers.RejectAllWorkItemFilterName)
+	}) {
+		return false
+	}
 	for _, f := range filters.GetOrchestrations() {
-		if f.GetName() == inst.name && (len(f.GetVersions()) == 0 || slices.Contains(f.GetVersions(), inst.version.GetValue())) {
+		if !strings.EqualFold(f.GetName(), inst.name) {
+			continue
+		}
+		if len(f.GetVersions()) == 0 || slices.ContainsFunc(f.GetVersions(), func(version string) bool {
+			return strings.EqualFold(version, inst.version.GetValue())
+		}) {
 			return true
 		}
 	}
@@ -117,11 +176,21 @@ func matchesOrchestrationFilter(filters *protos.WorkItemFilters, inst *instance)
 }
 
 func matchesActivityFilter(filters *protos.WorkItemFilters, req *protos.ActivityRequest) bool {
-	if filters == nil {
+	if filters == nil || len(filters.GetActivities()) == 0 {
 		return true
 	}
+	if slices.ContainsFunc(filters.GetActivities(), func(filter *protos.ActivityFilter) bool {
+		return strings.EqualFold(filter.GetName(), helpers.RejectAllWorkItemFilterName)
+	}) {
+		return false
+	}
 	for _, f := range filters.GetActivities() {
-		if f.GetName() == req.GetName() && (len(f.GetVersions()) == 0 || slices.Contains(f.GetVersions(), req.GetVersion().GetValue())) {
+		if !strings.EqualFold(f.GetName(), req.GetName()) {
+			continue
+		}
+		if len(f.GetVersions()) == 0 || slices.ContainsFunc(f.GetVersions(), func(version string) bool {
+			return strings.EqualFold(version, req.GetVersion().GetValue())
+		}) {
 			return true
 		}
 	}
@@ -151,10 +220,12 @@ func (s *Server) abandonOrchestrationLocked(token string, lease *orchestrationLe
 	inst := lease.inst
 	inst.leased = false
 	if s.instances[inst.id] != inst || isTerminal(inst.status) {
+		s.notifyLocked()
 		return
 	}
 	inst.pending = append(lease.events, inst.pending...)
 	s.enqueueLocked(inst)
+	s.notifyLocked()
 }
 
 // AbandonTaskOrchestratorWorkItem returns an orchestration work item to the queue.
@@ -201,6 +272,7 @@ func (s *Server) CompleteActivityTask(_ context.Context, resp *protos.ActivityRe
 	item := lease.item
 	inst := item.inst
 	if s.instances[inst.id] != inst || inst.executionID != item.executionID {
+		s.notifyLocked()
 		return &protos.CompleteTaskResponse{}, nil
 	}
 	taskID := item.request.GetTaskId()
@@ -209,6 +281,7 @@ func (s *Server) CompleteActivityTask(_ context.Context, resp *protos.ActivityRe
 	} else {
 		s.deliverLocked(inst, helpers.NewTaskCompletedEvent(taskID, resp.GetResult()))
 	}
+	s.notifyLocked()
 	return &protos.CompleteTaskResponse{}, nil
 }
 
@@ -229,14 +302,17 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 	delete(s.orchLeases, token)
 	inst.leased = false
 	if s.instances[inst.id] != inst || isTerminal(inst.status) {
+		s.notifyLocked()
 		return &protos.CompleteTaskResponse{}, nil
 	}
 
 	processed := lease.events
 	if n := resp.GetNumEventsProcessed(); n != nil && int(n.GetValue()) < len(processed) {
-		// Events that the orchestrator did not process go back to the inbox.
-		inst.pending = append(slices.Clone(processed[n.GetValue():]), inst.pending...)
-		processed = processed[:n.GetValue()]
+		// NumEventsProcessed counts work events, not control markers in the
+		// response. Keep control markers between consumed events in the prefix.
+		split := processedEventPrefixLength(processed, int(n.GetValue()))
+		inst.pending = append(slices.Clone(processed[split:]), inst.pending...)
+		processed = processed[:split]
 	}
 	inst.history = append(inst.history, processed...)
 	if inst.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING {
@@ -249,6 +325,30 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 	s.enqueueLocked(inst)
 	s.notifyLocked()
 	return &protos.CompleteTaskResponse{}, nil
+}
+
+func processedEventPrefixLength(events []*protos.HistoryEvent, processedCount int) int {
+	processed := 0
+	for i, event := range events {
+		if !countsTowardTurnBudget(event) {
+			continue
+		}
+		if processed == processedCount {
+			return i
+		}
+		processed++
+	}
+	return len(events)
+}
+
+func countsTowardTurnBudget(event *protos.HistoryEvent) bool {
+	return event.GetOrchestratorStarted() == nil &&
+		event.GetOrchestratorCompleted() == nil &&
+		event.GetGenericEvent() == nil &&
+		event.GetExecutionRewound() == nil &&
+		event.GetExecutionTerminated() == nil &&
+		event.GetExecutionSuspended() == nil &&
+		event.GetExecutionResumed() == nil
 }
 
 func (s *Server) applyActionsLocked(inst *instance, actions []*protos.OrchestratorAction) {

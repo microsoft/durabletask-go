@@ -3,6 +3,7 @@ package inmemory
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,10 +20,12 @@ import (
 // QueryInstances returns instances that match a query, ordered by creation time.
 func (s *Server) QueryInstances(_ context.Context, req *protos.QueryInstancesRequest) (*protos.QueryInstancesResponse, error) {
 	query := req.GetQuery()
-	offset := 0
+	var cursorTime time.Time
+	var cursorID string
 	if token := query.GetContinuationToken().GetValue(); token != "" {
 		var err error
-		if offset, err = strconv.Atoi(token); err != nil || offset < 0 {
+		cursorTime, cursorID, err = decodeInstanceCursor(token)
+		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid continuation token %q", token)
 		}
 	}
@@ -51,17 +54,45 @@ func (s *Server) QueryInstances(_ context.Context, req *protos.QueryInstancesReq
 	})
 
 	resp := &protos.QueryInstancesResponse{}
-	if offset >= len(matches) {
-		return resp, nil
+	start := 0
+	if cursorID != "" {
+		start = slices.IndexFunc(matches, func(inst *instance) bool {
+			return cmp.Or(inst.createdAt.Compare(cursorTime), cmp.Compare(inst.id, cursorID)) > 0
+		})
+		if start < 0 {
+			start = len(matches)
+		}
 	}
-	end := min(offset+pageSize, len(matches))
-	for _, inst := range matches[offset:end] {
+	end := min(start+pageSize, len(matches))
+	for _, inst := range matches[start:end] {
 		resp.OrchestrationState = append(resp.OrchestrationState, inst.state(query.GetFetchInputsAndOutputs()))
 	}
 	if end < len(matches) {
-		resp.ContinuationToken = wrapperspb.String(strconv.Itoa(end))
+		last := matches[end-1]
+		resp.ContinuationToken = wrapperspb.String(encodeInstanceCursor(last.createdAt, last.id))
 	}
 	return resp, nil
+}
+
+func encodeInstanceCursor(createdAt time.Time, instanceID string) string {
+	id := base64.RawURLEncoding.EncodeToString([]byte(instanceID))
+	return strconv.FormatInt(createdAt.UnixNano(), 10) + ":" + id
+}
+
+func decodeInstanceCursor(token string) (time.Time, string, error) {
+	timestamp, encodedID, ok := strings.Cut(token, ":")
+	if !ok {
+		return time.Time{}, "", status.Error(codes.InvalidArgument, "missing cursor separator")
+	}
+	nanos, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	id, err := base64.RawURLEncoding.DecodeString(encodedID)
+	if err != nil || len(id) == 0 {
+		return time.Time{}, "", status.Error(codes.InvalidArgument, "invalid cursor instance ID")
+	}
+	return time.Unix(0, nanos), string(id), nil
 }
 
 // ListInstanceIds returns IDs of terminal instances, ordered by completion time.
@@ -69,6 +100,15 @@ func (s *Server) ListInstanceIds(_ context.Context, req *protos.ListInstanceIdsR
 	pageSize := int(req.GetPageSize())
 	if pageSize <= 0 {
 		pageSize = defaultQueryPageSize
+	}
+	var cursorTime time.Time
+	var cursorID string
+	if token := req.GetLastInstanceKey().GetValue(); token != "" {
+		var err error
+		cursorTime, cursorID, err = decodeInstanceCursor(token)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid continuation token %q", token)
+		}
 	}
 
 	s.mu.Lock()
@@ -91,8 +131,13 @@ func (s *Server) ListInstanceIds(_ context.Context, req *protos.ListInstanceIdsR
 	})
 
 	start := 0
-	if last := req.GetLastInstanceKey().GetValue(); last != "" {
-		start = slices.IndexFunc(matches, func(inst *instance) bool { return inst.id == last }) + 1
+	if cursorID != "" {
+		start = slices.IndexFunc(matches, func(inst *instance) bool {
+			return cmp.Or(inst.completedAt.Compare(cursorTime), cmp.Compare(inst.id, cursorID)) > 0
+		})
+		if start < 0 {
+			start = len(matches)
+		}
 	}
 	resp := &protos.ListInstanceIdsResponse{}
 	end := min(start+pageSize, len(matches))
@@ -100,7 +145,8 @@ func (s *Server) ListInstanceIds(_ context.Context, req *protos.ListInstanceIdsR
 		resp.InstanceIds = append(resp.InstanceIds, inst.id)
 	}
 	if end < len(matches) {
-		resp.LastInstanceKey = wrapperspb.String(matches[end-1].id)
+		last := matches[end-1]
+		resp.LastInstanceKey = wrapperspb.String(encodeInstanceCursor(last.completedAt, last.id))
 	}
 	return resp, nil
 }

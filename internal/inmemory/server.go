@@ -17,6 +17,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -28,9 +30,10 @@ import (
 )
 
 const (
-	defaultHealthPingInterval = 30 * time.Second
-	defaultQueryPageSize      = 100
-	historyChunkSize          = 100
+	defaultHealthPingInterval    = 30 * time.Second
+	defaultQueryPageSize         = 100
+	maxOrchestrationWorkItemSize = 4 << 20
+	maxHistoryChunkSize          = 4 << 20
 )
 
 // Server is an in-memory implementation of the TaskHubSidecarService.
@@ -379,7 +382,8 @@ func (s *Server) terminateLocked(inst *instance, reason *wrapperspb.StringValue,
 	}
 	if recursive {
 		for _, childID := range inst.children {
-			if child, ok := s.instances[childID]; ok {
+			if child, ok := s.instances[childID]; ok &&
+				child.parent.GetOrchestrationInstance().GetInstanceId() == inst.id {
 				s.terminateLocked(child, reason, true)
 			}
 		}
@@ -473,11 +477,26 @@ func (s *Server) StreamInstanceHistory(
 	history := slices.Clone(inst.history)
 	s.mu.Unlock()
 
-	for start := 0; start < len(history); start += historyChunkSize {
-		end := min(start+historyChunkSize, len(history))
-		if err := stream.Send(&protos.HistoryChunk{Events: history[start:end]}); err != nil {
-			return err
+	chunk := &protos.HistoryChunk{}
+	chunkSize := 0
+	for _, event := range history {
+		eventSize := proto.Size(event)
+		encodedSize := protowire.SizeTag(1) + protowire.SizeBytes(eventSize)
+		if encodedSize > maxHistoryChunkSize {
+			return status.Errorf(codes.ResourceExhausted, "history event exceeds the %d-byte stream chunk limit", maxHistoryChunkSize)
 		}
+		if len(chunk.Events) > 0 && chunkSize+encodedSize > maxHistoryChunkSize {
+			if err := stream.Send(chunk); err != nil {
+				return err
+			}
+			chunk = &protos.HistoryChunk{}
+			chunkSize = 0
+		}
+		chunk.Events = append(chunk.Events, event)
+		chunkSize += encodedSize
+	}
+	if len(chunk.Events) > 0 {
+		return stream.Send(chunk)
 	}
 	return nil
 }
