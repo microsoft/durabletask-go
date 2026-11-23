@@ -155,13 +155,18 @@ lifecycle operations are not automatically retried: a failed acknowledgement
 can follow a successful service-side change. Worker channels do not use this
 policy, because the worker owns its own reconnect loop.
 
-Individual gRPC messages are bounded to 64 MiB by default through
-`Options.MaxReceiveMessageSize` and `Options.MaxSendMessageSize`. The worker uses a
-3.9 MiB safety bound below the service ceiling. When
+Individual gRPC messages are bounded to 4 MiB by default through
+`Options.MaxReceiveMessageSize` and `Options.MaxSendMessageSize`, matching the
+DTS service limit for unary calls and each message of a stream. Streamed
+history is still delivered in chunks, so the total history limit is separate.
+The worker uses a 3.9 MiB safety bound for every work item completion. When
 `Options.MaxSendMessageSize` is lower, that configured send limit becomes the
-bound instead. The worker validates the final response after large-payload
-externalization and fails an orchestration once
-with `OrchestratorResponseTooLarge` if it still exceeds that limit. The legacy
+bound instead. The worker validates the final completion after large-payload
+externalization. An oversized orchestration response fails the orchestration
+once with `OrchestratorResponseTooLarge`; an oversized activity response fails
+the task with non-retriable `ActivityResponseTooLarge`; and an oversized entity
+batch result fails the batch with `EntityResultTooLarge`. None of them are
+abandoned and re-executed. The legacy
 `isPartial`/`chunkIndex` response fields are deprecated; the Go worker does not
 use them because validation against the current DTS emulator did not provide a
 portable chunking path. Configure large-payload storage or reduce per-turn

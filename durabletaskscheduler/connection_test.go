@@ -577,7 +577,7 @@ func TestNewClientFailsFastWhenHelloIsRejected(t *testing.T) {
 	require.ErrorContains(t, err, "PermissionDenied")
 }
 
-func TestNewClientReceivesMessagesLargerThanGrpcDefault(t *testing.T) {
+func TestNewClientAppliesConfiguredReceiveMessageSize(t *testing.T) {
 	const payloadSize = 5 * 1024 * 1024
 	server := &metadataServer{
 		metadata: make(chan metadata.MD, 4),
@@ -597,7 +597,21 @@ func TestNewClientReceivesMessagesLargerThanGrpcDefault(t *testing.T) {
 	options.Authentication = AuthenticationNone
 	options.AllowInsecureConnection = true
 	options.dialer = bufconnDialer(listener)
-	managementClient, err := NewClient(context.Background(), options, api.DefaultLogger())
+	defaultClient, err := NewClient(context.Background(), options, api.DefaultLogger())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, defaultClient.Close())
+	}()
+	_, err = defaultClient.FetchOrchestrationMetadata(
+		context.Background(),
+		"large-message",
+		api.WithFetchPayloads(true),
+	)
+	require.Equal(t, codes.ResourceExhausted, status.Code(err), "default must match the 4 MiB DTS limit")
+
+	raisedOptions := *options
+	raisedOptions.MaxReceiveMessageSize = 8 * 1024 * 1024
+	managementClient, err := NewClient(context.Background(), &raisedOptions, api.DefaultLogger())
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, managementClient.Close())
@@ -610,20 +624,6 @@ func TestNewClientReceivesMessagesLargerThanGrpcDefault(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, result.SerializedInput, payloadSize)
-
-	limitedOptions := *options
-	limitedOptions.MaxReceiveMessageSize = 1024 * 1024
-	limitedClient, err := NewClient(context.Background(), &limitedOptions, api.DefaultLogger())
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, limitedClient.Close())
-	}()
-	_, err = limitedClient.FetchOrchestrationMetadata(
-		context.Background(),
-		"large-message",
-		api.WithFetchPayloads(true),
-	)
-	require.Equal(t, codes.ResourceExhausted, status.Code(err))
 }
 
 func TestNewClientRecreatesChannelAndPreservesConfiguration(t *testing.T) {

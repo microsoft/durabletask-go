@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- DTS connections now default `MaxReceiveMessageSize` and `MaxSendMessageSize` to 4 MiB, matching the DTS service limit for unary calls and each streamed message, instead of 64 MiB. Larger payloads now fail locally rather than after a service round-trip; use large-payload externalization for them.
+- Activity and entity completions are now checked after large-payload externalization against the same worker completion bound as orchestration responses. Oversized results fail with non-retriable `api.ErrorTypeActivityResponseTooLarge` or `api.ErrorTypeEntityResultTooLarge` instead of being abandoned and re-executed indefinitely.
+
 - Refreshed the vendored Durable Task protobuf contract to [`2dab0e7`](https://github.com/microsoft/durabletask-protobuf/commit/2dab0e72d0dea59c5c8c412dd03204a47b9aaf2f). It adds the sidecar extended-session RPCs and messages, `completionCount` on orchestration and entity completions, and tags on entity-started orchestrations. The worker doesn't use them yet.
 
 - Azure Blob payload reads use independent `AllowAllContainersInConfiguredAccount` and `AdditionalAccountURLs` options, with endpoint-and-container defaults shared by native token and generic location reads. Additional accounts require identity authentication and exact service endpoints. V2 token queries and fragments are ignored when resolving existing references; new v2 tokens remain credential-free, and v1 reads remain supported.

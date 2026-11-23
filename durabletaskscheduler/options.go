@@ -25,9 +25,10 @@ const (
 	GovernmentResourceID = "https://durabletask.azure.us"
 
 	// DefaultMaxReceiveMessageSize and DefaultMaxSendMessageSize are the default
-	// per-message gRPC bounds.
-	DefaultMaxReceiveMessageSize = 64 * 1024 * 1024
-	DefaultMaxSendMessageSize    = 64 * 1024 * 1024
+	// per-message gRPC bounds. They match the DTS service limit, which applies to
+	// unary messages and to each message of a stream.
+	DefaultMaxReceiveMessageSize = 4 * 1024 * 1024
+	DefaultMaxSendMessageSize    = 4 * 1024 * 1024
 	// DefaultKeepaliveTime and DefaultKeepaliveTimeout configure pings while a
 	// gRPC stream is active.
 	DefaultKeepaliveTime    = 2 * time.Minute
@@ -111,7 +112,7 @@ type Options struct {
 	HelloTimeout time.Duration
 
 	// MaxReceiveMessageSize and MaxSendMessageSize bound individual gRPC
-	// messages. Zero uses the 64 MiB SDK default.
+	// messages. Zero uses the 4 MiB SDK default, which matches the DTS service.
 	MaxReceiveMessageSize int
 	MaxSendMessageSize    int
 

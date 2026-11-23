@@ -1869,3 +1869,50 @@ func TestFailOversizedOrchestratorResponseIdentifiesOversizedAction(t *testing.T
 	require.Contains(t, failure.GetErrorMessage(), "action 42")
 	require.Contains(t, failure.GetErrorMessage(), "large-payload externalization")
 }
+
+func TestFailOversizedActivityResponse(t *testing.T) {
+	const maxBytes = 1024
+	small := &protos.ActivityResponse{InstanceId: "instance", TaskId: 7, CompletionToken: "token", Result: wrapperspb.String("ok")}
+	require.Same(t, small, failOversizedActivityResponse(small, maxBytes))
+
+	large := &protos.ActivityResponse{
+		InstanceId:      "instance",
+		TaskId:          7,
+		CompletionToken: "token",
+		Result:          wrapperspb.String(strings.Repeat("x", maxBytes*2)),
+	}
+	bounded := failOversizedActivityResponse(large, maxBytes)
+	require.LessOrEqual(t, proto.Size(bounded), maxBytes)
+	require.Equal(t, "instance", bounded.GetInstanceId())
+	require.Equal(t, int32(7), bounded.GetTaskId())
+	require.Equal(t, "token", bounded.GetCompletionToken())
+	require.Nil(t, bounded.GetResult())
+	require.Equal(t, string(api.ErrorTypeActivityResponseTooLarge), bounded.GetFailureDetails().GetErrorType())
+	require.True(t, bounded.GetFailureDetails().GetIsNonRetriable())
+	require.Contains(t, bounded.GetFailureDetails().GetErrorMessage(), "large-payload externalization")
+}
+
+func TestFailOversizedEntityResult(t *testing.T) {
+	const maxBytes = 1024
+	small := &protos.EntityBatchResult{CompletionToken: "token", EntityState: wrapperspb.String("state")}
+	require.Same(t, small, failOversizedEntityResult(small, maxBytes))
+
+	large := &protos.EntityBatchResult{
+		CompletionToken: "token",
+		CompletionCount: 3,
+		EntityState:     wrapperspb.String(strings.Repeat("s", maxBytes*2)),
+		Results: []*protos.OperationResult{{ResultType: &protos.OperationResult_Success{
+			Success: &protos.OperationResultSuccess{Result: wrapperspb.String("r")},
+		}}},
+		OperationInfos: []*protos.OperationInfo{{RequestId: "req"}},
+	}
+	bounded := failOversizedEntityResult(large, maxBytes)
+	require.LessOrEqual(t, proto.Size(bounded), maxBytes)
+	require.Equal(t, "token", bounded.GetCompletionToken())
+	require.Equal(t, int32(3), bounded.GetCompletionCount())
+	require.Nil(t, bounded.GetEntityState())
+	require.Empty(t, bounded.GetResults())
+	require.Empty(t, bounded.GetOperationInfos())
+	require.Equal(t, string(api.ErrorTypeEntityResultTooLarge), bounded.GetFailureDetails().GetErrorType())
+	require.True(t, bounded.GetFailureDetails().GetIsNonRetriable())
+}
