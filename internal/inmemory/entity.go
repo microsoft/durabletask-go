@@ -316,7 +316,7 @@ func (s *Server) nextEntityWorkItemLocked(filters *protos.WorkItemFilters, strea
 }
 
 func matchesEntityFilter(filters *protos.WorkItemFilters, name string) bool {
-	if filters == nil {
+	if filters == nil || len(filters.GetEntities()) == 0 {
 		return true
 	}
 	return slices.ContainsFunc(filters.GetEntities(), func(f *protos.EntityFilter) bool {
@@ -477,8 +477,8 @@ func (s *Server) rebindEntityExecutionLocked(instanceID, oldExecutionID, newExec
 	}
 }
 
-// respondToCallerLocked delivers an operation result to the calling
-// orchestration if the calling execution is still active.
+// respondToCallerLocked delivers an operation result to the calling execution,
+// retaining it for a failed orchestration in case it is rewound.
 func (s *Server) respondToCallerLocked(called *protos.EntityOperationCalledEvent, event *protos.HistoryEvent) {
 	inst, ok := s.instances[called.GetParentInstanceId().GetValue()]
 	if !ok {
@@ -487,7 +487,11 @@ func (s *Server) respondToCallerLocked(called *protos.EntityOperationCalledEvent
 	if executionID := called.GetParentExecutionId(); executionID != nil && executionID.GetValue() != inst.executionID {
 		return
 	}
-	s.deliverLocked(inst, event)
+	if inst.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED {
+		inst.pending = append(inst.pending, event)
+	} else {
+		s.deliverLocked(inst, event)
+	}
 }
 
 // sendEntityMessageLocked records an orchestration's entity message in its

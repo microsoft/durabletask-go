@@ -621,7 +621,9 @@ func (s *Server) completeLocked(
 				*protos.HistoryEvent_TaskFailed,
 				*protos.HistoryEvent_TimerFired,
 				*protos.HistoryEvent_SubOrchestrationInstanceCompleted,
-				*protos.HistoryEvent_SubOrchestrationInstanceFailed:
+				*protos.HistoryEvent_SubOrchestrationInstanceFailed,
+				*protos.HistoryEvent_EntityOperationCompleted,
+				*protos.HistoryEvent_EntityOperationFailed:
 				return false
 			default:
 				return true

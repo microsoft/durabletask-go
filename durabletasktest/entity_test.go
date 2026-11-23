@@ -2,6 +2,7 @@ package durabletasktest_test
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -157,6 +158,58 @@ func TestEntityOperationFailure(t *testing.T) {
 	metadata := run(t, host, "CallFails")
 	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, metadata.RuntimeStatus)
 	assert.Equal(t, `"counter failed"`, metadata.SerializedOutput)
+}
+
+func TestRewindRetainsLateEntityResult(t *testing.T) {
+	var repaired atomic.Bool
+	var entityCalls atomic.Int32
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce, releaseOnce sync.Once
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddEntityN("blocked", func(ctx *task.EntityContext) (any, error) {
+		entityCalls.Add(1)
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+		return 42, ctx.SetState(42)
+	}))
+	require.NoError(t, r.AddActivityN("Flaky", func(ctx task.ActivityContext) (any, error) {
+		<-entered
+		if !repaired.Load() {
+			return nil, errors.New("dependency unavailable")
+		}
+		return nil, nil
+	}))
+	require.NoError(t, r.AddOrchestratorN("Caller", func(ctx *task.OrchestrationContext) (any, error) {
+		entity := ctx.CallEntity(api.NewEntityID("blocked", "a"), "get")
+		if err := ctx.CallActivity("Flaky").Await(nil); err != nil {
+			return nil, err
+		}
+		var result int
+		err := entity.Await(&result)
+		return result, err
+	}))
+	host := durabletasktest.New(t, r)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	ctx := testContext(t)
+	id, err := host.Client().ScheduleNewOrchestration(ctx, "Caller")
+	require.NoError(t, err)
+	failed, err := host.Client().WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+
+	releaseOnce.Do(func() { close(release) })
+	require.Eventually(t, func() bool {
+		entity, err := host.Client().GetEntity(ctx, api.NewEntityID("blocked", "a"))
+		return err == nil && entity != nil
+	}, 10*time.Second, 10*time.Millisecond)
+	repaired.Store(true)
+	require.NoError(t, host.Client().RewindInstance(ctx, id))
+	completed, err := host.Client().WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
+	assert.Equal(t, "42", completed.SerializedOutput)
+	assert.EqualValues(t, 1, entityCalls.Load())
 }
 
 func TestEntityActions(t *testing.T) {

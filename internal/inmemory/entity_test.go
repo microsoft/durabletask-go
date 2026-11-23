@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
@@ -77,6 +78,90 @@ func callEvent(owner *instance, requestID string) *protos.HistoryEvent {
 			ParentExecutionId: wrapperspb.String(owner.executionID),
 		},
 	}}
+}
+
+func TestEntityWorkItemFilters(t *testing.T) {
+	tests := []struct {
+		name    string
+		filters *protos.WorkItemFilters
+		want    bool
+	}{
+		{"nil", nil, true},
+		{"other work kinds", &protos.WorkItemFilters{
+			Orchestrations: []*protos.OrchestrationFilter{{Name: "orchestration"}},
+			Activities:     []*protos.ActivityFilter{{Name: "activity"}},
+		}, true},
+		{"matching", &protos.WorkItemFilters{Entities: []*protos.EntityFilter{{Name: "Counter"}}}, true},
+		{"different", &protos.WorkItemFilters{Entities: []*protos.EntityFilter{{Name: "other"}}}, false},
+		{"reject all", &protos.WorkItemFilters{Entities: []*protos.EntityFilter{{Name: helpers.RejectAllWorkItemFilterName}}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewServer()
+			defer s.Close()
+			s.deliverEntityLocked("@counter@a", signalEvent("add"))
+			item := s.nextEntityWorkItemLocked(tt.filters, 1)
+			assert.Equal(t, tt.want, item != nil)
+		})
+	}
+}
+
+func TestRewindRetainsEntityResults(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		for _, beforeFailure := range []bool{false, true} {
+			name := "completed"
+			if failed {
+				name = "failed"
+			}
+			if beforeFailure {
+				name += "-before-failure"
+			} else {
+				name += "-after-failure"
+			}
+			t.Run(name, func(t *testing.T) {
+				s := NewServer()
+				defer s.Close()
+				inst := s.newInstanceLocked("caller", "orchestrator", nil, nil, nil, nil, nil, nil)
+				started := inst.pending[0]
+				called := callEvent(inst, "request")
+				inst.history = []*protos.HistoryEvent{started, called}
+				inst.pending = nil
+				result := &protos.HistoryEvent{}
+				if failed {
+					result.EventType = &protos.HistoryEvent_EntityOperationFailed{
+						EntityOperationFailed: &protos.EntityOperationFailedEvent{RequestId: "request"},
+					}
+				} else {
+					result.EventType = &protos.HistoryEvent_EntityOperationCompleted{
+						EntityOperationCompleted: &protos.EntityOperationCompletedEvent{RequestId: "request"},
+					}
+				}
+				if beforeFailure {
+					s.respondToCallerLocked(called.GetEntityOperationCalled(), result)
+				}
+				s.completeLocked(inst, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, failureDetails("failure", "boom"))
+				if !beforeFailure {
+					s.respondToCallerLocked(called.GetEntityOperationCalled(), result)
+				}
+				require.Equal(t, []*protos.HistoryEvent{result}, inst.pending)
+				s.prepareRewindLocked(inst, nil, nil)
+				renewed := proto.CloneOf(started)
+				renewed.GetExecutionStarted().OrchestrationInstance.ExecutionId = wrapperspb.String("renewed")
+				s.applyRewindLocked(inst, &protos.RewindOrchestrationAction{NewHistory: []*protos.HistoryEvent{renewed, called}})
+				item := s.nextWorkItemLocked(nil, 1, workItemLimits{})
+				require.NotNil(t, item)
+				require.Contains(t, item.GetOrchestratorRequest().GetNewEvents(), result)
+
+				inst.pending = nil
+				s.respondToCallerLocked(called.GetEntityOperationCalled(), result)
+				assert.Empty(t, inst.pending, "a stale execution must not receive results")
+				inst.status = protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED
+				called.GetEntityOperationCalled().ParentExecutionId = wrapperspb.String("renewed")
+				s.respondToCallerLocked(called.GetEntityOperationCalled(), result)
+				assert.Empty(t, inst.pending, "a completed instance must not receive results")
+			})
+		}
+	}
 }
 
 func TestReplacedOwnerLocksAreOrphaned(t *testing.T) {
