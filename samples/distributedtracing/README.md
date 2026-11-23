@@ -11,8 +11,8 @@ application's OpenTelemetry provider, OTLP/HTTP, and a real collector.
   PRODUCER spans with `client.WithTracerProvider`.
 - Exports orchestration, activity scheduling/execution, timer, and application
   spans over OTLP/HTTP to a collector.
-- Verifies the collector file exporter received these spans under the caller's
-  trace ID.
+- Verifies that the collector file exporter received these spans, with their
+  expected span kinds, under the caller's trace ID.
 - Reads DTS history and verifies persisted trace context shares the caller trace.
 
 Tracing remains disabled unless explicitly enabled. The sample configures its
@@ -29,9 +29,18 @@ when it finishes and durable scheduling/timer spans after accepted completions,
 not on every replay. The application flushes the provider after worker shutdown
 and owns its final shutdown.
 
-These are application-process spans, separate from any scheduler-service
-telemetry. See the [tracing guide](../../tracing/README.md) for span semantics,
-SDK parity, and delivery/propagation limitations.
+DTS persists and forwards trace context but doesn't emit durable spans, so these
+SDK spans are how durable work reaches your telemetry backend. They use the
+`Microsoft.DurableTask` instrumentation scope and the provider's resource. See
+the [tracing guide](../../tracing/README.md) for span semantics, SDK parity,
+and delivery and propagation limitations.
+
+The collector in this sample writes spans to a file so the sample can verify
+them. To view the spans, add an exporter to the collector's `traces` pipeline
+for Jaeger, Azure Monitor, or any other OTLP-compatible backend. You can also
+point `OTEL_EXPORTER_OTLP_ENDPOINT` straight at a backend that accepts
+OTLP/HTTP, but then the sample's receipt check fails because it reads the
+collector's file.
 
 ## Prerequisites
 

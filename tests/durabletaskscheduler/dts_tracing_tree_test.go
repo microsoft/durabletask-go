@@ -230,7 +230,7 @@ func TestDTSEmulatorTracingTreeActivityFailureSubOrchestrationsAndEvents(t *test
 
 	// The caller's trace context must be persisted verbatim on the orchestration that the
 	// client scheduled. This is the hand-off point between the caller's trace and the
-	// scheduler-side span tree.
+	// durable work that joins it.
 	parentEvents := fetchHistory(t, ctx, managementClient, parentID, parentMetadata.ExecutionID)
 	started := executionStarted(t, parentEvents)
 	require.NotNil(t, started.ParentTraceContext, "the scheduler did not persist the caller's trace context")

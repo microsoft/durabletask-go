@@ -2,8 +2,8 @@
 
 This sample uses the SDK's standard-library observability surfaces: tags,
 immutable context fields, `slog` logging, and retry/history metric hooks. It
-does not add a telemetry framework or an OpenTelemetry collector; DTS-owned
-durable spans are covered elsewhere.
+does not add a telemetry framework or an OpenTelemetry collector. For opt-in
+durable spans, see the [distributedtracing](../distributedtracing) sample.
 
 ## Run
 
