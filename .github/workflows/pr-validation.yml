@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - go-version: '1.25.x'
+          - go-version: '1.26.x'
             test-kind: coverage
             test-command: >-
               go test ./... -count=1 -timeout=20m
@@ -75,6 +75,7 @@ jobs:
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
           version: ${{ env.PROTOC_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Installing protoc-gen-go
         run: |
