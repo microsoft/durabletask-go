@@ -695,7 +695,7 @@ func TestConnectionAppliesConfiguredSendMessageSize(t *testing.T) {
 			require.NoError(t, err)
 			conn, err := connect(&prepared, clientRole, "")
 			require.NoError(t, err)
-			defer conn.Close()
+			defer func() { require.NoError(t, conn.Close()) }()
 
 			request := &protos.GetInstanceRequest{InstanceId: strings.Repeat("x", testCase.messageBytes-5)}
 			require.Equal(t, testCase.messageBytes, proto.Size(request))
@@ -726,7 +726,7 @@ func TestConnectionReceiveLimitAppliesPerStreamMessage(t *testing.T) {
 			}
 			conn, err := connect(&streamOptions, clientRole, "")
 			require.NoError(t, err)
-			defer conn.Close()
+			defer func() { require.NoError(t, conn.Close()) }()
 			stream, err := protos.NewTaskHubSidecarServiceClient(conn).StreamInstanceHistory(ctx, &protos.StreamInstanceHistoryRequest{})
 			require.NoError(t, err)
 			for range 3 {
