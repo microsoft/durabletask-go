@@ -56,7 +56,7 @@ Use these features for large systems or for special conditions.
 
 ## Quick start
 
-This project needs Go 1.25 or later.
+This project needs Go 1.26 or later.
 
 1. Start the [DTS emulator](https://learn.microsoft.com/azure/azure-functions/durable/durable-task-scheduler/quickstart-durable-task-scheduler). Use any OCI runtime:
 
@@ -651,7 +651,7 @@ The protocol buffer definitions are in [`vendored/durabletask-protobuf/protos`](
 
 ### Build the project
 
-This project needs Go 1.25 or later. This project is a library. To build all of the packages, run this command in the project root:
+This project is a library. To build all of the packages, run this command in the project root:
 
 ```bash
 go build ./...

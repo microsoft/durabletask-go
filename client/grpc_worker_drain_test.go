@@ -277,6 +277,7 @@ func TestWorkerStoppedIntakeRejectsUnregisteredDelivery(t *testing.T) {
 }
 
 func TestWorkerGracefulStopKeepsRejectedItemLeaseUntilAbandoned(t *testing.T) {
+	const shutdownDeadline = time.Second
 	for _, stop := range []string{"shutdown", "run context", "shutdown deadline"} {
 		t.Run(stop, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -285,7 +286,10 @@ func TestWorkerGracefulStopKeepsRejectedItemLeaseUntilAbandoned(t *testing.T) {
 					abandonStarted:      make(chan struct{}),
 					releaseAbandon:      make(chan struct{}),
 				}
-				worker := newFakeWorker(t, client.fakeSchedulerClient, WithMaxConcurrentActivityWorkItems(1))
+				// Only the shutdown deadline should cancel the blocked abandonment.
+				worker := newFakeWorker(t, client.fakeSchedulerClient,
+					WithMaxConcurrentActivityWorkItems(1),
+					WithWorkerRPCTimeout(2*shutdownDeadline))
 				closer := &countingCloser{}
 				worker.clientFactory = func(context.Context) (protos.TaskHubSidecarServiceClient, io.Closer, error) {
 					return client, closer, nil
@@ -333,7 +337,7 @@ func TestWorkerGracefulStopKeepsRejectedItemLeaseUntilAbandoned(t *testing.T) {
 				require.True(t, worker.Running())
 
 				if stop == "shutdown deadline" {
-					shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), time.Second)
+					shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), shutdownDeadline)
 					defer stopShutdown()
 					require.ErrorIs(t, worker.Shutdown(shutdownCtx), context.DeadlineExceeded)
 				} else {
