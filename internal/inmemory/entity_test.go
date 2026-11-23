@@ -5,10 +5,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/internal/protos"
@@ -53,9 +55,10 @@ func TestLockedEntityDispatchesOnlyOwnerCalls(t *testing.T) {
 
 	s.deliverEntityLocked("@counter@a", &protos.HistoryEvent{EventType: &protos.HistoryEvent_EntityOperationCalled{
 		EntityOperationCalled: &protos.EntityOperationCalledEvent{
-			RequestId:        newID(),
-			Operation:        "inside",
-			ParentInstanceId: wrapperspb.String("owner"),
+			RequestId:         newID(),
+			Operation:         "inside",
+			ParentInstanceId:  wrapperspb.String("owner"),
+			ParentExecutionId: wrapperspb.String(owner.executionID),
 		},
 	}})
 	item := s.nextEntityWorkItemLocked(nil, 1)
@@ -63,6 +66,109 @@ func TestLockedEntityDispatchesOnlyOwnerCalls(t *testing.T) {
 	requests := item.GetEntityRequestV2().GetOperationRequests()
 	require.Len(t, requests, 1)
 	assert.Equal(t, "inside", requests[0].GetEntityOperationCalled().GetOperation())
+}
+
+func callEvent(owner *instance, requestID string) *protos.HistoryEvent {
+	return &protos.HistoryEvent{EventType: &protos.HistoryEvent_EntityOperationCalled{
+		EntityOperationCalled: &protos.EntityOperationCalledEvent{
+			RequestId:         requestID,
+			Operation:         "get",
+			ParentInstanceId:  wrapperspb.String(owner.id),
+			ParentExecutionId: wrapperspb.String(owner.executionID),
+		},
+	}}
+}
+
+func TestReplacedOwnerLocksAreOrphaned(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	s.mu.Lock()
+	old := s.newInstanceLocked("owner", "orchestrator", nil, nil, nil, nil, nil, nil)
+	s.deliverEntityLocked("@counter@a", lockRequestEvent(s, old, "old-cs", "@counter@a"))
+	require.NotNil(t, s.entities["@counter@a"].lock)
+
+	replacement := s.newInstanceLocked("owner", "orchestrator", nil, nil, nil, nil, nil, nil)
+	s.deliverEntityLocked("@counter@a", callEvent(replacement, "call-1"))
+	assert.Nil(t, s.nextEntityWorkItemLocked(nil, 1), "the replacement doesn't own the old execution's lock")
+	s.mu.Unlock()
+
+	resp, err := s.CleanEntityStorage(context.Background(), &protos.CleanEntityStorageRequest{ReleaseOrphanedLocks: true})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.GetOrphanedLocksReleased())
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	assert.Nil(t, s.entities["@counter@a"].lock)
+	assert.NotNil(t, s.nextEntityWorkItemLocked(nil, 1), "the replacement's call runs once the old lock is released")
+}
+
+func TestRewindRebindsOutstandingEntityCalls(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	s.mu.Lock()
+	inst := s.newInstanceLocked("caller", "orchestrator", nil, nil, nil, nil, nil, nil)
+	s.deliverEntityLocked("@counter@a", lockRequestEvent(s, inst, "cs", "@counter@a", "@counter@b"))
+	s.deliverEntityLocked("@counter@a", callEvent(inst, "leased"))
+	item := s.nextEntityWorkItemLocked(nil, 1)
+	require.NotNil(t, item)
+	s.deliverEntityLocked("@counter@a", callEvent(inst, "queued"))
+
+	started := proto.CloneOf(inst.pending[0])
+	started.GetExecutionStarted().OrchestrationInstance.ExecutionId = wrapperspb.String("renewed")
+	s.applyRewindLocked(inst, &protos.RewindOrchestrationAction{NewHistory: []*protos.HistoryEvent{started}})
+	inst.pending = nil
+	assert.Equal(t, "renewed", s.entities["@counter@a"].lock.ownerExecutionID)
+	assert.Equal(t, "renewed", s.entities["@counter@b"].lock.ownerExecutionID)
+	assert.Equal(t, "leased", item.GetEntityRequestV2().GetOperationRequests()[0].GetEntityOperationCalled().GetRequestId())
+	assert.NotEqual(t, "renewed", item.GetEntityRequestV2().GetOperationRequests()[0].GetEntityOperationCalled().GetParentExecutionId().GetValue(),
+		"do not mutate the dispatched request")
+	s.mu.Unlock()
+
+	_, err := s.CompleteEntityTask(context.Background(), &protos.EntityBatchResult{
+		CompletionToken: item.GetCompletionToken(),
+		Results:         []*protos.OperationResult{{ResultType: &protos.OperationResult_Success{Success: &protos.OperationResultSuccess{}}}},
+	})
+	require.NoError(t, err)
+
+	s.mu.Lock()
+	next := s.nextEntityWorkItemLocked(nil, 2)
+	require.NotNil(t, next, "the renewed execution still owns the lock")
+	s.mu.Unlock()
+	_, err = s.CompleteEntityTask(context.Background(), &protos.EntityBatchResult{
+		CompletionToken: next.GetCompletionToken(),
+		Results:         []*protos.OperationResult{{ResultType: &protos.OperationResult_Success{Success: &protos.OperationResultSuccess{}}}},
+	})
+	require.NoError(t, err)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var completed []string
+	for _, event := range inst.pending {
+		if c := event.GetEntityOperationCompleted(); c != nil {
+			completed = append(completed, c.GetRequestId())
+		}
+	}
+	assert.Equal(t, []string{"leased", "queued"}, completed, "results reach the renewed execution")
+}
+
+func TestQueryEntitiesLastModifiedToIsExclusive(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	s.mu.Lock()
+	e := s.getOrCreateEntityLocked("@counter@a", "counter")
+	e.state = wrapperspb.String("1")
+	s.mu.Unlock()
+
+	query := func(to time.Time) int {
+		resp, err := s.QueryEntities(context.Background(), &protos.QueryEntitiesRequest{Query: &protos.EntityQuery{
+			LastModifiedFrom: timestamppb.New(e.lastModified),
+			LastModifiedTo:   timestamppb.New(to),
+		}})
+		require.NoError(t, err)
+		return len(resp.GetEntities())
+	}
+	assert.Zero(t, query(e.lastModified))
+	assert.Equal(t, 1, query(e.lastModified.Add(time.Nanosecond)))
 }
 
 func TestCleanEntityStorageReleasesOrphanedLocks(t *testing.T) {
@@ -159,12 +265,12 @@ func TestOversizedEntityOperationsAreRejected(t *testing.T) {
 	defer s.mu.Unlock()
 	s.maxEntityWorkItemBytes = 1024
 
-	// The signal fits within the limit on its own but not once wrapped in a work item.
+	// The stored state and the signal input each fit within the limit, but not together.
+	e := s.getOrCreateEntityLocked("@counter@a", "counter")
+	e.state = wrapperspb.String(strings.Repeat("s", 600))
 	oversized := signalEvent("oversized")
-	oversized.GetEntityOperationSignaled().Input = wrapperspb.String("")
-	padding := s.maxEntityWorkItemBytes - 8 - operationRequestSize(oversized)
-	oversized.GetEntityOperationSignaled().Input = wrapperspb.String(strings.Repeat("x", padding))
-	require.LessOrEqual(t, operationRequestSize(oversized), s.maxEntityWorkItemBytes)
+	oversized.GetEntityOperationSignaled().Input = wrapperspb.String(strings.Repeat("x", 600))
+	require.Less(t, operationRequestSize(oversized), s.maxEntityWorkItemBytes)
 
 	caller := s.newInstanceLocked("caller", "orchestrator", nil, nil, nil, nil, nil, nil)
 	caller.pending = nil

@@ -40,6 +40,7 @@ type entity struct {
 type entityLock struct {
 	criticalSectionID string
 	ownerInstanceID   string
+	ownerExecutionID  string
 }
 
 type entityLease struct {
@@ -119,13 +120,14 @@ func (e *entity) nextMessage() int {
 }
 
 // canProcess reports whether the entity can process a message now. While the
-// entity is locked, only the owner's calls and unlock can be processed.
+// entity is locked, only the owning execution's calls and unlock can be processed.
 func (e *entity) canProcess(event *protos.HistoryEvent) bool {
 	if e.lock == nil {
 		return true
 	}
 	if called := event.GetEntityOperationCalled(); called != nil {
-		return called.GetParentInstanceId().GetValue() == e.lock.ownerInstanceID
+		return called.GetParentInstanceId().GetValue() == e.lock.ownerInstanceID &&
+			called.GetParentExecutionId().GetValue() == e.lock.ownerExecutionID
 	}
 	if unlock := event.GetEntityUnlockSent(); unlock != nil {
 		return unlock.GetCriticalSectionId() == e.lock.criticalSectionID
@@ -180,6 +182,7 @@ func (s *Server) processEntityControlMessageLocked(e *entity, event *protos.Hist
 	e.lock = &entityLock{
 		criticalSectionID: request.GetCriticalSectionId(),
 		ownerInstanceID:   request.GetParentInstanceId().GetValue(),
+		ownerExecutionID:  s.lockRequests[request.GetCriticalSectionId()],
 	}
 	// Locks are acquired one entity at a time in lock-set order. Because lock
 	// sets are sorted, critical sections can't deadlock.
@@ -428,6 +431,52 @@ func (s *Server) CompleteEntityTask(_ context.Context, result *protos.EntityBatc
 	return &protos.CompleteTaskResponse{}, nil
 }
 
+// rebindEntityExecutionLocked moves an instance's outstanding entity calls,
+// lock requests, and locks from one execution to another. Rewind renews the
+// execution ID but keeps the history that sent them, so replay waits for their
+// results rather than sending them again.
+func (s *Server) rebindEntityExecutionLocked(instanceID, oldExecutionID, newExecutionID string) {
+	if oldExecutionID == newExecutionID {
+		return
+	}
+	rebind := func(events []*protos.HistoryEvent) []*protos.HistoryEvent {
+		var rebound []*protos.HistoryEvent
+		for i, event := range events {
+			called := event.GetEntityOperationCalled()
+			if called.GetParentInstanceId().GetValue() != instanceID ||
+				called.GetParentExecutionId().GetValue() != oldExecutionID {
+				continue
+			}
+			if rebound == nil {
+				// Leased events may be in use outside the server lock; don't modify them.
+				rebound = slices.Clone(events)
+			}
+			cloned := proto.CloneOf(event)
+			cloned.GetEntityOperationCalled().ParentExecutionId = wrapperspb.String(newExecutionID)
+			rebound[i] = cloned
+		}
+		if rebound == nil {
+			return events
+		}
+		return rebound
+	}
+	for criticalSectionID, executionID := range s.lockRequests {
+		if executionID == oldExecutionID {
+			s.lockRequests[criticalSectionID] = newExecutionID
+		}
+	}
+	for _, lease := range s.entityLeases {
+		lease.events = rebind(lease.events)
+	}
+	for _, e := range s.entities {
+		e.queue = rebind(e.queue)
+		if e.lock != nil && e.lock.ownerInstanceID == instanceID && e.lock.ownerExecutionID == oldExecutionID {
+			e.lock.ownerExecutionID = newExecutionID
+		}
+		s.pumpEntityLocked(e)
+	}
+}
+
 // respondToCallerLocked delivers an operation result to the calling
 // orchestration if the calling execution is still active.
 func (s *Server) respondToCallerLocked(called *protos.EntityOperationCalledEvent, event *protos.HistoryEvent) {
@@ -564,7 +613,11 @@ func (s *Server) QueryEntities(_ context.Context, req *protos.QueryEntitiesReque
 		if prefix := query.GetInstanceIdStartsWith().GetValue(); prefix != "" && !strings.HasPrefix(e.id, prefix) {
 			continue
 		}
-		if !inRange(e.lastModified, query.GetLastModifiedFrom(), query.GetLastModifiedTo()) {
+		// LastModifiedFrom is inclusive and LastModifiedTo is exclusive.
+		if from := query.GetLastModifiedFrom(); from != nil && e.lastModified.Before(from.AsTime()) {
+			continue
+		}
+		if to := query.GetLastModifiedTo(); to != nil && !e.lastModified.Before(to.AsTime()) {
 			continue
 		}
 		matches = append(matches, e)
@@ -596,7 +649,8 @@ func (s *Server) CleanEntityStorage(_ context.Context, req *protos.CleanEntitySt
 			if e.lock == nil {
 				continue
 			}
-			if owner, ok := s.instances[e.lock.ownerInstanceID]; ok && !isTerminal(owner.status) {
+			if owner, ok := s.instances[e.lock.ownerInstanceID]; ok && !isTerminal(owner.status) &&
+				owner.executionID == e.lock.ownerExecutionID {
 				continue
 			}
 			e.lock = nil
