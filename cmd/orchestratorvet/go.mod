@@ -1,6 +1,6 @@
 module github.com/microsoft/durabletask-go/cmd/orchestratorvet
 
-go 1.25.0
+go 1.26.0
 
 require golang.org/x/tools v0.49.0
 

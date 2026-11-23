@@ -1,6 +1,6 @@
 module github.com/microsoft/durabletask-go/samples/distributedtracing
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/microsoft/durabletask-go v0.0.0
