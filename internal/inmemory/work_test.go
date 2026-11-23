@@ -741,6 +741,31 @@ func TestRecursiveTerminationDoesNotTerminateReusedChildID(t *testing.T) {
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING, replacement.status)
 }
 
+func TestWorkItemTooLargeForOneMessageFailsInstance(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+
+	inst := &instance{
+		id:          "id",
+		executionID: "execution",
+		status:      protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING,
+		pending: []*protos.HistoryEvent{
+			helpers.NewEventRaisedEvent("big", wrapperspb.String(strings.Repeat("x", maxOrchestrationWorkItemSize))),
+		},
+	}
+	s.instances[inst.id] = inst
+
+	s.mu.Lock()
+	item := s.leaseOrchestrationLocked(inst, 1)
+	s.mu.Unlock()
+
+	assert.Nil(t, item)
+	assert.Empty(t, s.orchLeases)
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, inst.status)
+	require.NotNil(t, inst.failure)
+	assert.Equal(t, "OrchestrationWorkItemTooLarge", inst.failure.GetErrorType())
+}
+
 func TestWorkItemFiltersMatchWorkerSemantics(t *testing.T) {
 	inst := &instance{name: "MyOrchestrator", version: wrapperspb.String("V1")}
 	activity := &protos.ActivityRequest{Name: "MyActivity", Version: wrapperspb.String("V1")}
