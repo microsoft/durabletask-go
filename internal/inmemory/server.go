@@ -67,8 +67,10 @@ type instance struct {
 	scheduledStart *timestamppb.Timestamp
 	executionID    string
 
-	history []*protos.HistoryEvent
-	pending []*protos.HistoryEvent
+	history            []*protos.HistoryEvent
+	pending            []*protos.HistoryEvent
+	rewind             *protos.HistoryEvent
+	childResultSources map[*protos.HistoryEvent]childResultSource
 
 	leased   bool
 	queued   bool
@@ -82,10 +84,16 @@ type activityItem struct {
 	request     *protos.ActivityRequest
 }
 
+type childResultSource struct {
+	instanceID  string
+	executionID string
+}
+
 type orchestrationLease struct {
-	inst     *instance
-	events   []*protos.HistoryEvent
-	streamID uint64
+	inst      *instance
+	events    []*protos.HistoryEvent
+	streamID  uint64
+	rewinding bool
 }
 
 type activityLease struct {
@@ -247,7 +255,8 @@ func (s *Server) startTimerLocked(inst *instance, at time.Time, fn func()) {
 }
 
 func (s *Server) enqueueLocked(inst *instance) {
-	if inst.queued || inst.leased || len(inst.pending) == 0 || s.instances[inst.id] != inst {
+	if inst.queued || inst.leased || isTerminal(inst.status) ||
+		(len(inst.pending) == 0 && inst.rewind == nil) || s.instances[inst.id] != inst {
 		return
 	}
 	if inst.scheduledStart != nil && len(inst.history) == 0 && inst.scheduledStart.AsTime().After(time.Now()) {

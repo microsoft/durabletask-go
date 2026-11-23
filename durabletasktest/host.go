@@ -21,7 +21,10 @@
 // Timers fire in real time, so tests should use short timer durations.
 // Failed orchestrations can be rewound with the same history-safety limitations
 // as the production worker. Rewind enqueues recovery and preserves successful
-// work; purged children are recreated without their previous history.
+// work; outstanding timers and activities are recovered. Activities can run
+// again if their results are unavailable. Purged children without retained
+// results are recreated without their previous history; conflicting child IDs
+// prevent rewind.
 // Durable entities are not supported: entity client operations fail with
 // [api.ErrFeatureNotSupported], and an orchestration that calls, signals, or
 // locks an entity fails.

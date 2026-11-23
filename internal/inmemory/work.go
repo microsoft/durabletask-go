@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -63,7 +64,8 @@ func (s *Server) nextWorkItemLocked(filters *protos.WorkItemFilters, streamID ui
 		}
 		s.orchQueue = slices.Delete(s.orchQueue, i, i+1)
 		inst.queued = false
-		if s.instances[inst.id] != inst || inst.leased || len(inst.pending) == 0 {
+		if s.instances[inst.id] != inst || inst.leased || isTerminal(inst.status) ||
+			(len(inst.pending) == 0 && inst.rewind == nil) {
 			// A stale queue entry; look again from the start.
 			return s.nextWorkItemLocked(filters, streamID)
 		}
@@ -85,14 +87,20 @@ func (s *Server) nextWorkItemLocked(filters *protos.WorkItemFilters, streamID ui
 }
 
 func (s *Server) leaseOrchestrationLocked(inst *instance, streamID uint64) *protos.WorkItem {
-	events := inst.pending
-	inst.pending = nil
-	if events[0].GetOrchestratorStarted() == nil {
-		events = append([]*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent()}, events...)
+	rewinding := inst.rewind != nil
+	var events []*protos.HistoryEvent
+	if rewinding {
+		events = []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), proto.CloneOf(inst.rewind)}
+	} else {
+		events = inst.pending
+		inst.pending = nil
+		if events[0].GetOrchestratorStarted() == nil {
+			events = append([]*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent()}, events...)
+		}
 	}
 	inst.leased = true
 	token := newID()
-	s.orchLeases[token] = &orchestrationLease{inst: inst, events: events, streamID: streamID}
+	s.orchLeases[token] = &orchestrationLease{inst: inst, events: events, streamID: streamID, rewinding: rewinding}
 	return &protos.WorkItem{
 		Request: &protos.WorkItem_OrchestratorRequest{OrchestratorRequest: &protos.OrchestratorRequest{
 			InstanceId:  inst.id,
@@ -153,7 +161,9 @@ func (s *Server) abandonOrchestrationLocked(token string, lease *orchestrationLe
 	if s.instances[inst.id] != inst || isTerminal(inst.status) {
 		return
 	}
-	inst.pending = append(lease.events, inst.pending...)
+	if !lease.rewinding {
+		inst.pending = append(lease.events, inst.pending...)
+	}
 	s.enqueueLocked(inst)
 }
 
@@ -204,10 +214,16 @@ func (s *Server) CompleteActivityTask(_ context.Context, resp *protos.ActivityRe
 		return &protos.CompleteTaskResponse{}, nil
 	}
 	taskID := item.request.GetTaskId()
+	var event *protos.HistoryEvent
 	if resp.GetFailureDetails() != nil {
-		s.deliverLocked(inst, helpers.NewTaskFailedEvent(taskID, resp.GetFailureDetails()))
+		event = helpers.NewTaskFailedEvent(taskID, resp.GetFailureDetails())
 	} else {
-		s.deliverLocked(inst, helpers.NewTaskCompletedEvent(taskID, resp.GetResult()))
+		event = helpers.NewTaskCompletedEvent(taskID, resp.GetResult())
+	}
+	if inst.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED {
+		inst.pending = append(inst.pending, event)
+	} else {
+		s.deliverLocked(inst, event)
 	}
 	return &protos.CompleteTaskResponse{}, nil
 }
@@ -232,16 +248,42 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 			if len(resp.GetActions()) != 1 {
 				return nil, status.Error(codes.InvalidArgument, "rewind must be the only orchestration action")
 			}
-			if err := validateRewindHistory(replacement.GetNewHistory()); err != nil {
+			if !lease.rewinding {
+				return nil, status.Error(codes.InvalidArgument, "rewind replacement requires a rewind work item")
+			}
+			if err := validateRewindHistory(replacement.GetNewHistory(), inst.executionID); err != nil {
 				return nil, err
 			}
 			rewind = replacement
+		}
+	}
+	if lease.rewinding && rewind == nil {
+		if len(resp.GetActions()) != 1 ||
+			resp.GetActions()[0].GetCompleteOrchestration().GetOrchestrationStatus() !=
+				protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED {
+			return nil, status.Error(codes.InvalidArgument, "rewind work item requires a replacement or failure")
 		}
 	}
 	delete(s.orchLeases, token)
 	inst.leased = false
 	if s.instances[inst.id] != inst || isTerminal(inst.status) {
 		return &protos.CompleteTaskResponse{}, nil
+	}
+
+	inst.customStatus = resp.GetCustomStatus()
+	inst.updatedAt = time.Now()
+	if rewind != nil {
+		if err := s.validateRewindChildrenLocked(inst, rewind.GetNewHistory(), make(map[*instance]bool)); err != nil {
+			s.failRewindLocked(inst, err)
+		} else {
+			s.applyRewindLocked(inst, rewind)
+			s.enqueueLocked(inst)
+			s.notifyLocked()
+		}
+		return &protos.CompleteTaskResponse{}, nil
+	}
+	if lease.rewinding {
+		inst.rewind = nil
 	}
 
 	processed := lease.events
@@ -251,17 +293,11 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 		processed = processed[:n.GetValue()]
 	}
 	inst.history = append(inst.history, processed...)
+	for _, event := range processed {
+		delete(inst.childResultSources, event)
+	}
 	if inst.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING {
 		inst.status = protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING
-	}
-	inst.customStatus = resp.GetCustomStatus()
-	inst.updatedAt = time.Now()
-
-	if rewind != nil {
-		s.applyRewindLocked(inst, rewind)
-		s.enqueueLocked(inst)
-		s.notifyLocked()
-		return &protos.CompleteTaskResponse{}, nil
 	}
 	s.applyActionsLocked(inst, resp.GetActions())
 	s.enqueueLocked(inst)
@@ -297,22 +333,7 @@ func (s *Server) applyActionsLocked(inst *instance, actions []*protos.Orchestrat
 			event := helpers.NewTaskScheduledEvent(id, task.GetName(), task.GetVersion(), task.GetInput(), task.GetParentTraceContext())
 			event.GetTaskScheduled().Tags = task.GetTags()
 			inst.history = append(inst.history, event)
-			s.actQueue = append(s.actQueue, &activityItem{
-				inst:        inst,
-				executionID: inst.executionID,
-				request: &protos.ActivityRequest{
-					Name:    task.GetName(),
-					Version: task.GetVersion(),
-					Input:   task.GetInput(),
-					OrchestrationInstance: &protos.OrchestrationInstance{
-						InstanceId:  inst.id,
-						ExecutionId: wrapperspb.String(inst.executionID),
-					},
-					TaskId:             id,
-					ParentTraceContext: task.GetParentTraceContext(),
-					Tags:               task.GetTags(),
-				},
-			})
+			s.queueActivityLocked(inst, id, event.GetTaskScheduled())
 		case *protos.OrchestratorAction_CreateTimer:
 			fireAt := a.CreateTimer.GetFireAt()
 			inst.history = append(inst.history, helpers.NewTimerCreatedEvent(id, fireAt))
@@ -353,14 +374,37 @@ func (s *Server) applyActionsLocked(inst *instance, actions []*protos.Orchestrat
 	s.completeLocked(inst, complete.GetOrchestrationStatus(), complete.GetResult(), complete.GetFailureDetails())
 }
 
+func (s *Server) queueActivityLocked(inst *instance, id int32, task *protos.TaskScheduledEvent) {
+	s.actQueue = append(s.actQueue, &activityItem{
+		inst:        inst,
+		executionID: inst.executionID,
+		request: &protos.ActivityRequest{
+			Name:    task.GetName(),
+			Version: task.GetVersion(),
+			Input:   task.GetInput(),
+			OrchestrationInstance: &protos.OrchestrationInstance{
+				InstanceId:  inst.id,
+				ExecutionId: wrapperspb.String(inst.executionID),
+			},
+			TaskId:             id,
+			ParentTraceContext: task.GetParentTraceContext(),
+			Tags:               task.GetTags(),
+		},
+	})
+}
+
 func (s *Server) createSubOrchestrationLocked(parent *instance, taskID int32, action *protos.CreateSubOrchestrationAction) {
 	childID := action.GetInstanceId()
+	existing, exists := s.instances[childID]
+	collision := exists && !isTerminal(existing.status)
+
+	// Record the scheduling decision even when it fails, so replay can match it.
 	created := helpers.NewSubOrchestrationCreatedEvent(
 		taskID, action.GetName(), action.GetVersion(), action.GetInput(), childID, action.GetParentTraceContext())
 	created.GetSubOrchestrationInstanceCreated().Tags = action.GetTags()
 	parent.history = append(parent.history, created)
 
-	if existing, ok := s.instances[childID]; ok && !isTerminal(existing.status) {
+	if collision {
 		s.deliverLocked(parent, &protos.HistoryEvent{
 			EventId:   -1,
 			Timestamp: timestamppb.Now(),
@@ -410,11 +454,16 @@ func (s *Server) continueAsNewLocked(inst *instance, complete *protos.CompleteOr
 		}
 	}
 	inst.pending = pending
+	inst.childResultSources = nil
 }
 
 func (s *Server) failUnsupportedLocked(inst *instance, format string, args ...any) {
 	failure := failureDetails("NotSupported", format, args...)
 	failure.IsNonRetriable = true
+	s.failLocked(inst, failure)
+}
+
+func (s *Server) failLocked(inst *instance, failure *protos.TaskFailureDetails) {
 	inst.history = append(inst.history, &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.Now(),
@@ -437,7 +486,28 @@ func (s *Server) completeLocked(
 	inst.failure = failure
 	inst.completedAt = now
 	inst.updatedAt = now
-	inst.pending = nil
+	inst.rewind = nil
+	if runtimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED {
+		inst.pending = slices.DeleteFunc(inst.pending, func(event *protos.HistoryEvent) bool {
+			switch event.GetEventType().(type) {
+			case *protos.HistoryEvent_EventRaised,
+				*protos.HistoryEvent_ExecutionSuspended,
+				*protos.HistoryEvent_ExecutionResumed,
+				*protos.HistoryEvent_ExecutionTerminated,
+				*protos.HistoryEvent_TaskCompleted,
+				*protos.HistoryEvent_TaskFailed,
+				*protos.HistoryEvent_TimerFired,
+				*protos.HistoryEvent_SubOrchestrationInstanceCompleted,
+				*protos.HistoryEvent_SubOrchestrationInstanceFailed:
+				return false
+			default:
+				return true
+			}
+		})
+	} else {
+		inst.pending = nil
+		inst.childResultSources = nil
+	}
 	inst.history = append(inst.history, &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.New(now),
@@ -451,22 +521,41 @@ func (s *Server) completeLocked(
 
 	parentRef := inst.parent.GetOrchestrationInstance()
 	parent, ok := s.instances[parentRef.GetInstanceId()]
-	if !ok || parent.executionID != parentRef.GetExecutionId().GetValue() {
+	if !ok || parent.executionID != parentRef.GetExecutionId().GetValue() ||
+		(isTerminal(parent.status) && parent.status != protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED) {
 		return
 	}
+	event := subOrchestrationResultEvent(inst)
+	parent.recordChildResult(event, inst)
+	if parent.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED {
+		parent.pending = append(parent.pending, event)
+	} else {
+		s.deliverLocked(parent, event)
+	}
+}
+
+func (inst *instance) recordChildResult(event *protos.HistoryEvent, child *instance) {
+	if inst.childResultSources == nil {
+		inst.childResultSources = make(map[*protos.HistoryEvent]childResultSource)
+	}
+	inst.childResultSources[event] = childResultSource{instanceID: child.id, executionID: child.executionID}
+}
+
+func subOrchestrationResultEvent(inst *instance) *protos.HistoryEvent {
 	taskID := inst.parent.GetTaskScheduledId()
-	event := &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.New(now)}
-	if runtimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED {
+	event := &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.New(inst.completedAt)}
+	if inst.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED {
 		event.EventType = &protos.HistoryEvent_SubOrchestrationInstanceCompleted{
 			SubOrchestrationInstanceCompleted: &protos.SubOrchestrationInstanceCompletedEvent{
 				TaskScheduledId: taskID,
-				Result:          output,
+				Result:          inst.output,
 			},
 		}
 	} else {
+		failure := inst.failure
 		if failure == nil {
 			failure = failureDetails("OrchestrationTerminated",
-				"sub-orchestration %q ended with status %s", inst.id, helpers.ToRuntimeStatusString(runtimeStatus))
+				"sub-orchestration %q ended with status %s", inst.id, helpers.ToRuntimeStatusString(inst.status))
 		}
 		event.EventType = &protos.HistoryEvent_SubOrchestrationInstanceFailed{
 			SubOrchestrationInstanceFailed: &protos.SubOrchestrationInstanceFailedEvent{
@@ -475,5 +564,5 @@ func (s *Server) completeLocked(
 			},
 		}
 	}
-	s.deliverLocked(parent, event)
+	return event
 }

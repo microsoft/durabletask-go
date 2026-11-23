@@ -661,7 +661,7 @@ func TestGreeting(t *testing.T) {
 
 To isolate an orchestration from its dependencies, register stub activities and sub-orchestrators in the test registry. You can use the client to raise events, suspend, resume, terminate, restart, rewind, query, and purge instances, and read history.
 
-`RewindInstance` enqueues recovery of a failed orchestration, preserving successful work and recursively recovering failed sub-orchestrations. Wait for completion to observe recovery. Purged children are recreated from their recorded inputs without their previous history. The same worker [history-safety limitations](./durabletaskscheduler/README.md#rewind) apply.
+`RewindInstance` enqueues recovery of a failed orchestration, preserving successful work and recursively recovering failed sub-orchestrations. Wait for completion to observe recovery. Outstanding timers retain their deadlines, and activities can run again if their results are unavailable. Purged children without retained results are recreated from their recorded inputs without their previous history; conflicting child IDs prevent rewind. The same worker [history-safety limitations](./durabletaskscheduler/README.md#rewind) apply.
 
 The in-memory service has these limits:
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -498,6 +499,194 @@ func TestRewindRecovery(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRewindRecoversOutstandingWork(t *testing.T) {
+	var repaired atomic.Bool
+	var siblingCalls atomic.Int32
+	var startedOnce, releaseOnce sync.Once
+	started, release := make(chan struct{}), make(chan struct{})
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddActivityN("Sibling", func(ctx task.ActivityContext) (any, error) {
+		siblingCalls.Add(1)
+		startedOnce.Do(func() { close(started) })
+		select {
+		case <-release:
+			return "sibling", nil
+		case <-ctx.Context().Done():
+			return nil, ctx.Context().Err()
+		}
+	}))
+	require.NoError(t, r.AddActivityN("Flaky", func(ctx task.ActivityContext) (any, error) {
+		select {
+		case <-started:
+		case <-ctx.Context().Done():
+			return nil, ctx.Context().Err()
+		}
+		if !repaired.Load() {
+			return nil, errors.New("dependency unavailable")
+		}
+		return "repaired", nil
+	}))
+	require.NoError(t, r.AddOrchestratorN("Concurrent", func(ctx *task.OrchestrationContext) (any, error) {
+		sibling := ctx.CallActivity("Sibling")
+		timer := ctx.CreateTimer(2 * time.Second)
+		flaky := ctx.CallActivity("Flaky")
+		var fixed, message, result string
+		if err := flaky.Await(&fixed); err != nil {
+			return nil, err
+		}
+		if err := ctx.WaitForSingleEvent("message", -1).Await(&message); err != nil {
+			return nil, err
+		}
+		if err := sibling.Await(&result); err != nil {
+			return nil, err
+		}
+		if err := timer.Await(nil); err != nil {
+			return nil, err
+		}
+		return fixed + ":" + result + ":" + message, nil
+	}))
+	host := durabletasktest.New(t, r)
+	t.Cleanup(unblock)
+	ctx := testContext(t)
+	failed := run(t, host, "Concurrent", api.WithInstanceID("concurrent"))
+	require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+	history, err := host.Client().GetOrchestrationHistory(ctx, failed.InstanceID, api.HistoryQuery{})
+	require.NoError(t, err)
+	var timerCreated bool
+	for _, event := range history.Events {
+		timerCreated = timerCreated || event.Type == api.HistoryEventTimerCreated
+		require.NotEqual(t, api.HistoryEventTimerFired, event.Type)
+	}
+	require.True(t, timerCreated)
+
+	repaired.Store(true)
+	require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID))
+	require.NoError(t, host.Client().RaiseEvent(ctx, failed.InstanceID, "message", api.WithEventPayload("kept")))
+	require.Eventually(t, func() bool {
+		metadata, fetchErr := host.Client().FetchOrchestrationMetadata(ctx, failed.InstanceID)
+		return fetchErr == nil && metadata.ExecutionID != failed.ExecutionID
+	}, 10*time.Second, 5*time.Millisecond)
+	unblock()
+
+	completed, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
+	var output string
+	require.NoError(t, completed.ReadOutput(&output))
+	require.Equal(t, "repaired:sibling:kept", output)
+	require.EqualValues(t, 1, siblingCalls.Load())
+}
+
+func TestRewindRecoversChildCompletedAfterParentFailure(t *testing.T) {
+	var repaired atomic.Bool
+	var childCalls atomic.Int32
+	var startedOnce, releaseOnce sync.Once
+	started, release := make(chan struct{}), make(chan struct{})
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddActivityN("ChildWork", func(ctx task.ActivityContext) (any, error) {
+		childCalls.Add(1)
+		startedOnce.Do(func() { close(started) })
+		select {
+		case <-release:
+			return "child result", nil
+		case <-ctx.Context().Done():
+			return nil, ctx.Context().Err()
+		}
+	}))
+	require.NoError(t, r.AddActivityN("Flaky", func(ctx task.ActivityContext) (any, error) {
+		select {
+		case <-started:
+		case <-ctx.Context().Done():
+			return nil, ctx.Context().Err()
+		}
+		if !repaired.Load() {
+			return nil, errors.New("dependency unavailable")
+		}
+		return nil, nil
+	}))
+	require.NoError(t, r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
+		var result string
+		err := ctx.CallActivity("ChildWork").Await(&result)
+		return result, err
+	}))
+	require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+		child := ctx.CallSubOrchestrator("Child", task.WithSubOrchestrationInstanceID("late-child"))
+		if err := ctx.CallActivity("Flaky").Await(nil); err != nil {
+			return nil, err
+		}
+		var result string
+		err := child.Await(&result)
+		return result, err
+	}))
+	host := durabletasktest.New(t, r)
+	t.Cleanup(unblock)
+	ctx := testContext(t)
+	failed := run(t, host, "Parent", api.WithInstanceID("parent"))
+	require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+	unblock()
+	child, err := host.Client().WaitForOrchestrationCompletion(ctx, "late-child")
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, child.RuntimeStatus)
+
+	repaired.Store(true)
+	require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID))
+	completed, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
+	var output string
+	require.NoError(t, completed.ReadOutput(&output))
+	require.Equal(t, "child result", output)
+	after, err := host.Client().FetchOrchestrationMetadata(ctx, child.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, child.ExecutionID, after.ExecutionID)
+	require.EqualValues(t, 1, childCalls.Load())
+}
+
+func TestRewindRejectsChildIDCollision(t *testing.T) {
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddOrchestratorN("Unrelated", func(ctx *task.OrchestrationContext) (any, error) {
+		return nil, ctx.WaitForSingleEvent("release", -1).Await(nil)
+	}))
+	require.NoError(t, r.AddOrchestratorN("Child", func(*task.OrchestrationContext) (any, error) {
+		return "owned", nil
+	}))
+	require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+		var result string
+		err := ctx.CallSubOrchestrator("Child", task.WithSubOrchestrationInstanceID("shared")).Await(&result)
+		return result, err
+	}))
+	host := durabletasktest.New(t, r)
+	ctx := testContext(t)
+	shared, err := host.Client().ScheduleNewOrchestration(ctx, "Unrelated", api.WithInstanceID("shared"))
+	require.NoError(t, err)
+	unrelated, err := host.Client().WaitForOrchestrationStart(ctx, shared)
+	require.NoError(t, err)
+	failed := run(t, host, "Parent", api.WithInstanceID("parent"))
+	require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+	require.Contains(t, failed.FailureDetails.ErrorMessage, "already exists")
+
+	require.ErrorIs(t, host.Client().RewindInstance(ctx, failed.InstanceID), api.ErrDuplicateInstance)
+	after, err := host.Client().FetchOrchestrationMetadata(ctx, shared)
+	require.NoError(t, err)
+	require.Equal(t, unrelated.ExecutionID, after.ExecutionID)
+	require.Equal(t, "Unrelated", after.Name)
+	require.Equal(t, api.RUNTIME_STATUS_RUNNING, after.RuntimeStatus)
+
+	require.NoError(t, host.Client().RaiseEvent(ctx, shared, "release"))
+	_, err = host.Client().WaitForOrchestrationCompletion(ctx, shared)
+	require.NoError(t, err)
+	require.NoError(t, host.Client().PurgeOrchestrationState(ctx, shared))
+	require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID))
+	completed, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
+	var output string
+	require.NoError(t, completed.ReadOutput(&output))
+	require.Equal(t, "owned", output)
 }
 
 func TestRewindInvalidState(t *testing.T) {
