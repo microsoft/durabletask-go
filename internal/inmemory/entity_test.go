@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -413,6 +414,73 @@ func TestReleaseStreamRequeuesEntityWorkItems(t *testing.T) {
 		operations = append(operations, event.GetEntityOperationSignaled().GetOperation())
 	}
 	assert.Equal(t, []string{"first", "second", "third"}, operations)
+}
+
+func TestSignalEntityValidatesRequestID(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	signal := func(requestID string) error {
+		_, err := s.SignalEntity(context.Background(), &protos.SignalEntityRequest{
+			InstanceId: "@counter@a",
+			Name:       "add",
+			RequestId:  requestID,
+		})
+		return err
+	}
+	assert.Equal(t, codes.InvalidArgument, status.Code(signal("bad-id")))
+	s.mu.Lock()
+	assert.NotContains(t, s.entities, "@counter@a", "a rejected signal isn't enqueued")
+	s.mu.Unlock()
+
+	require.NoError(t, signal(""))
+	require.NoError(t, signal(newID()))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	queue := s.entities["@counter@a"].queue
+	require.Len(t, queue, 2)
+	_, err := uuid.Parse(queue[0].GetEntityOperationSignaled().GetRequestId())
+	assert.NoError(t, err, "an omitted request ID is generated")
+}
+
+func TestInvalidEntityMessageFailsOrchestration(t *testing.T) {
+	tests := map[string]*protos.SendEntityMessageAction{
+		"call request ID": {EntityMessageType: &protos.SendEntityMessageAction_EntityOperationCalled{
+			EntityOperationCalled: &protos.EntityOperationCalledEvent{
+				RequestId: "bad-id", Operation: "get", TargetInstanceId: wrapperspb.String("@counter@a"),
+			},
+		}},
+		"signal request ID": {EntityMessageType: &protos.SendEntityMessageAction_EntityOperationSignaled{
+			EntityOperationSignaled: &protos.EntityOperationSignaledEvent{
+				Operation: "add", TargetInstanceId: wrapperspb.String("@counter@a"),
+			},
+		}},
+		"call target": {EntityMessageType: &protos.SendEntityMessageAction_EntityOperationCalled{
+			EntityOperationCalled: &protos.EntityOperationCalledEvent{
+				RequestId: newID(), Operation: "get", TargetInstanceId: wrapperspb.String("counter"),
+			},
+		}},
+		"lock set": {EntityMessageType: &protos.SendEntityMessageAction_EntityLockRequested{
+			EntityLockRequested: &protos.EntityLockRequestedEvent{
+				CriticalSectionId: newID(), LockSet: []string{"@counter@a", "not-an-entity"},
+			},
+		}},
+	}
+	for name, message := range tests {
+		t.Run(name, func(t *testing.T) {
+			s := NewServer()
+			defer s.Close()
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			inst := s.newInstanceLocked("caller", "orchestrator", nil, nil, nil, nil, nil, nil)
+			s.applyActionsLocked(inst, []*protos.OrchestratorAction{{
+				Id:                     1,
+				OrchestratorActionType: &protos.OrchestratorAction_SendEntityMessage{SendEntityMessage: message},
+			}})
+			assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, inst.status)
+			assert.Equal(t, "InvalidEntityMessage", inst.failure.GetErrorType())
+			assert.Empty(t, s.entities, "an invalid message isn't delivered")
+		})
+	}
 }
 
 func TestFailedSignalBatchNotifiesWorkItemStreams(t *testing.T) {

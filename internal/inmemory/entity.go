@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -497,6 +499,38 @@ func (s *Server) respondToCallerLocked(called *protos.EntityOperationCalledEvent
 	}
 }
 
+// validateEntityMessage reports an entity message that the service couldn't
+// deliver or that a worker would refuse to process.
+func validateEntityMessage(action *protos.SendEntityMessageAction) error {
+	var requestID string
+	var hasRequestID bool
+	var targets []string
+	switch m := action.GetEntityMessageType().(type) {
+	case *protos.SendEntityMessageAction_EntityOperationSignaled:
+		requestID, hasRequestID = m.EntityOperationSignaled.GetRequestId(), true
+		targets = []string{m.EntityOperationSignaled.GetTargetInstanceId().GetValue()}
+	case *protos.SendEntityMessageAction_EntityOperationCalled:
+		requestID, hasRequestID = m.EntityOperationCalled.GetRequestId(), true
+		targets = []string{m.EntityOperationCalled.GetTargetInstanceId().GetValue()}
+	case *protos.SendEntityMessageAction_EntityLockRequested:
+		targets = m.EntityLockRequested.GetLockSet()
+	case *protos.SendEntityMessageAction_EntityUnlockSent:
+		targets = []string{m.EntityUnlockSent.GetTargetInstanceId().GetValue()}
+	}
+	for _, target := range targets {
+		if _, _, ok := normalizeEntityID(target); !ok {
+			return fmt.Errorf("invalid entity instance ID %q", target)
+		}
+	}
+	if hasRequestID {
+		// Workers reject entity work items whose request IDs aren't UUIDs.
+		if _, err := uuid.Parse(requestID); err != nil {
+			return fmt.Errorf("invalid entity request ID %q: must be a UUID", requestID)
+		}
+	}
+	return nil
+}
+
 // sendEntityMessageLocked records an orchestration's entity message in its
 // history and delivers the message to the target entity.
 func (s *Server) sendEntityMessageLocked(inst *instance, id int32, action *protos.SendEntityMessageAction) {
@@ -568,6 +602,9 @@ func (s *Server) SignalEntity(_ context.Context, req *protos.SignalEntityRequest
 	requestID := req.GetRequestId()
 	if requestID == "" {
 		requestID = newID()
+	} else if _, err := uuid.Parse(requestID); err != nil {
+		// Workers reject entity work items whose request IDs aren't UUIDs.
+		return nil, status.Errorf(codes.InvalidArgument, "invalid entity request ID %q: must be a UUID", requestID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

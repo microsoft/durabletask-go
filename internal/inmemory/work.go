@@ -430,14 +430,20 @@ func countsTowardTurnBudget(event *protos.HistoryEvent) bool {
 
 func (s *Server) applyActionsLocked(inst *instance, actions []*protos.OrchestratorAction) {
 	for _, action := range actions {
-		switch action.GetOrchestratorActionType().(type) {
+		switch a := action.GetOrchestratorActionType().(type) {
 		case *protos.OrchestratorAction_ScheduleTask,
 			*protos.OrchestratorAction_CreateTimer,
 			*protos.OrchestratorAction_CreateSubOrchestration,
 			*protos.OrchestratorAction_SendEvent,
 			*protos.OrchestratorAction_TerminateOrchestration,
-			*protos.OrchestratorAction_SendEntityMessage,
 			*protos.OrchestratorAction_CompleteOrchestration:
+		case *protos.OrchestratorAction_SendEntityMessage:
+			if err := validateEntityMessage(a.SendEntityMessage); err != nil {
+				failure := failureDetails("InvalidEntityMessage", "%v", err)
+				failure.IsNonRetriable = true
+				s.failLocked(inst, failure)
+				return
+			}
 		default:
 			s.failUnsupportedLocked(inst, "orchestrator action %T is not supported by the in-memory test backend",
 				action.GetOrchestratorActionType())
