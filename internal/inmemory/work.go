@@ -617,12 +617,12 @@ func (s *Server) completeLocked(
 	inst.updatedAt = now
 	inst.rewind = nil
 	if runtimeStatus == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED {
+		// Retain results for rewind, but not suspend, resume, or terminate
+		// requests: the failure superseded them, and rewind restarts the
+		// instance as running.
 		inst.pending = slices.DeleteFunc(inst.pending, func(event *protos.HistoryEvent) bool {
 			switch event.GetEventType().(type) {
 			case *protos.HistoryEvent_EventRaised,
-				*protos.HistoryEvent_ExecutionSuspended,
-				*protos.HistoryEvent_ExecutionResumed,
-				*protos.HistoryEvent_ExecutionTerminated,
 				*protos.HistoryEvent_TaskCompleted,
 				*protos.HistoryEvent_TaskFailed,
 				*protos.HistoryEvent_TimerFired,

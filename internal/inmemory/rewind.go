@@ -272,6 +272,9 @@ func (s *Server) applyRewindLocked(inst *instance, action *protos.RewindOrchestr
 			child = s.newInstanceLocked(created.GetInstanceId(), created.GetName(), created.GetVersion(),
 				created.GetInput(), created.GetTags(), parent, created.GetParentTraceContext(), nil)
 		case child.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED && failed[event.GetEventId()]:
+			// Retarget now: the renewed parent can fail and be rewound again
+			// before this child's replacement history is committed.
+			s.retargetChildLocked(child, parent)
 			s.prepareRewindLocked(child, reason, wrapperspb.String(inst.executionID))
 		case isTerminal(child.status):
 			s.retargetChildLocked(child, parent)
