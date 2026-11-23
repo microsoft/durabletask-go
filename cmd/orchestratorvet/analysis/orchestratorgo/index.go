@@ -107,15 +107,9 @@ func (index *packageIndex) walkFunction(owner ast.Node, file *ast.File, body *as
 	if body == nil {
 		return
 	}
-	if parameters := funcType(owner).Params; parameters != nil {
-		for _, field := range parameters.List {
-			parameterType := index.pass.TypesInfo.TypeOf(field.Type)
-			if mayHoldFunction(parameterType) || isTaskRegistry(parameterType) {
-				for _, name := range field.Names {
-					index.recordValue(index.pass.TypesInfo.Defs[name], nil)
-				}
-			}
-		}
+	index.recordUnknownInputs(funcType(owner).Params)
+	if decl, ok := owner.(*ast.FuncDecl); ok {
+		index.recordUnknownInputs(decl.Recv)
 	}
 	var registrations []*ast.CallExpr
 	hasGoto := false
@@ -148,6 +142,20 @@ func (index *packageIndex) walkFunction(owner ast.Node, file *ast.File, body *as
 		// A jump can bypass another direct registration in this function.
 		for _, call := range registrations {
 			delete(index.registrationScopes, call)
+		}
+	}
+}
+
+func (index *packageIndex) recordUnknownInputs(fields *ast.FieldList) {
+	if fields == nil {
+		return
+	}
+	for _, field := range fields.List {
+		typ := index.pass.TypesInfo.TypeOf(field.Type)
+		if mayHoldFunction(typ) || isTaskRegistry(typ) {
+			for _, name := range field.Names {
+				index.recordValue(index.pass.TypesInfo.Defs[name], nil)
+			}
 		}
 	}
 }
@@ -319,6 +327,11 @@ func (index *packageIndex) singleValue(object types.Object) ast.Expr {
 	return values[0]
 }
 
+func (index *packageIndex) isExportedPackageVar(object types.Object) bool {
+	v, ok := object.(*types.Var)
+	return ok && v.Exported() && v.Parent() == index.pass.Pkg.Scope()
+}
+
 // enclosingFunctionStack preserves captured context bindings when a reached
 // literal is checked separately from its enclosing functions.
 func (index *packageIndex) enclosingFunctionStack(node ast.Node) []ast.Node {
@@ -383,7 +396,7 @@ func (index *packageIndex) resolveObject(object types.Object, seen map[types.Obj
 		}
 		return functionTarget{}
 	}
-	if object.Exported() && object.Parent() == index.pass.Pkg.Scope() {
+	if index.isExportedPackageVar(object) {
 		// Importers can mutate an exported function variable without an
 		// assignment in this package.
 		return functionTarget{}

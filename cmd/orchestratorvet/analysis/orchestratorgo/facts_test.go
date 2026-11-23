@@ -31,6 +31,7 @@ replace example.com/workflows/external => ./external
 		`external/clock.go`: "package external\nimport \"time\"\nfunc Clock() { _ = time.Now() }\n",
 		`billing/billing.go`: `package billing
 import (
+	"math/rand"
 	"os"
 	"time"
 	"github.com/microsoft/durabletask-go/task"
@@ -45,6 +46,17 @@ type Ledger[T any] struct{}
 func (Ledger[T]) Read() { _ = os.Getenv("REGION") }
 func Callback(*task.OrchestrationContext) { _ = time.Now() }
 func Clean() { _ = time.Unix(0, 0) }
+type Hook func()
+func (f Hook) RunAndNext() Hook {
+	f()
+	f = Cutoff
+	return f
+}
+var Seed = time.Now().UnixNano()
+func Sample() int {
+	r := rand.New(rand.NewSource(Seed))
+	return r.Int()
+}
 `,
 		`orders/orders.go`: `package orders
 import (
@@ -87,8 +99,11 @@ func local(ctx *task.OrchestrationContext) (any, error) {
 	p := &fn
 	*p = billing.Clean
 	fn()
+	billing.Hook(func() {}).RunAndNext()
+	_ = billing.Sample()
 	return nil, nil
 }
+func init() { billing.Seed = 1 }
 func ignore(func()) {}
 func dynamic(r reader) { r.Read() }
 `,
