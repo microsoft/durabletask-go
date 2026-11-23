@@ -193,7 +193,7 @@ func (p *loopProbe) scan(body *ast.BlockStmt, inLoop bool) {
 			}
 		case *ast.RangeStmt:
 			rangeType := p.checker.pass.TypesInfo.TypeOf(node.X)
-			if isChannel(rangeType) || isFunction(rangeType) {
+			if isChannel(rangeType) || isFunction(rangeType) || isTypeParameter(rangeType) {
 				p.inconclusive = true
 				return false
 			}
@@ -254,6 +254,14 @@ func isFunction(value types.Type) bool {
 		return false
 	}
 	_, ok := value.Underlying().(*types.Signature)
+	return ok
+}
+
+func isTypeParameter(value types.Type) bool {
+	if value == nil {
+		return false
+	}
+	_, ok := types.Unalias(value).(*types.TypeParam)
 	return ok
 }
 

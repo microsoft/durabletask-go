@@ -160,6 +160,7 @@ func pollingLoopsThatProgress(ctx *task.OrchestrationContext) (any, error) {
 		for range wait {
 		}
 	}
+	pollWithGenericIterator(work, wait)
 	for !task.IsCompleted(work) {
 		break
 	}
@@ -182,6 +183,13 @@ func pollingLoopsThatProgress(ctx *task.OrchestrationContext) (any, error) {
 	for i := 0; !task.IsCompleted(work) && i < 3; i++ {
 	}
 	return nil, nil
+}
+
+func pollWithGenericIterator[F ~func(func() bool)](work task.Task, wait F) {
+	for !task.IsCompleted(work) {
+		for range wait {
+		}
+	}
 }
 
 func register() {
