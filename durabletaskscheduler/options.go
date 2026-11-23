@@ -25,8 +25,8 @@ const (
 	GovernmentResourceID = "https://durabletask.azure.us"
 
 	// DefaultMaxReceiveMessageSize and DefaultMaxSendMessageSize are the default
-	// per-message gRPC bounds. They match the DTS service limit, which applies to
-	// unary messages and to each message of a stream.
+	// per-message gRPC bounds, including each message of a stream. DTS rejects
+	// incoming messages over 4 MiB.
 	DefaultMaxReceiveMessageSize = 4 * 1024 * 1024
 	DefaultMaxSendMessageSize    = 4 * 1024 * 1024
 	// DefaultKeepaliveTime and DefaultKeepaliveTimeout configure pings while a

@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -1915,4 +1916,97 @@ func TestFailOversizedEntityResult(t *testing.T) {
 	require.Empty(t, bounded.GetOperationInfos())
 	require.Equal(t, string(api.ErrorTypeEntityResultTooLarge), bounded.GetFailureDetails().GetErrorType())
 	require.True(t, bounded.GetFailureDetails().GetIsNonRetriable())
+}
+
+func TestWorkerOversizedActivityCompletion(t *testing.T) {
+	const limit = minOrchestratorCompletionBytes
+	value := strings.Repeat("x", 2*limit)
+	for _, externalize := range []bool{false, true} {
+		t.Run(fmt.Sprintf("externalize=%t", externalize), func(t *testing.T) {
+			client := new(fakeSchedulerClient)
+			opts := []TaskHubGrpcWorkerOption{WithMaxOrchestratorCompletionBytes(limit)}
+			var payloadOptions *api.LargePayloadOptions
+			if externalize {
+				store := payload.NewMemoryStore()
+				payloadOptions = &api.LargePayloadOptions{Store: store, Resolver: store, ThresholdBytes: 1024}
+				opts = append(opts, WithWorkerLargePayloads(payloadOptions))
+			}
+			worker := newFakeWorker(t, client, opts...)
+			worker.executor = &recordingExecutor{
+				executeActivity: func(context.Context, api.InstanceID, *protos.HistoryEvent) (*protos.HistoryEvent, error) {
+					return &protos.HistoryEvent{EventType: &protos.HistoryEvent_TaskCompleted{
+						TaskCompleted: &protos.TaskCompletedEvent{Result: wrapperspb.String(value)},
+					}}, nil
+				},
+			}
+			worker.processActivity(context.Background(), client, "token", &protos.ActivityRequest{
+				Name: "activity", TaskId: 7,
+				OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: "instance"},
+			})
+
+			require.Zero(t, client.activityAbandons)
+			require.Len(t, client.activityCompletions, 1)
+			completion := client.activityCompletions[0]
+			require.LessOrEqual(t, proto.Size(completion), limit)
+			require.Equal(t, "token", completion.CompletionToken)
+			if externalize {
+				require.Nil(t, completion.FailureDetails)
+				hydrated, err := largepayload.Hydrate(context.Background(), payloadOptions, completion.Result)
+				require.NoError(t, err)
+				require.Equal(t, value, hydrated.GetValue())
+			} else {
+				require.Nil(t, completion.Result)
+				require.Equal(t, string(api.ErrorTypeActivityResponseTooLarge), completion.GetFailureDetails().GetErrorType())
+				require.True(t, completion.GetFailureDetails().GetIsNonRetriable())
+			}
+		})
+	}
+}
+
+func TestWorkerOversizedEntityCompletion(t *testing.T) {
+	const limit = minOrchestratorCompletionBytes
+	value := strings.Repeat("x", 2*limit)
+	for _, externalize := range []bool{false, true} {
+		t.Run(fmt.Sprintf("externalize=%t", externalize), func(t *testing.T) {
+			client := new(fakeSchedulerClient)
+			opts := []TaskHubGrpcWorkerOption{WithMaxOrchestratorCompletionBytes(limit)}
+			var payloadOptions *api.LargePayloadOptions
+			if externalize {
+				store := payload.NewMemoryStore()
+				payloadOptions = &api.LargePayloadOptions{Store: store, Resolver: store, ThresholdBytes: 1024}
+				opts = append(opts, WithWorkerLargePayloads(payloadOptions))
+			}
+			worker := newFakeWorker(t, client, opts...)
+			worker.executor = &recordingExecutor{
+				executeEntity: func(context.Context, *protos.EntityBatchRequest) (*protos.EntityBatchResult, error) {
+					return &protos.EntityBatchResult{
+						EntityState: wrapperspb.String(value),
+						Results: []*protos.OperationResult{{ResultType: &protos.OperationResult_Success{
+							Success: &protos.OperationResultSuccess{Result: wrapperspb.String("ok")},
+						}}},
+					}, nil
+				},
+			}
+			worker.processEntityV2(context.Background(), client, "token", newFakeEntitySignalRequest("set", nil))
+
+			require.Zero(t, client.entityAbandonAttempts)
+			require.Len(t, client.entityCompletions, 1)
+			completion := client.entityCompletions[0]
+			require.LessOrEqual(t, proto.Size(completion), limit)
+			require.Equal(t, "token", completion.CompletionToken)
+			if externalize {
+				require.Nil(t, completion.FailureDetails)
+				require.Len(t, completion.OperationInfos, 1)
+				hydrated, err := largepayload.Hydrate(context.Background(), payloadOptions, completion.EntityState)
+				require.NoError(t, err)
+				require.Equal(t, value, hydrated.GetValue())
+			} else {
+				require.Nil(t, completion.EntityState)
+				require.Empty(t, completion.Results)
+				require.Empty(t, completion.OperationInfos)
+				require.Equal(t, string(api.ErrorTypeEntityResultTooLarge), completion.GetFailureDetails().GetErrorType())
+				require.True(t, completion.GetFailureDetails().GetIsNonRetriable())
+			}
+		})
+	}
 }

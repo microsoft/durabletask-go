@@ -3,6 +3,7 @@ package durabletaskscheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -130,6 +132,27 @@ type metadataServer struct {
 	helloErr error
 	getErr   error
 	state    *protos.OrchestrationState
+}
+
+type messageSizeHistoryServer struct {
+	protos.UnimplementedTaskHubSidecarServiceServer
+}
+
+func (*messageSizeHistoryServer) StreamInstanceHistory(
+	_ *protos.StreamInstanceHistoryRequest,
+	stream protos.TaskHubSidecarService_StreamInstanceHistoryServer,
+) error {
+	for _, size := range []int{2 << 20, 2 << 20, 2 << 20, 4 << 20} {
+		err := stream.Send(&protos.HistoryChunk{Events: []*protos.HistoryEvent{{
+			EventType: &protos.HistoryEvent_GenericEvent{GenericEvent: &protos.GenericEvent{
+				Data: wrapperspb.String(strings.Repeat("x", size)),
+			}},
+		}}})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *metadataServer) GetInstance(
@@ -607,7 +630,7 @@ func TestNewClientAppliesConfiguredReceiveMessageSize(t *testing.T) {
 		"large-message",
 		api.WithFetchPayloads(true),
 	)
-	require.Equal(t, codes.ResourceExhausted, status.Code(err), "default must match the 4 MiB DTS limit")
+	require.Equal(t, codes.ResourceExhausted, status.Code(err), "default receive limit must be 4 MiB")
 
 	raisedOptions := *options
 	raisedOptions.MaxReceiveMessageSize = 8 * 1024 * 1024
@@ -624,6 +647,86 @@ func TestNewClientAppliesConfiguredReceiveMessageSize(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, result.SerializedInput, payloadSize)
+}
+
+func TestConnectionAppliesConfiguredSendMessageSize(t *testing.T) {
+	const limit = 4 * 1024 * 1024
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer(grpc.MaxRecvMsgSize(8 * 1024 * 1024))
+	protos.RegisterTaskHubSidecarServiceServer(server, &metadataServer{metadata: make(chan metadata.MD, 4)})
+	go func() { _ = server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		require.NoError(t, listener.Close())
+	}()
+
+	options := NewOptions("http://bufconn", "default")
+	options.Authentication = AuthenticationNone
+	options.AllowInsecureConnection = true
+	options.dialer = bufconnDialer(listener)
+	prepared, err := prepareOptions(options)
+	require.NoError(t, err)
+	conn, err := connect(&prepared, clientRole, "")
+	require.NoError(t, err)
+	defer conn.Close()
+
+	request := &protos.GetInstanceRequest{InstanceId: strings.Repeat("x", limit-5)}
+	require.Equal(t, limit, proto.Size(request))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_, err = protos.NewTaskHubSidecarServiceClient(conn).GetInstance(ctx, request)
+	require.NoError(t, err)
+
+	request.InstanceId += "x"
+	require.Equal(t, limit+1, proto.Size(request))
+	_, err = protos.NewTaskHubSidecarServiceClient(conn).GetInstance(ctx, request)
+	require.Equal(t, codes.ResourceExhausted, status.Code(err))
+
+	prepared.MaxSendMessageSize = 8 * 1024 * 1024
+	raised, err := connect(&prepared, clientRole, "")
+	require.NoError(t, err)
+	defer raised.Close()
+	_, err = protos.NewTaskHubSidecarServiceClient(raised).GetInstance(ctx, request)
+	require.NoError(t, err)
+}
+
+func TestConnectionReceiveLimitAppliesPerStreamMessage(t *testing.T) {
+	listener, stop := startBufconnServer(t, &messageSizeHistoryServer{})
+	defer stop()
+	options := NewOptions("http://bufconn", "default")
+	options.Authentication = AuthenticationNone
+	options.AllowInsecureConnection = true
+	options.dialer = bufconnDialer(listener)
+	prepared, err := prepareOptions(options)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for _, raised := range []bool{false, true} {
+		t.Run(fmt.Sprintf("raised=%t", raised), func(t *testing.T) {
+			streamOptions := prepared
+			if raised {
+				streamOptions.MaxReceiveMessageSize = 8 * 1024 * 1024
+			}
+			conn, err := connect(&streamOptions, clientRole, "")
+			require.NoError(t, err)
+			defer conn.Close()
+			stream, err := protos.NewTaskHubSidecarServiceClient(conn).StreamInstanceHistory(ctx, &protos.StreamInstanceHistoryRequest{})
+			require.NoError(t, err)
+			for range 3 {
+				chunk, err := stream.Recv()
+				require.NoError(t, err)
+				require.Len(t, chunk.GetEvents()[0].GetGenericEvent().GetData().GetValue(), 2<<20)
+			}
+			chunk, err := stream.Recv()
+			if raised {
+				require.NoError(t, err)
+				require.Len(t, chunk.GetEvents()[0].GetGenericEvent().GetData().GetValue(), 4<<20)
+			} else {
+				require.Equal(t, codes.ResourceExhausted, status.Code(err))
+			}
+		})
+	}
 }
 
 func TestNewClientRecreatesChannelAndPreservesConfiguration(t *testing.T) {
