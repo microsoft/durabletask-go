@@ -192,6 +192,37 @@ func TestLargeReplayHistory(t *testing.T) {
 	assert.Equal(t, 384<<10, length)
 }
 
+func TestEventsLargerThanOneMessageAreDeliveredAcrossTurns(t *testing.T) {
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddOrchestratorN("TwoEvents", func(ctx *task.OrchestrationContext) (any, error) {
+		total := 0
+		for _, name := range []string{"A", "B"} {
+			var payload string
+			if err := ctx.WaitForSingleEvent(name, time.Minute).Await(&payload); err != nil {
+				return nil, err
+			}
+			total += len(payload)
+		}
+		return total, nil
+	}))
+	host := durabletasktest.New(t, r)
+	ctx := testContext(t)
+
+	// Raise both events before the scheduled start so they are pending together
+	// and exceed the 4 MiB message limit as a single turn.
+	id, err := host.Client().ScheduleNewOrchestration(ctx, "TwoEvents", api.WithStartTime(time.Now().Add(500*time.Millisecond)))
+	require.NoError(t, err)
+	payload := strings.Repeat("x", 3<<20)
+	require.NoError(t, host.Client().RaiseEvent(ctx, id, "A", api.WithEventPayload(payload)))
+	require.NoError(t, host.Client().RaiseEvent(ctx, id, "B", api.WithEventPayload(payload)))
+	metadata, err := host.Client().WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, metadata.RuntimeStatus)
+	var total int
+	require.NoError(t, metadata.ReadOutput(&total))
+	assert.Equal(t, 2*len(payload), total)
+}
+
 func TestNewHostPreservesStartupContextAndDetachesAfterStart(t *testing.T) {
 	r := task.NewTaskRegistry()
 	require.NoError(t, r.AddOrchestratorN("Complete", func(*task.OrchestrationContext) (any, error) {

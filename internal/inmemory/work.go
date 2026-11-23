@@ -2,6 +2,7 @@ package inmemory
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -83,7 +85,10 @@ func (s *Server) nextWorkItemLocked(
 				// A stale queue entry; look again from the start.
 				return s.nextWorkItemLocked(filters, streamID, limits)
 			}
-			return s.leaseOrchestrationLocked(inst, streamID)
+			if item := s.leaseOrchestrationLocked(inst, streamID); item != nil {
+				return item
+			}
+			return s.nextWorkItemLocked(filters, streamID, limits)
 		}
 	}
 	if streamHasCapacity(limits.activities, countActivityLeases(s.actLeases, streamID)) {
@@ -127,15 +132,18 @@ func countActivityLeases(leases map[string]*activityLease, streamID uint64) int 
 	return count
 }
 
+// leaseOrchestrationLocked leases an instance's pending events as a work item
+// that fits in one gRPC message. History that doesn't fit is streamed, and new
+// events that don't fit stay pending for later turns. If the first new event
+// can't fit on its own, the instance fails and nil is returned.
 func (s *Server) leaseOrchestrationLocked(inst *instance, streamID uint64) *protos.WorkItem {
 	events := inst.pending
-	inst.pending = nil
+	prepended := 0
 	if events[0].GetOrchestratorStarted() == nil {
 		events = append([]*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent()}, events...)
+		prepended = 1
 	}
-	inst.leased = true
 	token := newID()
-	s.orchLeases[token] = &orchestrationLease{inst: inst, events: events, streamID: streamID}
 	request := &protos.OrchestratorRequest{
 		InstanceId:  inst.id,
 		ExecutionId: wrapperspb.String(inst.executionID),
@@ -150,7 +158,51 @@ func (s *Server) leaseOrchestrationLocked(inst *instance, streamID uint64) *prot
 		request.PastEvents = nil
 		request.RequiresHistoryStreaming = true
 	}
+	if proto.Size(item) > maxOrchestrationWorkItemSize {
+		n := fittingNewEventCount(item, events)
+		// The batch must hold the OrchestratorStarted marker and at least one event.
+		if n < 2 {
+			s.completeLocked(inst, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, &protos.TaskFailureDetails{
+				ErrorType: "OrchestrationWorkItemTooLarge",
+				ErrorMessage: fmt.Sprintf(
+					"a %d-byte history event can't be delivered within the %d-byte gRPC message limit of the in-memory test backend",
+					proto.Size(events[1]), maxOrchestrationWorkItemSize),
+				IsNonRetriable: true,
+			})
+			return nil
+		}
+		events = slices.Clip(events[:n])
+		request.NewEvents = events
+	}
+	inst.pending = slices.Clone(inst.pending[len(events)-prepended:])
+	inst.leased = true
+	s.orchLeases[token] = &orchestrationLease{inst: inst, events: events, streamID: streamID}
 	return item
+}
+
+// fittingNewEventCount returns how many leading events fit in the work item's
+// new events without exceeding the message limit.
+func fittingNewEventCount(item *protos.WorkItem, events []*protos.HistoryEvent) int {
+	request := item.GetOrchestratorRequest()
+	request.NewEvents = nil
+	size := proto.Size(item)
+	n := 0
+	for _, event := range events {
+		// newEvents is field 4 of OrchestratorRequest.
+		size += protowire.SizeTag(4) + protowire.SizeBytes(proto.Size(event))
+		if size > maxOrchestrationWorkItemSize {
+			break
+		}
+		n++
+	}
+	// Nested length prefixes also grow, so confirm the estimate.
+	for ; n > 0; n-- {
+		request.NewEvents = events[:n]
+		if proto.Size(item) <= maxOrchestrationWorkItemSize {
+			break
+		}
+	}
+	return n
 }
 
 func matchesOrchestrationFilter(filters *protos.WorkItemFilters, inst *instance) bool {
