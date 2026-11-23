@@ -24,11 +24,11 @@ const (
 	// GovernmentResourceID is the token audience for DTS in US Government and DoD regions.
 	GovernmentResourceID = "https://durabletask.azure.us"
 
-	// DefaultMaxReceiveMessageSize and DefaultMaxSendMessageSize are the default
-	// per-message gRPC bounds, including each message of a stream. DTS rejects
-	// incoming messages over 4 MiB.
-	DefaultMaxReceiveMessageSize = 4 * 1024 * 1024
-	DefaultMaxSendMessageSize    = 4 * 1024 * 1024
+	// DefaultMaxReceiveMessageSize provides headroom for unary responses and
+	// individual messages of a stream.
+	DefaultMaxReceiveMessageSize = 64 * 1024 * 1024
+	// DefaultMaxSendMessageSize leaves the gRPC send limit unset.
+	DefaultMaxSendMessageSize = 0
 	// DefaultKeepaliveTime and DefaultKeepaliveTimeout configure pings while a
 	// gRPC stream is active.
 	DefaultKeepaliveTime    = 2 * time.Minute
@@ -111,11 +111,14 @@ type Options struct {
 	// HelloTimeout controls fail-fast connectivity checks.
 	HelloTimeout time.Duration
 
-	// MaxReceiveMessageSize and MaxSendMessageSize bound individual gRPC
-	// messages. Zero uses the 4 MiB SDK default. DTS rejects incoming messages
-	// over 4 MiB, so raising MaxSendMessageSize does not help.
+	// MaxReceiveMessageSize bounds individual unary responses and streamed
+	// messages. Zero uses the 64 MiB SDK default.
 	MaxReceiveMessageSize int
-	MaxSendMessageSize    int
+
+	// MaxSendMessageSize optionally bounds individual outgoing gRPC messages.
+	// Zero leaves the gRPC send limit unset, allowing the server to enforce its
+	// receive limit. The gRPC-Go transport's own default maximum still applies.
+	MaxSendMessageSize int
 
 	// KeepaliveTime controls client pings while a gRPC stream is active. Zero
 	// disables keepalive, in which case KeepaliveTimeout is ignored.

@@ -625,28 +625,28 @@ func TestNewClientAppliesConfiguredReceiveMessageSize(t *testing.T) {
 	defer func() {
 		require.NoError(t, defaultClient.Close())
 	}()
-	_, err = defaultClient.FetchOrchestrationMetadata(
-		context.Background(),
-		"large-message",
-		api.WithFetchPayloads(true),
-	)
-	require.Equal(t, codes.ResourceExhausted, status.Code(err), "default receive limit must be 4 MiB")
-
-	raisedOptions := *options
-	raisedOptions.MaxReceiveMessageSize = 8 * 1024 * 1024
-	managementClient, err := NewClient(context.Background(), &raisedOptions, api.DefaultLogger())
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, managementClient.Close())
-	}()
-
-	result, err := managementClient.FetchOrchestrationMetadata(
+	result, err := defaultClient.FetchOrchestrationMetadata(
 		context.Background(),
 		"large-message",
 		api.WithFetchPayloads(true),
 	)
 	require.NoError(t, err)
 	require.Len(t, result.SerializedInput, payloadSize)
+
+	limitedOptions := *options
+	limitedOptions.MaxReceiveMessageSize = 4 * 1024 * 1024
+	limitedClient, err := NewClient(context.Background(), &limitedOptions, api.DefaultLogger())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, limitedClient.Close())
+	}()
+
+	_, err = limitedClient.FetchOrchestrationMetadata(
+		context.Background(),
+		"large-message",
+		api.WithFetchPayloads(true),
+	)
+	require.Equal(t, codes.ResourceExhausted, status.Code(err))
 }
 
 func TestConnectionAppliesConfiguredSendMessageSize(t *testing.T) {
@@ -660,34 +660,50 @@ func TestConnectionAppliesConfiguredSendMessageSize(t *testing.T) {
 		require.NoError(t, listener.Close())
 	}()
 
-	options := NewOptions("http://bufconn", "default")
-	options.Authentication = AuthenticationNone
-	options.AllowInsecureConnection = true
-	options.dialer = bufconnDialer(listener)
-	prepared, err := prepareOptions(options)
-	require.NoError(t, err)
-	conn, err := connect(&prepared, clientRole, "")
-	require.NoError(t, err)
-	defer conn.Close()
-
-	request := &protos.GetInstanceRequest{InstanceId: strings.Repeat("x", limit-5)}
-	require.Equal(t, limit, proto.Size(request))
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, err = protos.NewTaskHubSidecarServiceClient(conn).GetInstance(ctx, request)
-	require.NoError(t, err)
+	for _, testCase := range []struct {
+		name         string
+		sendLimit    int
+		messageBytes int
+		wantCode     codes.Code
+	}{
+		{"default leaves send limit unset", 0, limit + 1, codes.OK},
+		{"explicit limit accepts boundary", limit, limit, codes.OK},
+		{"explicit limit rejects oversized message", limit, limit + 1, codes.ResourceExhausted},
+		{"raised explicit limit", 2 * limit, limit + 1, codes.OK},
+		{"server enforces its receive limit", 0, 2*limit + 1, codes.ResourceExhausted},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			options := NewOptions("http://bufconn", "default")
+			options.Authentication = AuthenticationNone
+			options.AllowInsecureConnection = true
+			options.MaxSendMessageSize = testCase.sendLimit
+			options.dialer = bufconnDialer(listener)
+			var sendLimitSet bool
+			options.UnaryInterceptors = []grpc.UnaryClientInterceptor{
+				func(ctx context.Context, method string, request, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, callOptions ...grpc.CallOption) error {
+					for _, option := range callOptions {
+						if _, ok := option.(grpc.MaxSendMsgSizeCallOption); ok {
+							sendLimitSet = true
+						}
+					}
+					return invoker(ctx, method, request, reply, cc, callOptions...)
+				},
+			}
+			prepared, err := prepareOptions(options)
+			require.NoError(t, err)
+			conn, err := connect(&prepared, clientRole, "")
+			require.NoError(t, err)
+			defer conn.Close()
 
-	request.InstanceId += "x"
-	require.Equal(t, limit+1, proto.Size(request))
-	_, err = protos.NewTaskHubSidecarServiceClient(conn).GetInstance(ctx, request)
-	require.Equal(t, codes.ResourceExhausted, status.Code(err))
-
-	prepared.MaxSendMessageSize = 8 * 1024 * 1024
-	raised, err := connect(&prepared, clientRole, "")
-	require.NoError(t, err)
-	defer raised.Close()
-	_, err = protos.NewTaskHubSidecarServiceClient(raised).GetInstance(ctx, request)
-	require.NoError(t, err)
+			request := &protos.GetInstanceRequest{InstanceId: strings.Repeat("x", testCase.messageBytes-5)}
+			require.Equal(t, testCase.messageBytes, proto.Size(request))
+			_, err = protos.NewTaskHubSidecarServiceClient(conn).GetInstance(ctx, request)
+			require.Equal(t, testCase.wantCode, status.Code(err))
+			require.Equal(t, testCase.sendLimit > 0, sendLimitSet)
+		})
+	}
 }
 
 func TestConnectionReceiveLimitAppliesPerStreamMessage(t *testing.T) {
@@ -702,11 +718,11 @@ func TestConnectionReceiveLimitAppliesPerStreamMessage(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	for _, raised := range []bool{false, true} {
-		t.Run(fmt.Sprintf("raised=%t", raised), func(t *testing.T) {
+	for _, limited := range []bool{false, true} {
+		t.Run(fmt.Sprintf("limited=%t", limited), func(t *testing.T) {
 			streamOptions := prepared
-			if raised {
-				streamOptions.MaxReceiveMessageSize = 8 * 1024 * 1024
+			if limited {
+				streamOptions.MaxReceiveMessageSize = 4 * 1024 * 1024
 			}
 			conn, err := connect(&streamOptions, clientRole, "")
 			require.NoError(t, err)
@@ -719,11 +735,11 @@ func TestConnectionReceiveLimitAppliesPerStreamMessage(t *testing.T) {
 				require.Len(t, chunk.GetEvents()[0].GetGenericEvent().GetData().GetValue(), 2<<20)
 			}
 			chunk, err := stream.Recv()
-			if raised {
+			if limited {
+				require.Equal(t, codes.ResourceExhausted, status.Code(err))
+			} else {
 				require.NoError(t, err)
 				require.Len(t, chunk.GetEvents()[0].GetGenericEvent().GetData().GetValue(), 4<<20)
-			} else {
-				require.Equal(t, codes.ResourceExhausted, status.Code(err))
 			}
 		})
 	}

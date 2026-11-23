@@ -155,22 +155,23 @@ lifecycle operations are not automatically retried: a failed acknowledgement
 can follow a successful service-side change. Worker channels do not use this
 policy, because the worker owns its own reconnect loop.
 
-Individual gRPC messages are bounded to 4 MiB by default through
-`Options.MaxReceiveMessageSize` and `Options.MaxSendMessageSize`. DTS rejects
-incoming messages over 4 MiB, so a larger send limit only moves the failure to
-the service. DTS is expected to keep each message it sends, including each
-history chunk, within the default 4 MiB gRPC limit that most clients use. The
-SDK does not raise the receive default to tolerate larger messages; a message
-over the limit fails with `ResourceExhausted`. These limits apply to each
-message, including each message of a stream; the total streamed history limit
-is separate.
-The worker uses a 3.9 MiB safety bound for every work item completion. When
+Incoming gRPC messages are bounded to 64 MiB by default through
+`Options.MaxReceiveMessageSize`, providing generous headroom for unary responses
+and individual stream chunks. The limit applies to each message, not the total
+stream; the total streamed history limit is separate. By default,
+`Options.MaxSendMessageSize` is zero and the SDK does not set a transport send
+limit, leaving message-size enforcement to the server. The gRPC-Go transport's
+own default maximum (approximately 2 GiB) still applies. A positive
+`Options.MaxSendMessageSize` opts into an explicit client-side send limit.
+
+The worker retains a separate 3.9 MiB safety bound for every work item
+completion, regardless of the default transport send behavior. When a positive
 `Options.MaxSendMessageSize` is lower, that configured send limit becomes the
-bound instead. The worker validates the final completion after large-payload
-externalization. An oversized orchestration response fails the orchestration
-once with `OrchestratorResponseTooLarge`; an oversized activity response fails
-the task with non-retriable `ActivityResponseTooLarge`; and an oversized entity
-batch result fails the batch with `EntityResultTooLarge`. The worker sends a
+completion bound instead. The worker validates the final completion after
+large-payload externalization. An oversized orchestration response fails the
+orchestration once with `OrchestratorResponseTooLarge`; an oversized activity
+response fails the task with non-retriable `ActivityResponseTooLarge`; and an
+oversized entity batch result fails the batch with `EntityResultTooLarge`. The worker sends a
 small failure completion instead of abandoning the oversized result. The legacy
 `isPartial`/`chunkIndex` response fields are deprecated; the Go worker does not
 use them because validation against the current DTS emulator did not provide a
