@@ -412,3 +412,25 @@ func TestReleaseStreamRequeuesEntityWorkItems(t *testing.T) {
 	}
 	assert.Equal(t, []string{"first", "second", "third"}, operations)
 }
+
+func TestFailedSignalBatchNotifiesWorkItemStreams(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	s.mu.Lock()
+	s.deliverEntityLocked("@counter@a", signalEvent("add"))
+	item := s.nextEntityWorkItemLocked(nil, 1)
+	require.NotNil(t, item)
+	changed := s.changed
+	s.mu.Unlock()
+
+	_, err := s.CompleteEntityTask(context.Background(), &protos.EntityBatchResult{
+		CompletionToken: item.GetCompletionToken(),
+		FailureDetails:  failureDetails("failure", "boom"),
+	})
+	require.NoError(t, err)
+	select {
+	case <-changed:
+	default:
+		t.Fatal("completing a failed batch must wake streams waiting for a free entity slot")
+	}
+}

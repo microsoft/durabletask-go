@@ -374,6 +374,9 @@ func (s *Server) CompleteEntityTask(_ context.Context, result *protos.EntityBatc
 			}
 		}
 		s.pumpEntityLocked(e)
+		// The completed work item frees a concurrency slot even if this entity
+		// has nothing more to dispatch.
+		s.notifyLocked()
 		return &protos.CompleteTaskResponse{}, nil
 	}
 
