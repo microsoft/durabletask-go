@@ -155,9 +155,17 @@ lifecycle operations are not automatically retried: a failed acknowledgement
 can follow a successful service-side change. Worker channels do not use this
 policy, because the worker owns its own reconnect loop.
 
-Individual gRPC messages are bounded to 64 MiB by default through
-`Options.MaxReceiveMessageSize` and `Options.MaxSendMessageSize`. The worker uses a
-3.9 MiB safety bound below the service ceiling. When
+Incoming gRPC messages are bounded to 64 MiB by default through
+`Options.MaxReceiveMessageSize`, providing generous headroom for unary responses
+and individual stream chunks. The limit applies to each message, not the total
+stream; the total streamed history limit is separate. By default,
+`Options.MaxSendMessageSize` is zero and the SDK does not set a transport send
+limit, leaving message-size enforcement to the server. The gRPC-Go transport's
+own default maximum (approximately 2 GiB) still applies. A positive
+`Options.MaxSendMessageSize` opts into an explicit client-side send limit.
+
+The worker retains a separate 3.9 MiB safety bound for orchestration
+responses, regardless of the default transport send behavior. When a positive
 `Options.MaxSendMessageSize` is lower, that configured send limit becomes the
 bound instead. The worker validates the final response after large-payload
 externalization and fails an orchestration once

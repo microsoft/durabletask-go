@@ -444,9 +444,6 @@ func prepareOptionsWith(options *Options, factory credentialFactory) (Options, e
 	if prepared.MaxReceiveMessageSize == 0 {
 		prepared.MaxReceiveMessageSize = DefaultMaxReceiveMessageSize
 	}
-	if prepared.MaxSendMessageSize == 0 {
-		prepared.MaxSendMessageSize = DefaultMaxSendMessageSize
-	}
 	if prepared.KeepaliveTime > 0 && prepared.KeepaliveTimeout == 0 {
 		prepared.KeepaliveTimeout = DefaultKeepaliveTimeout
 	}
@@ -520,8 +517,12 @@ func connect(
 		grpc.WithPerRPCCredentials(newPerRPCCredentials(options, role, workerID)),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(options.MaxReceiveMessageSize),
-			grpc.MaxCallSendMsgSize(options.MaxSendMessageSize),
 		),
+	}
+	if options.MaxSendMessageSize > 0 {
+		dialOptions = append(dialOptions, grpc.WithDefaultCallOptions(
+			grpc.MaxCallSendMsgSize(options.MaxSendMessageSize),
+		))
 	}
 	if options.KeepaliveTime > 0 {
 		dialOptions = append(dialOptions, grpc.WithKeepaliveParams(keepalive.ClientParameters{
