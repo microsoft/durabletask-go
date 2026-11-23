@@ -158,10 +158,8 @@ policy, because the worker owns its own reconnect loop.
 Individual gRPC messages are bounded to 4 MiB by default through
 `Options.MaxReceiveMessageSize` and `Options.MaxSendMessageSize`. DTS rejects
 incoming messages over 4 MiB, so a larger send limit only moves the failure to
-the service. DTS streams history in chunks of about 2 MiB, so the 4 MiB receive
-limit leaves headroom. That chunk size is a soft target: a single history event
-larger than it is sent alone, so raise `Options.MaxReceiveMessageSize` if
-individual events can exceed 4 MiB. These limits apply to each message,
+the service. DTS keeps each message it sends within the default 4 MiB gRPC
+limit, including each history chunk. These limits apply to each message,
 including each message of a stream; the total streamed history limit is
 separate.
 The worker uses a 3.9 MiB safety bound for every work item completion. When
