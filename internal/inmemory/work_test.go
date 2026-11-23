@@ -489,6 +489,17 @@ func TestRewindRetargetsLateFailedChild(t *testing.T) {
 			item = s.leaseOrchestrationLocked(parent, 1)
 			finishTestRewind(t, s, item, started, "new-parent-again", created)
 			require.Equal(t, "new-parent-again", child.rewind.GetExecutionRewound().GetParentExecutionId().GetValue())
+			require.Equal(t, "new-parent-again", child.parent.GetOrchestrationInstance().GetExecutionId().GetValue())
+
+			// The renewed parent can fail again before the child's recovery is committed.
+			parent.pending = nil
+			s.completeLocked(parent, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, failureDetails("failure", "sibling"))
+			_, err = s.RewindInstance(context.Background(), &protos.RewindInstanceRequest{InstanceId: parent.id})
+			require.NoError(t, err)
+			item = s.leaseOrchestrationLocked(parent, 1)
+			finishTestRewind(t, s, item, started, "new-parent-third", created)
+			require.Equal(t, "new-parent-third", child.parent.GetOrchestrationInstance().GetExecutionId().GetValue())
+			require.Equal(t, "new-parent-third", child.rewind.GetExecutionRewound().GetParentExecutionId().GetValue())
 		})
 	}
 }
