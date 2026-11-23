@@ -19,8 +19,43 @@ type Channel[T any] struct {
 	ctx       *OrchestrationContext
 	capacity  int
 	buffer    []channelValue[T]
-	senders   list.List
-	receivers list.List
+	senders   channelQueue[T]
+	receivers channelQueue[T]
+}
+
+// Registrations from one selection are consecutive. Grouping them lets peer
+// lookup skip all of its own alternatives in one step without changing order.
+type channelQueue[T any] struct {
+	list.List
+	groups map[*selection]*channelOperationGroup[T]
+}
+
+type channelOperationGroup[T any] struct {
+	selection  *selection
+	element    *list.Element
+	operations list.List
+}
+
+func (q *channelQueue[T]) add(op *channelOperation[T]) {
+	if q.groups == nil {
+		q.groups = make(map[*selection]*channelOperationGroup[T])
+	}
+	group := q.groups[op.selection]
+	if group == nil {
+		group = &channelOperationGroup[T]{selection: op.selection}
+		group.element = q.PushBack(group)
+		q.groups[op.selection] = group
+	}
+	op.element = group.operations.PushBack(op)
+}
+
+func (q *channelQueue[T]) remove(op *channelOperation[T]) {
+	group := q.groups[op.selection]
+	group.operations.Remove(op.element)
+	if group.operations.Len() == 0 {
+		q.Remove(group.element)
+		delete(q.groups, op.selection)
+	}
 }
 
 type channelValue[T any] struct {
@@ -130,9 +165,9 @@ func (c *channelSelectCase[T]) subscribe(s *selection) {
 	c.operations[s] = op
 	channel := c.channel
 	if c.send {
-		op.element = channel.senders.PushBack(op)
+		channel.senders.add(op)
 	} else {
-		op.element = channel.receivers.PushBack(op)
+		channel.receivers.add(op)
 	}
 }
 
@@ -144,9 +179,9 @@ func (c *channelSelectCase[T]) unsubscribe(s *selection) {
 	delete(c.operations, s)
 	channel := c.channel
 	if c.send {
-		channel.senders.Remove(op.element)
+		channel.senders.remove(op)
 	} else {
-		channel.receivers.Remove(op.element)
+		channel.receivers.remove(op)
 	}
 }
 
@@ -160,9 +195,9 @@ func (op *channelOperation[T]) firstPeer() *channelOperation[T] {
 		peers = &op.candidate.channel.receivers
 	}
 	for element := peers.Front(); element != nil; element = element.Next() {
-		peer := element.Value.(*channelOperation[T])
-		if peer.selection != op.selection && peer.selection.pending() {
-			return peer
+		group := element.Value.(*channelOperationGroup[T])
+		if group.selection != op.selection && group.selection.pending() {
+			return group.operations.Front().Value.(*channelOperation[T])
 		}
 	}
 	return nil
@@ -198,7 +233,8 @@ func (c *channelSelectCase[T]) commit(s *selection) bool {
 		}
 		// Do not steal a waiting peer from an earlier ready task, event, or
 		// rendezvous. Let that coroutine resolve its preferred case first.
-		if peer.selection.preferred() != peer.candidate {
+		if preferred := peer.selection.preferred(); preferred == nil ||
+			preferred.underlyingCase() != peer.candidate {
 			channel.ctx.scheduler.makeRunnable(peer.selection.coroutine)
 			return false
 		}
@@ -244,31 +280,37 @@ func (c *channelSelectCase[T]) commit(s *selection) bool {
 func (c *Channel[T]) notify() {
 	slots := c.capacity - len(c.buffer)
 	for element := c.senders.Front(); element != nil; element = element.Next() {
-		op := element.Value.(*channelOperation[T])
-		if !op.selection.pending() {
+		group := element.Value.(*channelOperationGroup[T])
+		if !group.selection.pending() {
 			continue
 		}
-		if c.capacity > 0 {
-			ready := slots > 0
-			if ready {
-				slots--
+		for item := group.operations.Front(); item != nil; item = item.Next() {
+			op := item.Value.(*channelOperation[T])
+			if c.capacity > 0 {
+				ready := slots > 0
+				if ready {
+					slots--
+				}
+				if ready && !op.ready {
+					op.order = c.ctx.scheduler.nextCompletionID()
+				}
+				op.ready = ready
 			}
-			if ready && !op.ready {
-				op.order = c.ctx.scheduler.nextCompletionID()
+			if ready, _ := op.candidate.ready(op.selection); ready {
+				c.ctx.scheduler.makeRunnable(op.selection.coroutine)
 			}
-			op.ready = ready
-		}
-		if ready, _ := op.candidate.ready(op.selection); ready {
-			c.ctx.scheduler.makeRunnable(op.selection.coroutine)
 		}
 	}
 	for element := c.receivers.Front(); element != nil; element = element.Next() {
-		op := element.Value.(*channelOperation[T])
-		if op.selection.pending() {
-			if ready, _ := op.candidate.ready(op.selection); !ready {
-				continue
+		group := element.Value.(*channelOperationGroup[T])
+		if group.selection.pending() {
+			for item := group.operations.Front(); item != nil; item = item.Next() {
+				op := item.Value.(*channelOperation[T])
+				if ready, _ := op.candidate.ready(op.selection); !ready {
+					continue
+				}
+				c.ctx.scheduler.makeRunnable(op.selection.coroutine)
 			}
-			c.ctx.scheduler.makeRunnable(op.selection.coroutine)
 		}
 	}
 }
@@ -280,7 +322,7 @@ func (s *coroutineScheduler) hasChannelDeadlock() bool {
 			continue
 		}
 		for _, candidate := range c.selection.cases {
-			if _, ok := candidate.(interface{ channelCase() }); ok {
+			if candidate.channelNotifier() != nil {
 				channelWait = true
 			}
 		}
@@ -310,6 +352,10 @@ func (s *coroutineScheduler) hasChannelDeadlock() bool {
 	return len(s.ctx.eventWaiters) == 0
 }
 
-func (*channelSelectCase[T]) channelCase() {}
+func (*channelSelectCase[T]) invoke() {
+	panic("channel case requires a committed selection")
+}
 
 func (c *channelSelectCase[T]) channelNotifier() channelNotifier { return c.channel }
+
+func (c *channelSelectCase[T]) underlyingCase() SelectCase { return c }

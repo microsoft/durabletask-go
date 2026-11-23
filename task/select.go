@@ -6,13 +6,17 @@ import (
 )
 
 // SelectCase is a durable selection case created by OnTask, OnEvent,
-// OnReceive, or OnSend.
+// OnReceive, or OnSend. Applications may embed it in their own types;
+// embedded cases retain the underlying SDK case's selection behavior.
 type SelectCase interface {
 	owner() *OrchestrationContext
 	ready(*selection) (bool, uint64)
 	subscribe(*selection)
 	unsubscribe(*selection)
 	commit(*selection) bool
+	invoke()
+	channelNotifier() channelNotifier
+	underlyingCase() SelectCase
 }
 
 // A selection owns all its registrations. A rendezvous commits both selections
@@ -69,8 +73,7 @@ type channelNotifier interface {
 func (s *selection) notifyChannels() {
 	var notified map[channelNotifier]struct{}
 	for _, candidate := range s.cases {
-		if c, ok := candidate.(interface{ channelNotifier() channelNotifier }); ok {
-			channel := c.channelNotifier()
+		if channel := candidate.channelNotifier(); channel != nil {
 			if _, exists := notified[channel]; exists {
 				continue
 			}
@@ -124,6 +127,10 @@ func (c *taskSelectCase) invoke() {
 		c.handler(c.task)
 	}
 }
+
+func (*taskSelectCase) channelNotifier() channelNotifier { return nil }
+
+func (c *taskSelectCase) underlyingCase() SelectCase { return c }
 
 // WhenAny blocks until the first task completes and returns that task. If
 // multiple tasks are ready, the task completed first in orchestration history wins.
@@ -200,7 +207,7 @@ func (ctx *OrchestrationContext) selectCaseErr(cases []SelectCase) (SelectCase, 
 		if candidate.owner() != engine {
 			panic("Select case belongs to a different orchestration")
 		}
-		if _, ok := candidate.(interface{ channelCase() }); ok {
+		if candidate.channelNotifier() != nil {
 			taskOrEventOnly = false
 		}
 	}
@@ -215,17 +222,18 @@ func (ctx *OrchestrationContext) selectCaseErr(cases []SelectCase) (SelectCase, 
 			}
 		}
 		if selected != nil {
-			selected.(interface{ invoke() }).invoke()
+			selected.invoke()
 			return selected, nil
 		}
 	}
 	s := &selection{ctx: ctx, coroutine: current, cases: slices.Clone(cases)}
 	seen := make(map[SelectCase]struct{}, len(cases))
 	s.cases = slices.DeleteFunc(s.cases, func(candidate SelectCase) bool {
-		if _, exists := seen[candidate]; exists {
+		underlying := candidate.underlyingCase()
+		if _, exists := seen[underlying]; exists {
 			return true
 		}
-		seen[candidate] = struct{}{}
+		seen[underlying] = struct{}{}
 		return false
 	})
 	current.selection = s

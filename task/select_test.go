@@ -456,10 +456,6 @@ func (c *observedSelectCase) subscribe(s *selection) {
 	c.SelectCase.subscribe(s)
 }
 
-func (c *observedSelectCase) invoke() {
-	c.SelectCase.(interface{ invoke() }).invoke()
-}
-
 func TestSelectRepeatedTaskAndEventCasesRetainFirstOccurrence(t *testing.T) {
 	for _, event := range []bool{false, true} {
 		for _, ready := range []bool{false, true} {

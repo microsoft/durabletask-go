@@ -549,12 +549,6 @@ func (c *countedChannelCase) ready(s *selection) (bool, uint64) {
 	return c.SelectCase.ready(s)
 }
 
-func (*countedChannelCase) channelCase() {}
-
-func (c *countedChannelCase) channelNotifier() channelNotifier {
-	return c.SelectCase.(interface{ channelNotifier() channelNotifier }).channelNotifier()
-}
-
 func TestChannelSameSideWaitersDoNotResumeBeforeDurableDispatch(t *testing.T) {
 	const count = 128
 	for _, capacity := range []int{0, 1} {
@@ -605,6 +599,119 @@ func TestChannelBufferedDrainClearsValuesWithoutMovingTail(t *testing.T) {
 	})
 	response := executeOrchestrationTurn(t, registry, "instance", nil, channelStart())
 	require.Equal(t, "0", completionResult(t, response))
+}
+
+func TestChannelMixedSelectionGroupsAlternativesAndResumesFromActivity(t *testing.T) {
+	registry := channelRegistry(t, func(ctx *OrchestrationContext) (any, error) {
+		channel := NewChannel[int](ctx, 0)
+		cases := make([]SelectCase, 0, 257)
+		for i := range 128 {
+			cases = append(cases,
+				OnSend(channel, i, func() { panic("selection sent to itself") }),
+				OnReceive(channel, func(int) { panic("selection received from itself") }))
+		}
+		inspected := false
+		ctx.Go(func(*OrchestrationContext) {
+			assert.Equal(t, 1, channel.senders.Len())
+			assert.Equal(t, 1, channel.receivers.Len())
+			assert.Equal(t, 128, channel.senders.Front().Value.(*channelOperationGroup[int]).operations.Len())
+			assert.Equal(t, 128, channel.receivers.Front().Value.(*channelOperationGroup[int]).operations.Len())
+			inspected = true
+		})
+		selected := 0
+		cases = append(cases, OnTask(ctx.CallActivity("pending"), func(Task) { selected++ }))
+		ctx.Select(cases...)
+		assert.True(t, inspected)
+		assert.Zero(t, channel.senders.Len())
+		assert.Zero(t, channel.receivers.Len())
+		return selected, nil
+	})
+	first := executeOrchestrationTurn(t, registry, "instance", nil, channelStart())
+	require.Len(t, first.Actions, 1)
+	require.Equal(t, "pending", first.Actions[0].GetScheduleTask().GetName())
+	history := append(channelStart(), helpers.NewTaskScheduledEvent(0, "pending", nil, nil, nil))
+	completion := []*protos.HistoryEvent{
+		helpers.NewOrchestratorStartedEvent(),
+		helpers.NewTaskCompletedEvent(0, nil),
+	}
+	response := executeOrchestrationTurn(t, registry, "instance", history, completion)
+	require.Equal(t, "1", completionResult(t, response))
+	replay := executeOrchestrationTurn(t, registry, "instance", append(history, completion...), nil)
+	require.True(t, proto.Equal(response, replay))
+}
+
+func BenchmarkChannelMixedDirectionSelect(b *testing.B) {
+	for _, count := range []int{128, 512, 2048} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			registry := NewTaskRegistry()
+			if err := registry.AddOrchestratorN("channels", func(ctx *OrchestrationContext) (any, error) {
+				channel := NewChannel[int](ctx, 0)
+				cases := make([]SelectCase, 0, 2*count+1)
+				for i := range count {
+					cases = append(cases, OnSend(channel, i, nil), OnReceive(channel, nil))
+				}
+				cases = append(cases, OnTask(ctx.CallActivity("pending"), nil))
+				ctx.Select(cases...)
+				return nil, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			executor := NewTaskExecutor(registry)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				result, err := executor.ExecuteOrchestrator(
+					context.Background(), "instance", nil, channelStart(), nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(result.Response.Actions) != 1 ||
+					result.Response.Actions[0].GetScheduleTask().GetName() != "pending" {
+					b.Fatal("mixed selection failed to dispatch durable work")
+				}
+			}
+		})
+	}
+}
+
+func TestChannelMixedAlternativesSkipOwnGroupAndKeepPeerOrder(t *testing.T) {
+	registry := channelRegistry(t, func(ctx *OrchestrationContext) (any, error) {
+		channel := NewChannel[int](ctx, 0)
+		group := ctx.NewWaitGroup()
+		group.Add(2)
+		values := []int{}
+		for _, offset := range []int{100, 200} {
+			ctx.Go(func(branch *OrchestrationContext) {
+				defer group.Done()
+				cases := make([]SelectCase, 0, 256)
+				for i := range 128 {
+					cases = append(cases,
+						OnSend(channel, offset+i, nil),
+						OnReceive(channel, func(int) { panic("branches must not receive their own sends") }))
+				}
+				branch.Select(cases...)
+			})
+		}
+		// The root queues its receive first, so the first branch must pair
+		// with it rather than itself or the later branch.
+		values = append(values, channel.Receive(ctx), channel.Receive(ctx))
+		group.Wait(ctx)
+		assert.Zero(t, channel.senders.Len())
+		assert.Zero(t, channel.receivers.Len())
+		assert.Empty(t, channel.senders.groups)
+		assert.Empty(t, channel.receivers.groups)
+		return values, nil
+	})
+	for _, replay := range []bool{false, true} {
+		var oldEvents, newEvents []*protos.HistoryEvent
+		if replay {
+			oldEvents = channelStart()
+		} else {
+			newEvents = channelStart()
+		}
+		response := executeOrchestrationTurn(t, registry, "instance", oldEvents, newEvents)
+		require.Equal(t, "[100,200]", completionResult(t, response))
+	}
 }
 
 func BenchmarkChannelCompetingSelects(b *testing.B) {

@@ -106,6 +106,10 @@ type eventSelectCase[T any] struct {
 	handler func(T)
 }
 
+func (*eventSelectCase[T]) channelNotifier() channelNotifier { return nil }
+
+func (c *eventSelectCase[T]) underlyingCase() SelectCase { return c }
+
 // OnEvent creates a Select case that receives from a durable event channel.
 func OnEvent[T any](channel *EventChannel[T], handler func(T)) SelectCase {
 	if channel == nil {
