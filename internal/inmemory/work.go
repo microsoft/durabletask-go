@@ -315,6 +315,7 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 		processed = processed[:split]
 	}
 	inst.history = append(inst.history, processed...)
+	inst.started = true
 	if inst.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING {
 		inst.status = protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING
 	}

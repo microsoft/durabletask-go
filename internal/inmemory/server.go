@@ -74,6 +74,9 @@ type instance struct {
 	history []*protos.HistoryEvent
 	pending []*protos.HistoryEvent
 
+	// started is set once the first orchestration turn commits. Suspension
+	// changes status but not whether the instance has started.
+	started  bool
 	leased   bool
 	queued   bool
 	children []string
@@ -314,27 +317,29 @@ func (s *Server) getInstanceLocked(req *protos.GetInstanceRequest) *protos.GetIn
 	return &protos.GetInstanceResponse{Exists: true, OrchestrationState: inst.state(req.GetGetInputsAndOutputs())}
 }
 
-// WaitForInstanceStart blocks until the instance leaves the pending state.
+// WaitForInstanceStart blocks until the instance starts running or ends.
 func (s *Server) WaitForInstanceStart(ctx context.Context, req *protos.GetInstanceRequest) (*protos.GetInstanceResponse, error) {
-	return s.waitForInstance(ctx, req, func(st protos.OrchestrationStatus) bool {
-		return st != protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
+	return s.waitForInstance(ctx, req, func(inst *instance) bool {
+		return inst.started || isTerminal(inst.status)
 	})
 }
 
 // WaitForInstanceCompletion blocks until the instance reaches a terminal state.
 func (s *Server) WaitForInstanceCompletion(ctx context.Context, req *protos.GetInstanceRequest) (*protos.GetInstanceResponse, error) {
-	return s.waitForInstance(ctx, req, isTerminal)
+	return s.waitForInstance(ctx, req, func(inst *instance) bool {
+		return isTerminal(inst.status)
+	})
 }
 
 func (s *Server) waitForInstance(
 	ctx context.Context,
 	req *protos.GetInstanceRequest,
-	done func(protos.OrchestrationStatus) bool,
+	done func(*instance) bool,
 ) (*protos.GetInstanceResponse, error) {
 	for {
 		s.mu.Lock()
 		inst, ok := s.instances[req.GetInstanceId()]
-		if !ok || done(inst.status) {
+		if !ok || done(inst) {
 			resp := s.getInstanceLocked(req)
 			s.mu.Unlock()
 			return resp, nil
@@ -429,7 +434,10 @@ func (s *Server) ResumeInstance(_ context.Context, req *protos.ResumeRequest) (*
 		return nil, grpcerrors.New(codes.FailedPrecondition, fmt.Sprintf("orchestration instance %q has already completed", inst.id), grpcerrors.ReasonInvalidState)
 	}
 	if inst.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_SUSPENDED {
-		inst.status = protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING
+		inst.status = protos.OrchestrationStatus_ORCHESTRATION_STATUS_PENDING
+		if inst.started {
+			inst.status = protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING
+		}
 		s.deliverLocked(inst, helpers.NewResumeOrchestrationEvent(req.GetReason().GetValue()))
 		s.notifyLocked()
 	}
