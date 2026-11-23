@@ -220,7 +220,10 @@ func (s *Server) retargetRewindParentLocked(inst *instance) {
 	}
 }
 
-func (s *Server) failRewindLocked(inst *instance, err error) {
+// failRewindLocked ends a rewind attempt that didn't replace the history. Only
+// the failure is replaced, so the history stays rewindable, and the parent
+// that rewound the instance is notified.
+func (s *Server) failRewindLocked(inst *instance, failure *protos.TaskFailureDetails) {
 	s.retargetRewindParentLocked(inst)
 	for i := len(inst.history) - 1; i >= 0; i-- {
 		if inst.history[i].GetExecutionCompleted() != nil {
@@ -228,12 +231,15 @@ func (s *Server) failRewindLocked(inst *instance, err error) {
 			break
 		}
 	}
-	inst.rewind = nil
+	s.completeLocked(inst, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, failure)
+}
+
+func rewindValidationFailure(err error) *protos.TaskFailureDetails {
 	errorType := "InvalidRewindState"
 	if status.Code(err) == codes.AlreadyExists {
 		errorType = "OrchestrationAlreadyExists"
 	}
-	s.failLocked(inst, failureDetails(errorType, "%s", status.Convert(err).Message()))
+	return failureDetails(errorType, "%s", status.Convert(err).Message())
 }
 
 // Persist the worker's replacement, then reconcile retained work before replay.

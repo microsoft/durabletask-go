@@ -401,7 +401,7 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 	inst.updatedAt = time.Now()
 	if rewind != nil {
 		if err := s.validateRewindChildrenLocked(inst, rewind.GetNewHistory(), make(map[*instance]bool)); err != nil {
-			s.failRewindLocked(inst, err)
+			s.failRewindLocked(inst, rewindValidationFailure(err))
 		} else {
 			s.applyRewindLocked(inst, rewind)
 			s.enqueueLocked(inst)
@@ -410,8 +410,10 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 		return &protos.CompleteTaskResponse{}, nil
 	}
 	if lease.rewinding {
-		s.retargetRewindParentLocked(inst)
-		inst.rewind = nil
+		// The worker rejected the rewind. Don't record the attempt, so that a
+		// later rewind sees the original failure.
+		s.failRewindLocked(inst, resp.GetActions()[0].GetCompleteOrchestration().GetFailureDetails())
+		return &protos.CompleteTaskResponse{}, nil
 	}
 
 	processed := lease.events
