@@ -36,6 +36,9 @@ type checker struct {
 	registry *registrySet
 	reported map[reportKey]bool
 
+	// In summary mode the checker collects only hazards proved within a body.
+	collectHazard func(category, message string)
+
 	// Clock fixes are reported after all reachable functions have been checked,
 	// so each file's replacements and import cleanup form one atomic fix.
 	clockDiagnostics []analysis.Diagnostic
@@ -48,6 +51,10 @@ func (c *checker) report(
 	format string,
 	args ...any,
 ) {
+	if c.collectHazard != nil {
+		c.collectHazard(category, fmt.Sprintf(format, args...))
+		return
+	}
 	key := reportKey{pos: pos, category: category}
 	if c.reported[key] {
 		return
@@ -134,17 +141,23 @@ func (c *checker) inspect(node ast.Node, stack []ast.Node, file *ast.File) {
 			)
 		}
 	case *ast.ForStmt:
-		c.checkUnboundedLoop(node)
+		if c.registry != nil {
+			c.checkUnboundedLoop(node)
+		}
 	case *ast.CallExpr:
 		c.checkCall(node, stack, file)
 	}
 }
 
 func (c *checker) checkGoStmt(node *ast.GoStmt, stack []ast.Node, file *ast.File) {
+	var fixes []analysis.SuggestedFix
+	if c.collectHazard == nil {
+		fixes = c.goStatementFix(node, contextParameter(c.pass, stack), file)
+	}
 	c.report(
 		node.Go,
 		categoryGoroutine,
-		c.goStatementFix(node, contextParameter(c.pass, stack), file),
+		fixes,
 		"raw go statement is not deterministic in an orchestrator; "+
 			"use (*task.OrchestrationContext).Go",
 	)
@@ -158,7 +171,9 @@ func (c *checker) checkCall(call *ast.CallExpr, stack []ast.Node, file *ast.File
 	if function == nil {
 		return
 	}
-	c.checkDirectOrchestratorCall(call, function)
+	if c.registry != nil {
+		c.checkDirectOrchestratorCall(call, function)
+	}
 	if owner, name, ok := methodOwner(function); ok {
 		c.checkMethodCall(call, function, owner, name)
 		return
@@ -215,10 +230,14 @@ func (c *checker) checkPackageCall(
 	switch path {
 	case "time":
 		if replacement, ok := wallClockFunctions[name]; ok {
+			var fixes []analysis.SuggestedFix
+			if c.collectHazard == nil {
+				fixes = c.currentTimeFix(call, name, stack, file)
+			}
 			c.report(
 				call.Lparen,
 				categoryWallClock,
-				c.currentTimeFix(call, name, stack, file),
+				fixes,
 				"time.%s is not deterministic in an orchestrator; "+
 					"use (*task.OrchestrationContext).%s",
 				name,
@@ -334,7 +353,7 @@ func (c *checker) checkMethodCall(
 	name := function.Name()
 	switch ownerPath {
 	case taskPackagePath:
-		if ownerName == "OrchestrationContext" {
+		if ownerName == "OrchestrationContext" && c.registry != nil {
 			c.checkOrchestrationContextCall(call, name)
 		}
 		return

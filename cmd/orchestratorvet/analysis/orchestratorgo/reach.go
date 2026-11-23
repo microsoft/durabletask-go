@@ -2,6 +2,7 @@ package orchestratorgo
 
 import (
 	"go/ast"
+	"go/token"
 
 	"golang.org/x/tools/go/analysis"
 )
@@ -43,10 +44,22 @@ func reachableFunctions(index *packageIndex, roots []ast.Node) *reachSet {
 		current := reach.order[next]
 		forEachOwnedCall(current, func(call *ast.CallExpr) {
 			add(index.callee(call))
-			add(index.resolveFunction(orchestrationGoCallback(index.pass, call), nil))
+			add(index.resolveFunction(orchestrationGoCallback(index.pass, call)))
 		})
 	}
 	return reach
+}
+
+func (index *packageIndex) forEachTarget(node ast.Node, visit func(token.Pos, functionTarget)) {
+	forEachOwnedCall(node, func(call *ast.CallExpr) {
+		if target := index.resolveTarget(call.Fun, nil); target.local != nil || target.imported != nil {
+			visit(call.Fun.Pos(), target)
+		}
+		if callback := orchestrationGoCallback(index.pass, call); callback != nil {
+			target := index.resolveTarget(callback, nil)
+			visit(callback.Pos(), target)
+		}
+	})
 }
 
 // forEachOwnedCall visits every call expression lexically contained in the

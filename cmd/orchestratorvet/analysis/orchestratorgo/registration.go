@@ -3,6 +3,7 @@ package orchestratorgo
 import (
 	"go/ast"
 	"go/constant"
+	"go/token"
 	"go/types"
 	"strings"
 
@@ -61,7 +62,13 @@ type registrySet struct {
 	// declarations, used to detect direct orchestrator invocation.
 	orchestratorObjects map[types.Object]string
 	// roots holds every function node registered as an orchestrator.
-	roots []ast.Node
+	roots         []ast.Node
+	importedRoots []importedRoot
+}
+
+type importedRoot struct {
+	pos      token.Pos
+	function *types.Func
 }
 
 func (set *registrySet) registered(kind registrationKind, name string) bool {
@@ -123,7 +130,8 @@ func collectRegistrations(pass *analysis.Pass, index *packageIndex) *registrySet
 			)
 			continue
 		}
-		handlerNode := index.resolveFunction(handler, nil)
+		target := index.resolveTarget(handler, nil)
+		handlerNode := target.local
 		handlerObj := handlerObject(pass, handler)
 
 		// rejected records that this call provably fails, so it contributes no
@@ -171,6 +179,9 @@ func collectRegistrations(pass *analysis.Pass, index *packageIndex) *registrySet
 		if shape.kind == orchestratorKind && handlerNode != nil && !seenRoots[handlerNode] {
 			seenRoots[handlerNode] = true
 			set.roots = append(set.roots, handlerNode)
+		}
+		if shape.kind == orchestratorKind && target.imported != nil && !rejected {
+			set.importedRoots = append(set.importedRoots, importedRoot{handler.Pos(), target.imported})
 		}
 	}
 	return set

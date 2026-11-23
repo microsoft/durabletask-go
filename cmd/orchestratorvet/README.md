@@ -38,8 +38,8 @@ the package under analysis passes it to one of
 - `(*task.TaskRegistry).AddOrchestratorVersion`
 - `(*task.TaskRegistry).AddOrchestratorNVersion`
 
-From each of those roots it follows the whole-package call graph through
-same-package named functions, methods, function variables whose target can be
+From each of those roots it follows the call graph through named functions,
+concrete methods, function variables whose target can be
 proven, and the nested function literals whose bodies are proven to execute --
 through a direct call, a call through a single-assignment function variable,
 a raw `go` or `defer` call,
@@ -50,6 +50,11 @@ diagnostic, and helpers reached only through it are not reported. Recursion
 terminates because each function is visited once, and a helper reached from
 several orchestrators is reported once. Activity bodies, entity bodies, and any
 function not reachable from a registered orchestrator are never reported.
+
+The handler itself or a helper it calls can live in another package in the
+same Go module. An imported hazard is reported at the local registration or
+call site, with a representative call path and no automatic fix. Dependencies
+provide summaries even when only the registration package is named in `go vet`.
 
 ## Checks
 
@@ -224,14 +229,17 @@ The analyzer reports only what it can prove, and stays silent otherwise.
 - A random generator is only reported when its seed provably reaches a source
   that varies between runs. A constant seed, a seed taken from orchestration
   input, and a seed the analyzer cannot follow are all left alone.
-- Every diagnostic is deduplicated by source position and category, so a shared
-  helper is reported once no matter how many orchestrators reach it.
+- Diagnostics are deduplicated by source position and category. For an imported
+  call, the analyzer shows one witness per hazard category at that call site.
 
 ## Limitations
 
-- The analyzer runs one package at a time. Helpers, activity registrations, and
-  orchestrator bodies in other packages are invisible to it, so hazards there
-  are not reported.
+- Imported bodies are summarized through Go analysis facts. The analyzer does
+  not follow bodies across module boundaries, inside the standard library or
+  the SDK's `task` package, or when module metadata is unavailable. Known
+  hazardous APIs are still checked at their call sites.
+- Registry-name completeness and proofs about non-progressing loops do not
+  use imported summaries.
 - Calls through interface values, struct fields, and function parameters cannot
   be resolved to a body and are not followed.
 - Version-aware name resolution is approximated: a task name is considered
@@ -261,7 +269,7 @@ cd cmd/orchestratorvet && go test ./...
 cd cmd/orchestratorvet && go test -run '^$' -bench . ./analysis/orchestratorgo/...
 ```
 
-The benchmarks measure orchestrator-count scaling, call-graph depth, and the
-early exit taken by the overwhelming majority of packages, which register no
+The benchmarks measure orchestrator-count scaling, call-graph depth, and
+summary construction for packages that register no
 orchestrators at all. They type-check against the same durable task stub the
 fixtures use, so the two cannot drift apart.

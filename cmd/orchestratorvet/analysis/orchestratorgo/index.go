@@ -11,14 +11,13 @@ import (
 )
 
 // packageIndex holds the whole-package declaration information the analyzer
-// needs to follow call graphs without loading other packages. Everything it
-// records is derived from the syntax and type information of a single
-// [analysis.Pass], so the analyzer never depends on facts from dependencies.
+// needs to follow calls without loading other packages. The index itself only
+// uses the syntax and type information of a single [analysis.Pass].
 type packageIndex struct {
 	pass *analysis.Pass
 
 	// functions maps a declared function or method object to its declaration.
-	functions map[types.Object]*ast.FuncDecl
+	functions map[*types.Func]*ast.FuncDecl
 
 	// functionValues maps a variable or constant object to the expressions it is
 	// initialized or assigned with. Objects with more than one recorded
@@ -59,7 +58,7 @@ type packageIndex struct {
 func newPackageIndex(pass *analysis.Pass) *packageIndex {
 	index := &packageIndex{
 		pass:               pass,
-		functions:          make(map[types.Object]*ast.FuncDecl),
+		functions:          make(map[*types.Func]*ast.FuncDecl),
 		functionValues:     make(map[types.Object][]ast.Expr),
 		fileOf:             make(map[ast.Node]*ast.File),
 		enclosingFunc:      make(map[ast.Node]ast.Node),
@@ -79,7 +78,7 @@ func newPackageIndex(pass *analysis.Pass) *packageIndex {
 			switch node := node.(type) {
 			case *ast.FuncDecl:
 				index.fileOf[node] = file
-				if object := pass.TypesInfo.Defs[node.Name]; object != nil {
+				if object, ok := pass.TypesInfo.Defs[node.Name].(*types.Func); ok {
 					index.functions[object] = node
 				}
 				index.walkFunction(node, file, node.Body)
@@ -110,7 +109,8 @@ func (index *packageIndex) walkFunction(owner ast.Node, file *ast.File, body *as
 	}
 	if parameters := funcType(owner).Params; parameters != nil {
 		for _, field := range parameters.List {
-			if isTaskRegistry(index.pass.TypesInfo.TypeOf(field.Type)) {
+			parameterType := index.pass.TypesInfo.TypeOf(field.Type)
+			if mayHoldFunction(parameterType) || isTaskRegistry(parameterType) {
 				for _, name := range field.Names {
 					index.recordValue(index.pass.TypesInfo.Defs[name], nil)
 				}
@@ -217,6 +217,13 @@ func (index *packageIndex) record(node ast.Node) {
 		}
 	case *ast.UnaryExpr:
 		if node.Op == token.AND {
+			if id, ok := ast.Unparen(node.X).(*ast.Ident); ok {
+				if variable, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
+					if mayHoldFunction(variable.Type()) {
+						index.recordValue(variable, nil)
+					}
+				}
+			}
 			index.recordRegistryEscape(node.X)
 		}
 	case *ast.ReturnStmt:
@@ -264,6 +271,15 @@ func (index *packageIndex) recordRegistryEscape(expression ast.Expr) {
 	if identifier, ok := ast.Unparen(expression).(*ast.Ident); ok {
 		index.unstableRegistries[index.pass.TypesInfo.ObjectOf(identifier)] = true
 	}
+}
+
+func mayHoldFunction(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	_, isFunction := t.Underlying().(*types.Signature)
+	_, isTypeParameter := types.Unalias(t).(*types.TypeParam)
+	return isFunction || isTypeParameter
 }
 
 // registrationScope accepts only an entire expression/assignment statement in
@@ -316,12 +332,21 @@ func (index *packageIndex) enclosingFunctionStack(node ast.Node) []ast.Node {
 
 // resolveFunction returns the function declaration or literal that expression
 // evaluates to, or nil when the target cannot be proven statically.
-func (index *packageIndex) resolveFunction(expression ast.Expr, seen map[types.Object]struct{}) ast.Node {
+func (index *packageIndex) resolveFunction(expression ast.Expr) ast.Node {
+	return index.resolveTarget(expression, nil).local
+}
+
+type functionTarget struct {
+	local    ast.Node
+	imported *types.Func
+}
+
+func (index *packageIndex) resolveTarget(expression ast.Expr, seen map[types.Object]struct{}) functionTarget {
 	switch expression := expression.(type) {
 	case *ast.FuncLit:
-		return expression
+		return functionTarget{local: expression}
 	case *ast.ParenExpr:
-		return index.resolveFunction(expression.X, seen)
+		return index.resolveTarget(expression.X, seen)
 	case *ast.Ident:
 		return index.resolveObject(index.pass.TypesInfo.ObjectOf(expression), seen)
 	case *ast.SelectorExpr:
@@ -331,40 +356,51 @@ func (index *packageIndex) resolveFunction(expression ast.Expr, seen map[types.O
 		return index.resolveObject(index.pass.TypesInfo.ObjectOf(expression.Sel), seen)
 	case *ast.IndexExpr:
 		// Instantiation of a generic function, such as helper[int].
-		return index.resolveFunction(expression.X, seen)
+		return index.resolveTarget(expression.X, seen)
 	case *ast.IndexListExpr:
-		return index.resolveFunction(expression.X, seen)
+		return index.resolveTarget(expression.X, seen)
 	case *ast.CallExpr:
 		// Conversions such as task.Orchestrator(fn) forward to their operand.
 		if typeInfo, ok := index.pass.TypesInfo.Types[expression.Fun]; ok &&
 			typeInfo.IsType() &&
 			len(expression.Args) == 1 {
-			return index.resolveFunction(expression.Args[0], seen)
+			return index.resolveTarget(expression.Args[0], seen)
 		}
 	}
-	return nil
+	return functionTarget{}
 }
 
-func (index *packageIndex) resolveObject(object types.Object, seen map[types.Object]struct{}) ast.Node {
+func (index *packageIndex) resolveObject(object types.Object, seen map[types.Object]struct{}) functionTarget {
 	if object == nil {
-		return nil
+		return functionTarget{}
 	}
-	if function := index.functions[object]; function != nil {
-		return function
+	if function, ok := object.(*types.Func); ok {
+		if declaration := index.functions[function.Origin()]; declaration != nil {
+			return functionTarget{local: declaration}
+		}
+		if function.Pkg() != nil && function.Pkg() != index.pass.Pkg && function.Exported() {
+			return functionTarget{imported: function.Origin()}
+		}
+		return functionTarget{}
+	}
+	if object.Exported() && object.Parent() == index.pass.Pkg.Scope() {
+		// Importers can mutate an exported function variable without an
+		// assignment in this package.
+		return functionTarget{}
 	}
 	if seen == nil {
 		seen = make(map[types.Object]struct{})
 	}
 	if _, ok := seen[object]; ok {
-		return nil
+		return functionTarget{}
 	}
 	seen[object] = struct{}{}
 	value := index.singleValue(object)
 	if value == nil {
 		// Unset, or reassigned more than once: the target is ambiguous.
-		return nil
+		return functionTarget{}
 	}
-	return index.resolveFunction(value, seen)
+	return index.resolveTarget(value, seen)
 }
 
 // callee returns the function declaration or literal invoked by call when that
@@ -381,7 +417,7 @@ func (index *packageIndex) callee(call *ast.CallExpr) ast.Node {
 			return nil
 		}
 	}
-	return index.resolveFunction(call.Fun, nil)
+	return index.resolveFunction(call.Fun)
 }
 
 // staticFunc returns the function object an expression denotes, which may be a
