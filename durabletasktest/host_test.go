@@ -863,35 +863,53 @@ func TestRewindInvalidState(t *testing.T) {
 }
 
 func TestRewindRejectsUnsafeHistory(t *testing.T) {
-	var calls atomic.Int32
-	r := task.NewTaskRegistry()
-	for _, name := range []string{"handled", "good", "terminal"} {
-		require.NoError(t, r.AddActivityN(name, func(task.ActivityContext) (any, error) {
-			calls.Add(1)
-			if name != "good" {
-				return nil, errors.New(name)
+	for _, mode := range []string{"root", "child"} {
+		t.Run(mode, func(t *testing.T) {
+			var calls atomic.Int32
+			r := task.NewTaskRegistry()
+			for _, name := range []string{"handled", "good", "terminal"} {
+				require.NoError(t, r.AddActivityN(name, func(task.ActivityContext) (any, error) {
+					calls.Add(1)
+					if name != "good" {
+						return nil, errors.New(name)
+					}
+					return "kept", nil
+				}))
 			}
-			return "kept", nil
-		}))
+			require.NoError(t, r.AddOrchestratorN("Unsafe", func(ctx *task.OrchestrationContext) (any, error) {
+				if err := ctx.CallActivity("handled").Await(nil); err == nil {
+					return nil, errors.New("expected a handled failure")
+				}
+				if err := ctx.CallActivity("good").Await(nil); err != nil {
+					return nil, err
+				}
+				return nil, ctx.CallActivity("terminal").Await(nil)
+			}))
+			require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+				return nil, ctx.CallSubOrchestrator("Unsafe", task.WithSubOrchestrationInstanceID("unsafe-child")).Await(nil)
+			}))
+			host := durabletasktest.New(t, r)
+			ctx, cancel := context.WithTimeout(testContext(t), 10*time.Second)
+			defer cancel()
+			name := "Unsafe"
+			if mode == "child" {
+				name = "Parent"
+			}
+			failed := run(t, host, name)
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+			require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID))
+			rejected, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+			require.NoError(t, err)
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, rejected.RuntimeStatus)
+			if mode == "child" {
+				require.NotEqual(t, failed.ExecutionID, rejected.ExecutionID)
+				rejected, err = host.Client().FetchOrchestrationMetadata(ctx, "unsafe-child")
+				require.NoError(t, err)
+			} else {
+				require.Equal(t, failed.ExecutionID, rejected.ExecutionID)
+			}
+			require.Contains(t, rejected.FailureDetails.ErrorMessage, "Go SDK cannot safely rewind this history")
+			require.EqualValues(t, 3, calls.Load())
+		})
 	}
-	require.NoError(t, r.AddOrchestratorN("Unsafe", func(ctx *task.OrchestrationContext) (any, error) {
-		if err := ctx.CallActivity("handled").Await(nil); err == nil {
-			return nil, errors.New("expected a handled failure")
-		}
-		if err := ctx.CallActivity("good").Await(nil); err != nil {
-			return nil, err
-		}
-		return nil, ctx.CallActivity("terminal").Await(nil)
-	}))
-	host := durabletasktest.New(t, r)
-	ctx := testContext(t)
-	failed := run(t, host, "Unsafe")
-	require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
-	require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID))
-	rejected, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
-	require.NoError(t, err)
-	require.Equal(t, api.RUNTIME_STATUS_FAILED, rejected.RuntimeStatus)
-	require.Contains(t, rejected.FailureDetails.ErrorMessage, "Go SDK cannot safely rewind this history")
-	require.Equal(t, failed.ExecutionID, rejected.ExecutionID)
-	require.EqualValues(t, 3, calls.Load())
 }

@@ -134,9 +134,7 @@ func (s *Server) pendingRewindChildResults(
 			continue
 		}
 		if child, ok := s.instances[source.instanceID]; ok && failedResult {
-			parent := child.parent.GetOrchestrationInstance()
-			if parent.GetInstanceId() == inst.id && parent.GetExecutionId().GetValue() == inst.executionID &&
-				child.parent.GetTaskScheduledId() == id &&
+			if childMatchesParent(child, inst, inst.executionID, id) &&
 				(child.executionID != source.executionID || !isTerminal(child.status) ||
 					child.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED) {
 				continue
@@ -167,10 +165,7 @@ func (s *Server) validateRewindChildrenLocked(inst *instance, history []*protos.
 		if !ok {
 			continue
 		}
-		parent := child.parent.GetOrchestrationInstance()
-		if parent.GetInstanceId() != inst.id ||
-			parent.GetExecutionId().GetValue() != inst.executionID ||
-			child.parent.GetTaskScheduledId() != event.GetEventId() {
+		if !childMatchesParent(child, inst, inst.executionID, event.GetEventId()) {
 			return status.Errorf(codes.AlreadyExists,
 				"cannot rewind orchestration %q: sub-orchestration ID %q belongs to another parent or execution",
 				inst.id, childID)
@@ -182,6 +177,13 @@ func (s *Server) validateRewindChildrenLocked(inst *instance, history []*protos.
 		}
 	}
 	return nil
+}
+
+func childMatchesParent(child, parent *instance, parentExecutionID string, taskID int32) bool {
+	ref := child.parent.GetOrchestrationInstance()
+	return ref.GetInstanceId() == parent.id &&
+		ref.GetExecutionId().GetValue() == parentExecutionID &&
+		child.parent.GetTaskScheduledId() == taskID
 }
 
 func (s *Server) applyRewindIdentityLocked(inst *instance, history []*protos.HistoryEvent) {
@@ -206,7 +208,7 @@ func (s *Server) applyRewindIdentityLocked(inst *instance, history []*protos.His
 	}
 }
 
-func (s *Server) failRewindLocked(inst *instance, err error) {
+func (s *Server) retargetRewindParentLocked(inst *instance) {
 	parentExecutionID := inst.rewind.GetExecutionRewound().GetParentExecutionId()
 	if parentExecutionID.GetValue() != "" && inst.parent != nil {
 		parent := proto.CloneOf(inst.parent)
@@ -216,6 +218,10 @@ func (s *Server) failRewindLocked(inst *instance, err error) {
 		parent.OrchestrationInstance.ExecutionId = proto.CloneOf(parentExecutionID)
 		s.retargetChildLocked(inst, parent)
 	}
+}
+
+func (s *Server) failRewindLocked(inst *instance, err error) {
+	s.retargetRewindParentLocked(inst)
 	for i := len(inst.history) - 1; i >= 0; i-- {
 		if inst.history[i].GetExecutionCompleted() != nil {
 			inst.history = inst.history[:i]
@@ -246,14 +252,20 @@ func (s *Server) applyRewindLocked(inst *instance, action *protos.RewindOrchestr
 	s.reconcileRewindTasksLocked(inst, oldExecutionID, childResults)
 
 	for _, event := range unfinishedSubOrchestrations(inst.history) {
-		if childResults[event.GetEventId()] != nil {
-			continue
-		}
 		created := event.GetSubOrchestrationInstanceCreated()
 		parent := helpers.NewParentInfo(event.GetEventId(), inst.name, inst.id)
 		parent.Version = inst.version
 		parent.OrchestrationInstance.ExecutionId = wrapperspb.String(inst.executionID)
 		child, ok := s.instances[created.GetInstanceId()]
+		if result := childResults[event.GetEventId()]; result != nil {
+			source := inst.childResultSources[result]
+			// A buffered result can outlive its child and a reused ID.
+			if ok && child.executionID == source.executionID &&
+				childMatchesParent(child, inst, oldExecutionID, event.GetEventId()) {
+				s.retargetChildLocked(child, parent)
+			}
+			continue
+		}
 		switch {
 		case !ok:
 			child = s.newInstanceLocked(created.GetInstanceId(), created.GetName(), created.GetVersion(),
@@ -261,6 +273,7 @@ func (s *Server) applyRewindLocked(inst *instance, action *protos.RewindOrchestr
 		case child.status == protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED && failed[event.GetEventId()]:
 			s.prepareRewindLocked(child, reason, wrapperspb.String(inst.executionID))
 		case isTerminal(child.status):
+			s.retargetChildLocked(child, parent)
 			result := subOrchestrationResultEvent(child)
 			inst.recordChildResult(result, child)
 			index := len(inst.pending)

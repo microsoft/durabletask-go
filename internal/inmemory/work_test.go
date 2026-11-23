@@ -453,6 +453,82 @@ func TestRewindRestoresLateChildResults(t *testing.T) {
 	}
 }
 
+func TestRewindRetargetsLateFailedChild(t *testing.T) {
+	for _, mode := range []string{"buffered", "terminal-state"} {
+		t.Run(mode, func(t *testing.T) {
+			s := NewServer()
+			defer s.Close()
+			parent := s.newInstanceLocked("parent", "parent", nil, nil, nil, nil, nil, nil)
+			started := parent.pending[0]
+			created := helpers.NewSubOrchestrationCreatedEvent(0, "child", nil, nil, "child", nil)
+			parent.history = []*protos.HistoryEvent{started, created}
+			s.completeLocked(parent, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, failureDetails("failure", "parent"))
+			info := helpers.NewParentInfo(0, parent.name, parent.id)
+			info.OrchestrationInstance.ExecutionId = wrapperspb.String(parent.executionID)
+			child := s.newInstanceLocked("child", "child", nil, nil, nil, info, nil, nil)
+			child.history = []*protos.HistoryEvent{child.pending[0]}
+			s.completeLocked(child, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, failureDetails("failure", "child"))
+			if mode == "terminal-state" {
+				parent.pending = nil
+				parent.childResultSources = nil
+			}
+
+			_, err := s.RewindInstance(context.Background(), &protos.RewindInstanceRequest{InstanceId: parent.id})
+			require.NoError(t, err)
+			item := s.leaseOrchestrationLocked(parent, 1)
+			finishTestRewind(t, s, item, started, "new-parent", created)
+			require.Equal(t, "new-parent", child.parent.GetOrchestrationInstance().GetExecutionId().GetValue())
+			require.Len(t, parent.pending, 2)
+			require.NotNil(t, parent.pending[1].GetSubOrchestrationInstanceFailed())
+
+			parent.history = append(parent.history, parent.pending[1])
+			parent.pending = nil
+			s.completeLocked(parent, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, failureDetails("failure", "child"))
+			_, err = s.RewindInstance(context.Background(), &protos.RewindInstanceRequest{InstanceId: parent.id})
+			require.NoError(t, err)
+			item = s.leaseOrchestrationLocked(parent, 1)
+			finishTestRewind(t, s, item, started, "new-parent-again", created)
+			require.Equal(t, "new-parent-again", child.rewind.GetExecutionRewound().GetParentExecutionId().GetValue())
+		})
+	}
+}
+
+func TestRewindDoesNotRetargetReusedChildWithBufferedResult(t *testing.T) {
+	for _, mode := range []string{"unrelated", "new-execution"} {
+		t.Run(mode, func(t *testing.T) {
+			s := NewServer()
+			defer s.Close()
+			parent := s.newInstanceLocked("parent", "parent", nil, nil, nil, nil, nil, nil)
+			started := parent.pending[0]
+			created := helpers.NewSubOrchestrationCreatedEvent(0, "child", nil, nil, "child", nil)
+			parent.history = []*protos.HistoryEvent{started, created}
+			s.completeLocked(parent, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, failureDetails("failure", "parent"))
+			info := helpers.NewParentInfo(0, parent.name, parent.id)
+			info.OrchestrationInstance.ExecutionId = wrapperspb.String(parent.executionID)
+			child := s.newInstanceLocked("child", "child", nil, nil, nil, info, nil, nil)
+			s.completeLocked(child, protos.OrchestrationStatus_ORCHESTRATION_STATUS_COMPLETED, wrapperspb.String(`"done"`), nil)
+			s.purgeLocked(child, false)
+			var replacementParent *protos.ParentInstanceInfo
+			if mode == "new-execution" {
+				replacementParent = proto.CloneOf(info)
+			}
+			replacement := s.newInstanceLocked("child", "unrelated", nil, nil, nil, replacementParent, nil, nil)
+			replacementExecutionID := replacement.executionID
+			parentExecutionID := replacement.parent.GetOrchestrationInstance().GetExecutionId().GetValue()
+
+			_, err := s.RewindInstance(context.Background(), &protos.RewindInstanceRequest{InstanceId: parent.id})
+			require.NoError(t, err)
+			item := s.leaseOrchestrationLocked(parent, 1)
+			finishTestRewind(t, s, item, started, "new-parent", created)
+			require.Same(t, replacement, s.instances["child"])
+			require.Equal(t, replacementExecutionID, replacement.executionID)
+			require.Equal(t, parentExecutionID, replacement.parent.GetOrchestrationInstance().GetExecutionId().GetValue())
+			require.Len(t, parent.pending, 2)
+			require.Equal(t, `"done"`, parent.pending[1].GetSubOrchestrationInstanceCompleted().GetResult().GetValue())
+		})
+	}
+}
+
 func TestRewindPreservesBufferedResultAfterChildPurge(t *testing.T) {
 	for _, phase := range []string{"failed", "rewriting"} {
 		t.Run(phase, func(t *testing.T) {

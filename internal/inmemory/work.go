@@ -356,6 +356,7 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 		return &protos.CompleteTaskResponse{}, nil
 	}
 	if lease.rewinding {
+		s.retargetRewindParentLocked(inst)
 		inst.rewind = nil
 	}
 
