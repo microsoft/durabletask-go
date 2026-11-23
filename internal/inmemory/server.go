@@ -120,13 +120,13 @@ func NewServer() *Server {
 	return &Server{
 		healthPingInterval:     defaultHealthPingInterval,
 		maxEntityWorkItemBytes: defaultMaxEntityWorkItemBytes,
-		instances:          make(map[string]*instance),
-		orchLeases:         make(map[string]*orchestrationLease),
-		actLeases:          make(map[string]*activityLease),
-		entities:           make(map[string]*entity),
-		entityLeases:       make(map[string]*entityLease),
-		lockRequests:       make(map[string]string),
-		changed:            make(chan struct{}),
+		instances:              make(map[string]*instance),
+		orchLeases:             make(map[string]*orchestrationLease),
+		actLeases:              make(map[string]*activityLease),
+		entities:               make(map[string]*entity),
+		entityLeases:           make(map[string]*entityLease),
+		lockRequests:           make(map[string]string),
+		changed:                make(chan struct{}),
 	}
 }
 
