@@ -65,7 +65,7 @@ const (
 	MaxStreamedHistoryBytes  int64 = api.MaxHistoryMaxBytes
 
 	// DefaultMaxOrchestratorCompletionBytes leaves headroom below the modern DTS
-	// 4 MiB message limit. It bounds every work item completion.
+	// orchestration-completion message limit.
 	DefaultMaxOrchestratorCompletionBytes = 4_089_446
 	minOrchestratorCompletionBytes        = 64 * 1024
 
@@ -243,10 +243,9 @@ func WithMaxStreamedHistoryBytes(n int64) TaskHubGrpcWorkerOption {
 	}
 }
 
-// WithMaxOrchestratorCompletionBytes lowers the post-externalization bound used
-// before completing orchestration, activity, and entity work items. Multiple
-// options are monotonic: a later option cannot raise an earlier
-// transport-derived cap.
+// WithMaxOrchestratorCompletionBytes lowers the post-externalization response
+// bound used before completing an orchestration work item. Multiple options are
+// monotonic: a later option cannot raise an earlier transport-derived cap.
 func WithMaxOrchestratorCompletionBytes(n int) TaskHubGrpcWorkerOption {
 	return func(options *taskHubGrpcWorkerOptions) error {
 		if n < minOrchestratorCompletionBytes || n > DefaultMaxOrchestratorCompletionBytes {

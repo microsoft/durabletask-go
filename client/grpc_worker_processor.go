@@ -389,57 +389,6 @@ func failOversizedOrchestratorResponse(
 	}
 }
 
-func completionTooLargeMessage(kind string, size, maxBytes int) string {
-	return fmt.Sprintf(
-		"%s of %.2f MiB exceeds the %.2f MiB worker completion bound; configure large-payload externalization or reduce the payload size",
-		kind, float64(size)/(1024*1024), float64(maxBytes)/(1024*1024),
-	)
-}
-
-// failOversizedActivityResponse converts an activity response that DTS cannot
-// accept into a small, non-retriable task failure. Sending it unchanged would
-// fail the RPC and abandon the work item, which re-runs the activity forever.
-func failOversizedActivityResponse(response *protos.ActivityResponse, maxBytes int) *protos.ActivityResponse {
-	if response == nil || maxBytes <= 0 {
-		return response
-	}
-	size := proto.Size(response)
-	if size <= maxBytes {
-		return response
-	}
-	return &protos.ActivityResponse{
-		InstanceId:      response.InstanceId,
-		TaskId:          response.TaskId,
-		CompletionToken: response.CompletionToken,
-		FailureDetails: &protos.TaskFailureDetails{
-			ErrorType:      string(api.ErrorTypeActivityResponseTooLarge),
-			ErrorMessage:   completionTooLargeMessage("activity response", size, maxBytes),
-			IsNonRetriable: true,
-		},
-	}
-}
-
-// failOversizedEntityResult converts an entity batch result that DTS cannot
-// accept into a small, non-retriable batch failure with no partial effects.
-func failOversizedEntityResult(result *protos.EntityBatchResult, maxBytes int) *protos.EntityBatchResult {
-	if result == nil || maxBytes <= 0 {
-		return result
-	}
-	size := proto.Size(result)
-	if size <= maxBytes {
-		return result
-	}
-	return &protos.EntityBatchResult{
-		CompletionToken: result.CompletionToken,
-		CompletionCount: result.CompletionCount,
-		FailureDetails: &protos.TaskFailureDetails{
-			ErrorType:      string(api.ErrorTypeEntityResultTooLarge),
-			ErrorMessage:   completionTooLargeMessage("entity batch result", size, maxBytes),
-			IsNonRetriable: true,
-		},
-	}
-}
-
 func populateOrchestratorActionTraceContexts(
 	actions []*protos.OrchestratorAction,
 	pastEvents []*protos.HistoryEvent,
@@ -631,7 +580,6 @@ func (w *TaskHubGrpcWorker) processActivity(
 		return
 	}
 
-	response = failOversizedActivityResponse(response, w.options.maxOrchestratorCompletionBytes)
 	err = w.executeRPCWithRetry(ctx, "complete activity task", func(callCtx context.Context) error {
 		_, callErr := client.CompleteActivityTask(callCtx, response)
 		return callErr
@@ -808,7 +756,6 @@ func (w *TaskHubGrpcWorker) completeEntityBatchResult(
 	instanceID string,
 	result *protos.EntityBatchResult,
 ) {
-	result = failOversizedEntityResult(result, w.options.maxOrchestratorCompletionBytes)
 	err := w.executeRPCWithRetry(ctx, "complete entity task", func(callCtx context.Context) error {
 		_, callErr := client.CompleteEntityTask(callCtx, result)
 		return callErr

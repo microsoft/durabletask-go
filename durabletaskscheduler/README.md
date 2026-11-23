@@ -164,15 +164,12 @@ limit, leaving message-size enforcement to the server. The gRPC-Go transport's
 own default maximum (approximately 2 GiB) still applies. A positive
 `Options.MaxSendMessageSize` opts into an explicit client-side send limit.
 
-The worker retains a separate 3.9 MiB safety bound for every work item
-completion, regardless of the default transport send behavior. When a positive
+The worker retains a separate 3.9 MiB safety bound for orchestration
+responses, regardless of the default transport send behavior. When a positive
 `Options.MaxSendMessageSize` is lower, that configured send limit becomes the
-completion bound instead. The worker validates the final completion after
-large-payload externalization. An oversized orchestration response fails the
-orchestration once with `OrchestratorResponseTooLarge`; an oversized activity
-response fails the task with non-retriable `ActivityResponseTooLarge`; and an
-oversized entity batch result fails the batch with `EntityResultTooLarge`. The worker sends a
-small failure completion instead of abandoning the oversized result. The legacy
+bound instead. The worker validates the final response after large-payload
+externalization and fails an orchestration once
+with `OrchestratorResponseTooLarge` if it still exceeds that limit. The legacy
 `isPartial`/`chunkIndex` response fields are deprecated; the Go worker does not
 use them because validation against the current DTS emulator did not provide a
 portable chunking path. Configure large-payload storage or reduce per-turn

@@ -19,8 +19,6 @@ const (
 	ErrorTypeVersionError                 ErrorType = "VersionError"
 	ErrorTypeHistoryLimitExceeded         ErrorType = "HistoryLimitExceeded"
 	ErrorTypeOrchestratorResponseTooLarge ErrorType = "OrchestratorResponseTooLarge"
-	ErrorTypeActivityResponseTooLarge     ErrorType = "ActivityResponseTooLarge"
-	ErrorTypeEntityResultTooLarge         ErrorType = "EntityResultTooLarge"
 	ErrorTypeActivityPanic                ErrorType = "TaskActivityPanic"
 	ErrorTypeEntityOperationPanic         ErrorType = "EntityOperationPanic"
 	ErrorTypeOrchestratorPanic            ErrorType = "OrchestratorPanic"
