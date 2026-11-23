@@ -34,13 +34,18 @@ const (
 	defaultQueryPageSize         = 100
 	maxOrchestrationWorkItemSize = 4 << 20
 	maxHistoryChunkSize          = 4 << 20
+
+	// defaultMaxEntityWorkItemBytes matches gRPC's default client receive
+	// limit, which the test host's worker uses.
+	defaultMaxEntityWorkItemBytes = 4 << 20
 )
 
 // Server is an in-memory implementation of the TaskHubSidecarService.
 type Server struct {
 	protos.UnimplementedTaskHubSidecarServiceServer
 
-	healthPingInterval time.Duration
+	healthPingInterval     time.Duration
+	maxEntityWorkItemBytes int
 
 	mu           sync.Mutex
 	instances    map[string]*instance
@@ -51,6 +56,7 @@ type Server struct {
 	entities     map[string]*entity
 	entityQueue  []*entity
 	entityLeases map[string]*entityLease
+	lockRequests map[string]string // critical section ID to requesting execution ID
 	timers       []*time.Timer
 	changed      chan struct{}
 	closed       bool
@@ -112,12 +118,14 @@ type activityLease struct {
 // NewServer creates an empty in-memory service.
 func NewServer() *Server {
 	return &Server{
-		healthPingInterval: defaultHealthPingInterval,
+		healthPingInterval:     defaultHealthPingInterval,
+		maxEntityWorkItemBytes: defaultMaxEntityWorkItemBytes,
 		instances:          make(map[string]*instance),
 		orchLeases:         make(map[string]*orchestrationLease),
 		actLeases:          make(map[string]*activityLease),
 		entities:           make(map[string]*entity),
 		entityLeases:       make(map[string]*entityLease),
+		lockRequests:       make(map[string]string),
 		changed:            make(chan struct{}),
 	}
 }

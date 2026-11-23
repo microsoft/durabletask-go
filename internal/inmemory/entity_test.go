@@ -2,10 +2,13 @@ package inmemory
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/internal/protos"
@@ -17,19 +20,34 @@ func signalEvent(operation string) *protos.HistoryEvent {
 	}}
 }
 
+func lockRequestEvent(s *Server, owner *instance, criticalSectionID string, lockSet ...string) *protos.HistoryEvent {
+	s.lockRequests[criticalSectionID] = owner.executionID
+	return &protos.HistoryEvent{EventType: &protos.HistoryEvent_EntityLockRequested{
+		EntityLockRequested: &protos.EntityLockRequestedEvent{
+			CriticalSectionId: criticalSectionID,
+			LockSet:           lockSet,
+			ParentInstanceId:  wrapperspb.String(owner.id),
+		},
+	}}
+}
+
+func unlockEvent(owner *instance, criticalSectionID string) *protos.HistoryEvent {
+	return &protos.HistoryEvent{EventType: &protos.HistoryEvent_EntityUnlockSent{
+		EntityUnlockSent: &protos.EntityUnlockSentEvent{
+			CriticalSectionId: criticalSectionID,
+			ParentInstanceId:  wrapperspb.String(owner.id),
+		},
+	}}
+}
+
 func TestLockedEntityDispatchesOnlyOwnerCalls(t *testing.T) {
 	s := NewServer()
 	defer s.Close()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.deliverEntityLocked("@counter@a", &protos.HistoryEvent{EventType: &protos.HistoryEvent_EntityLockRequested{
-		EntityLockRequested: &protos.EntityLockRequestedEvent{
-			CriticalSectionId: "cs",
-			LockSet:           []string{"@counter@a"},
-			ParentInstanceId:  wrapperspb.String("owner"),
-		},
-	}})
+	owner := s.newInstanceLocked("owner", "orchestrator", nil, nil, nil, nil, nil, nil)
+	s.deliverEntityLocked("@counter@a", lockRequestEvent(s, owner, "cs", "@counter@a"))
 	s.deliverEntityLocked("@counter@a", signalEvent("outside"))
 	assert.Nil(t, s.nextEntityWorkItemLocked(nil, 1), "a signal from outside the critical section must wait")
 
@@ -68,6 +86,70 @@ func TestCleanEntityStorageReleasesOrphanedLocks(t *testing.T) {
 	defer s.mu.Unlock()
 	assert.Nil(t, e.lock)
 	assert.NotNil(t, s.nextEntityWorkItemLocked(nil, 1), "the queued signal is dispatched once the lock is released")
+}
+
+func TestLockAcquisitionStopsWhenRequesterEnds(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lockSet := []string{"@counter@a", "@counter@b", "@counter@c"}
+
+	holder := s.newInstanceLocked("holder", "orchestrator", nil, nil, nil, nil, nil, nil)
+	s.deliverEntityLocked("@counter@b", lockRequestEvent(s, holder, "holder-cs", "@counter@b"))
+	waiter := s.newInstanceLocked("waiter", "orchestrator", nil, nil, nil, nil, nil, nil)
+	s.deliverEntityLocked(lockSet[0], lockRequestEvent(s, waiter, "waiter-cs", lockSet...))
+	require.Equal(t, "waiter", s.entities["@counter@a"].lock.ownerInstanceID)
+	require.Equal(t, "holder", s.entities["@counter@b"].lock.ownerInstanceID)
+
+	// Terminating the waiter releases its lock set while it still waits for B,
+	// so its unlock reaches C before the acquisition does.
+	for _, id := range lockSet {
+		s.deliverEntityLocked(id, unlockEvent(waiter, "waiter-cs"))
+	}
+	s.completeLocked(waiter, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, nil, nil)
+	s.deliverEntityLocked("@counter@b", unlockEvent(holder, "holder-cs"))
+
+	for _, id := range lockSet {
+		e := s.entities[id]
+		assert.Nil(t, e.lock, "%s must not stay locked by the terminated execution", id)
+		assert.Empty(t, e.queue, "%s has no pending messages", id)
+	}
+	assert.Empty(t, s.lockRequests)
+}
+
+func TestEntityWorkItemsAreBoundedBySize(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxEntityWorkItemBytes = 1024
+
+	const count = 20
+	for i := range count {
+		event := signalEvent(strconv.Itoa(i))
+		event.GetEntityOperationSignaled().Input = wrapperspb.String(strings.Repeat("x", 200))
+		s.deliverEntityLocked("@counter@a", event)
+	}
+	var operations []string
+	for streamID := uint64(1); len(operations) < count; streamID++ {
+		item := s.nextEntityWorkItemLocked(nil, streamID)
+		require.NotNil(t, item)
+		requests := item.GetEntityRequestV2().GetOperationRequests()
+		require.NotEmpty(t, requests)
+		assert.Less(t, len(requests), count, "a large backlog is split across work items")
+		assert.LessOrEqual(t, proto.Size(item), s.maxEntityWorkItemBytes)
+		for _, event := range requests {
+			operations = append(operations, event.GetEntityOperationSignaled().GetOperation())
+		}
+		s.mu.Unlock()
+		_, err := s.CompleteEntityTask(context.Background(), &protos.EntityBatchResult{CompletionToken: item.GetCompletionToken()})
+		s.mu.Lock()
+		require.NoError(t, err)
+	}
+	for i, operation := range operations {
+		assert.Equal(t, strconv.Itoa(i), operation, "operations are dispatched in order")
+	}
 }
 
 func TestReleaseStreamRequeuesEntityWorkItems(t *testing.T) {

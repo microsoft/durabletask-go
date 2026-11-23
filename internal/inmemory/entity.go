@@ -3,6 +3,7 @@ package inmemory
 import (
 	"cmp"
 	"context"
+	"encoding/binary"
 	"slices"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -113,21 +115,22 @@ func (s *Server) startServerTimerLocked(at time.Time, fn func()) {
 // nextMessage returns the index of the next message the entity can
 // process, or -1 if none can be processed now.
 func (e *entity) nextMessage() int {
+	return slices.IndexFunc(e.queue, e.canProcess)
+}
+
+// canProcess reports whether the entity can process a message now. While the
+// entity is locked, only the owner's calls and unlock can be processed.
+func (e *entity) canProcess(event *protos.HistoryEvent) bool {
 	if e.lock == nil {
-		if len(e.queue) == 0 {
-			return -1
-		}
-		return 0
+		return true
 	}
-	return slices.IndexFunc(e.queue, func(event *protos.HistoryEvent) bool {
-		if called := event.GetEntityOperationCalled(); called != nil {
-			return called.GetParentInstanceId().GetValue() == e.lock.ownerInstanceID
-		}
-		if unlock := event.GetEntityUnlockSent(); unlock != nil {
-			return unlock.GetCriticalSectionId() == e.lock.criticalSectionID
-		}
-		return false
-	})
+	if called := event.GetEntityOperationCalled(); called != nil {
+		return called.GetParentInstanceId().GetValue() == e.lock.ownerInstanceID
+	}
+	if unlock := event.GetEntityUnlockSent(); unlock != nil {
+		return unlock.GetCriticalSectionId() == e.lock.criticalSectionID
+	}
+	return false
 }
 
 func isEntityControlMessage(event *protos.HistoryEvent) bool {
@@ -167,6 +170,13 @@ func (s *Server) processEntityControlMessageLocked(e *entity, event *protos.Hist
 		return
 	}
 	request := event.GetEntityLockRequested()
+	if !s.lockRequestActiveLocked(request) {
+		// The requesting execution has ended. Its unlocks may already have
+		// passed the entities later in the lock set, so the acquisition must
+		// stop here rather than lock entities that will never be released.
+		delete(s.lockRequests, request.GetCriticalSectionId())
+		return
+	}
 	e.lock = &entityLock{
 		criticalSectionID: request.GetCriticalSectionId(),
 		ownerInstanceID:   request.GetParentInstanceId().GetValue(),
@@ -184,6 +194,7 @@ func (s *Server) processEntityControlMessageLocked(e *entity, event *protos.Hist
 		})
 		return
 	}
+	delete(s.lockRequests, request.GetCriticalSectionId())
 	if owner, ok := s.instances[e.lock.ownerInstanceID]; ok {
 		s.deliverLocked(owner, &protos.HistoryEvent{
 			EventId:   -1,
@@ -195,18 +206,53 @@ func (s *Server) processEntityControlMessageLocked(e *entity, event *protos.Hist
 	}
 }
 
-// takeBatch removes the signals and calls that are ready to run,
-// stopping at the next lock or unlock message.
-func (e *entity) takeBatch() []*protos.HistoryEvent {
-	var batch []*protos.HistoryEvent
-	for {
-		i := e.nextMessage()
-		if i < 0 || isEntityControlMessage(e.queue[i]) {
-			return batch
-		}
-		batch = append(batch, e.queue[i])
-		e.queue = slices.Delete(e.queue, i, i+1)
+// lockRequestActiveLocked reports whether the execution that sent a lock
+// request is still running.
+func (s *Server) lockRequestActiveLocked(request *protos.EntityLockRequestedEvent) bool {
+	executionID, ok := s.lockRequests[request.GetCriticalSectionId()]
+	if !ok {
+		return false
 	}
+	owner, ok := s.instances[request.GetParentInstanceId().GetValue()]
+	return ok && !isTerminal(owner.status) && owner.executionID == executionID
+}
+
+// takeBatch removes the signals and calls that are ready to run, stopping at
+// the next lock or unlock message or when the next operation would make the
+// work item larger than maxBytes. The first operation is always taken so that
+// the entity makes progress.
+func (e *entity) takeBatch(baseSize, maxBytes int) []*protos.HistoryEvent {
+	var batch []*protos.HistoryEvent
+	var kept []*protos.HistoryEvent
+	// Adding operations can lengthen the EntityRequest and WorkItem length prefixes.
+	size := baseSize + 2*binary.MaxVarintLen32
+	stop := len(e.queue)
+	for i, event := range e.queue {
+		if !e.canProcess(event) {
+			kept = append(kept, event)
+			continue
+		}
+		if isEntityControlMessage(event) {
+			stop = i
+			break
+		}
+		size += operationRequestSize(event)
+		if len(batch) > 0 && size > maxBytes {
+			stop = i
+			break
+		}
+		batch = append(batch, event)
+	}
+	if len(batch) > 0 {
+		e.queue = append(kept, e.queue[stop:]...)
+	}
+	return batch
+}
+
+// operationRequestSize returns the bytes an operation adds to an EntityRequest.
+func operationRequestSize(event *protos.HistoryEvent) int {
+	const field = 4 // EntityRequest.operationRequests
+	return protowire.SizeTag(field) + protowire.SizeBytes(proto.Size(event))
 }
 
 func (s *Server) nextEntityWorkItemLocked(filters *protos.WorkItemFilters, streamID uint64) *protos.WorkItem {
@@ -219,21 +265,22 @@ func (s *Server) nextEntityWorkItemLocked(filters *protos.WorkItemFilters, strea
 		if s.entities[e.id] != e || e.leased {
 			return s.nextEntityWorkItemLocked(filters, streamID)
 		}
-		events := e.takeBatch()
+		token := newID()
+		item := &protos.WorkItem{
+			Request: &protos.WorkItem_EntityRequestV2{EntityRequestV2: &protos.EntityRequest{
+				InstanceId:  e.id,
+				EntityState: e.state,
+			}},
+			CompletionToken: token,
+		}
+		events := e.takeBatch(proto.Size(item), s.maxEntityWorkItemBytes)
 		if len(events) == 0 {
 			return s.nextEntityWorkItemLocked(filters, streamID)
 		}
 		e.leased = true
-		token := newID()
 		s.entityLeases[token] = &entityLease{entity: e, events: events, streamID: streamID}
-		return &protos.WorkItem{
-			Request: &protos.WorkItem_EntityRequestV2{EntityRequestV2: &protos.EntityRequest{
-				InstanceId:        e.id,
-				EntityState:       e.state,
-				OperationRequests: events,
-			}},
-			CompletionToken: token,
-		}
+		item.GetEntityRequestV2().OperationRequests = events
+		return item
 	}
 	return nil
 }
@@ -397,6 +444,7 @@ func (s *Server) sendEntityMessageLocked(inst *instance, id int32, action *proto
 		}
 		request.Position = 0
 		request.ParentInstanceId = wrapperspb.String(inst.id)
+		s.lockRequests[request.GetCriticalSectionId()] = inst.executionID
 		message.EventType = &protos.HistoryEvent_EntityLockRequested{EntityLockRequested: request}
 		s.deliverEntityLocked(request.GetLockSet()[0], message)
 	case *protos.SendEntityMessageAction_EntityUnlockSent:
