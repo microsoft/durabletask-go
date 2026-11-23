@@ -18,7 +18,8 @@
 // that production workers use. To isolate an orchestrator from external
 // dependencies, register stub activities in the test's registry.
 //
-// Timers fire in real time, so tests should use short timer durations.
+// Timers use the Go runtime clock. Go 1.25+ tests can use testing/synctest to
+// advance timers without waiting in real time.
 // Failed orchestrations can be rewound with the same history-safety limitations
 // as the production worker. Rewind enqueues recovery and preserves successful
 // work; outstanding timers and activities are recovered. Activities can run
@@ -37,7 +38,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -49,7 +52,9 @@ import (
 	"github.com/microsoft/durabletask-go/task"
 )
 
-const bufferSize = 1 << 20
+const bufferSize = 64 << 10
+
+const defaultCloseTimeout = 5 * time.Second
 
 // Option configures a [Host].
 type Option func(*options)
@@ -96,7 +101,9 @@ func New(tb testing.TB, registry *task.TaskRegistry, opts ...Option) *Host {
 		tb.Fatalf("failed to start durable task test host: %v", err)
 	}
 	tb.Cleanup(func() {
-		if err := host.Close(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), defaultCloseTimeout)
+		defer cancel()
+		if err := host.Close(ctx); err != nil {
 			tb.Errorf("failed to close durable task test host: %v", err)
 		}
 	})
@@ -108,6 +115,12 @@ func New(tb testing.TB, registry *task.TaskRegistry, opts ...Option) *Host {
 func NewHost(ctx context.Context, registry *task.TaskRegistry, opts ...Option) (*Host, error) {
 	if registry == nil {
 		return nil, errors.New("task registry is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	o := options{logger: api.NewSlogLogger(slog.New(slog.DiscardHandler))}
 	for _, configure := range opts {
@@ -142,11 +155,84 @@ func NewHost(ctx context.Context, registry *task.TaskRegistry, opts ...Option) (
 		h.stop()
 		return nil, fmt.Errorf("failed to create worker: %w", err)
 	}
-	if err := h.worker.Start(context.WithoutCancel(ctx)); err != nil {
+	startupCtx, finishStartup := newStartupContext(ctx)
+	startErr := h.worker.Start(startupCtx)
+	startupErr := finishStartup()
+	if startErr != nil {
 		h.stop()
-		return nil, fmt.Errorf("failed to start worker: %w", err)
+		if startupErr != nil {
+			startErr = startupErr
+		}
+		return nil, fmt.Errorf("failed to start worker: %w", startErr)
+	}
+	if startupErr != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), defaultCloseTimeout)
+		defer cancel()
+		_ = h.worker.Shutdown(closeCtx)
+		h.stop()
+		return nil, fmt.Errorf("failed to start worker: %w", startupErr)
 	}
 	return h, nil
+}
+
+type startupContext struct {
+	context.Context
+	done chan struct{}
+
+	mu       sync.Mutex
+	err      error
+	starting bool
+}
+
+func newStartupContext(parent context.Context) (*startupContext, func() error) {
+	ctx := &startupContext{
+		Context:  context.WithoutCancel(parent),
+		done:     make(chan struct{}),
+		starting: true,
+	}
+	stopParentCancel := context.AfterFunc(parent, func() {
+		ctx.mu.Lock()
+		defer ctx.mu.Unlock()
+		if ctx.starting {
+			ctx.cancelLocked(parent.Err())
+		}
+	})
+	finish := func() error {
+		ctx.mu.Lock()
+		defer ctx.mu.Unlock()
+		stopParentCancel()
+		if err := parent.Err(); err != nil {
+			ctx.cancelLocked(err)
+		}
+		ctx.starting = false
+		return ctx.err
+	}
+	return ctx, finish
+}
+
+func (c *startupContext) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+
+func (c *startupContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *startupContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *startupContext) cancelLocked(err error) {
+	if c.err != nil {
+		return
+	}
+	if err == nil {
+		err = context.Canceled
+	}
+	c.err = err
+	close(c.done)
 }
 
 func (h *Host) dial() (*grpc.ClientConn, error) {

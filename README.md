@@ -665,7 +665,9 @@ To isolate an orchestration from its dependencies, register stub activities and 
 
 The in-memory service has these limits:
 
-- Timers fire in real time. Use short durations in tests.
+- Timers use the Go runtime clock. With Go 1.25 or later, `testing/synctest`
+  can advance timers without waiting in real time while the test goroutines are
+  blocked. The `durabletasktest` tests include a 24-hour timer example.
 - Durable entities aren't supported. Entity client calls return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails.
 - State is kept in memory only. It is discarded when the host closes.
 
