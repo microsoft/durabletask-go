@@ -15,6 +15,7 @@ import (
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/internal/tagcodec"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -413,7 +414,7 @@ func (te *taskExecutor) ExecuteEntity(
 		Actions: make([]*protos.OperationAction, 0),
 	}
 	nextActionID := int32(0)
-	for _, operation := range req.Operations {
+	for i, operation := range req.Operations {
 		if operation == nil {
 			result.Results = append(result.Results, entityOperationFailure(
 				fmt.Errorf("entity operation request must not be nil"),
@@ -425,7 +426,9 @@ func (te *taskExecutor) ExecuteEntity(
 		}
 		startedAt := time.Now().UTC()
 		isSignal := req.Properties[helpers.EntitySignalProperty(operation.RequestId)].GetBoolValue()
-		operationCtx := te.newEntityContext(ctx, entityID, operation, state, nextActionID, startedAt, isSignal)
+		spanContext := dttrace.EntityOperationSpanContext(ctx, i, operation.RequestId)
+		operationCtx := te.newEntityContext(
+			ctx, entityID, operation, state, nextActionID, startedAt, isSignal, spanContext)
 		output, operationErr := invokeEntity(batch.Entity, operationCtx)
 		endedAt := time.Now().UTC()
 
@@ -477,8 +480,14 @@ func (te *taskExecutor) newEntityContext(
 	nextActionID int32,
 	currentTime time.Time,
 	isSignal bool,
+	spanContext trace.SpanContext,
 ) *EntityContext {
 	ctx = api.ContextWithFields(ctx, te.contextFields)
+	if spanContext.IsValid() {
+		// The operation span is reconstructed after the batch is accepted;
+		// handlers see its reserved, non-recording identity.
+		ctx = trace.ContextWithSpanContext(ctx, spanContext)
+	}
 	ctx = api.WithEntityContextInfo(ctx, api.EntityContextInfo{
 		EntityID:  entityID,
 		Operation: operation.Operation,
@@ -507,6 +516,7 @@ func (te *taskExecutor) newEntityContext(
 		state:       state,
 		actionIDSeq: nextActionID,
 		currentTime: currentTime,
+		spanContext: spanContext,
 		ctx:         ctx,
 		logger:      logger,
 		converter:   te.converter,

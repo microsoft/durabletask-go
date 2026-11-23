@@ -41,6 +41,7 @@ const (
 	typeOrchestration = "orchestration"
 	typeActivity      = "activity"
 	typeTimer         = "timer"
+	typeEntity        = "entity"
 )
 
 // ErrUnsupportedTracerProvider reports a provider that cannot reconstruct spans
@@ -289,6 +290,9 @@ type Orchestration struct {
 	timers        map[int32]createdTimer
 	newSends      map[int32]pendingSpan
 	acceptedSends map[int32]struct{}
+	entityCalls   map[string]entityCall
+	entitySignals map[int32]entitySignal
+	entityAcks    map[entitySignalKey]struct{}
 	pending       []pendingSpan
 	responseTime  time.Time
 	emitted       bool
@@ -320,6 +324,12 @@ func (t *Tracer) StartOrchestration(
 					o.acceptedSends = make(map[int32]struct{})
 				}
 				o.acceptedSends[event.EventId] = struct{}{}
+			}
+			if signaled := event.GetEntityOperationSignaled(); signaled != nil {
+				if o.entityAcks == nil {
+					o.entityAcks = make(map[entitySignalKey]struct{})
+				}
+				o.entityAcks[entitySignalKey{eventID: event.EventId, requestID: signaled.RequestId}] = struct{}{}
 			}
 			if started := event.GetExecutionStarted(); started != nil {
 				o.started = true
@@ -378,28 +388,31 @@ func (o *Orchestration) SpanContext() trace.SpanContext {
 			rootTraceID(o.instanceID, o.executionID, o.spanID),
 			o.spanID,
 			SpanName(typeOrchestration, o.name, o.version),
+			trace.SpanKindServer,
 			o.attributes(),
 		).WithRemote(true)
 	})
 	return o.logical
 }
 
-// rootSpanContext asks the provider's sampler for a root orchestration span's
-// sampling decision and tracestate. The Durable Task sampler drops the query
-// span, so it never records, reaches span processors, or exports. The decision
-// is re-evaluated on every dispatch, so it is only stable for samplers whose
-// root decision depends on the trace ID.
+// rootSpanContext asks the provider's sampler for a root span's sampling
+// decision and tracestate. The Durable Task sampler drops the query span, so it
+// never records, reaches span processors, or exports. Zero IDs reserve new IDs
+// from the provider's base ID generator. The decision is re-evaluated on every
+// call, so it is only stable for samplers whose root decision depends on the
+// trace ID.
 func (t *Tracer) rootSpanContext(
 	traceID trace.TraceID,
 	spanID trace.SpanID,
 	name string,
+	kind trace.SpanKind,
 	attrs []attribute.KeyValue,
 ) trace.SpanContext {
 	query := &samplingQuery{}
 	ctx := context.WithValue(withIDOverride(context.Background(), traceID, spanID), samplingQueryKey{}, query)
-	t.tracer.Start(ctx, name,
+	_, span := t.tracer.Start(ctx, name,
 		trace.WithNewRoot(),
-		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithSpanKind(kind),
 		trace.WithAttributes(attrs...),
 	)
 	var flags trace.TraceFlags
@@ -407,8 +420,8 @@ func (t *Tracer) rootSpanContext(
 		flags = trace.FlagsSampled
 	}
 	return trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID:    traceID,
-		SpanID:     spanID,
+		TraceID:    span.SpanContext().TraceID(),
+		SpanID:     span.SpanContext().SpanID(),
 		TraceFlags: flags,
 		TraceState: query.result.Tracestate,
 	})
@@ -477,6 +490,13 @@ func (o *Orchestration) Observe(event *protos.HistoryEvent, replaying bool) {
 		o.timers[event.EventId] = createdTimer{start: timestamp, fireAt: event.GetTimerCreated().GetFireAt()}
 	case event.GetTimerFired() != nil:
 		o.fireTimer(event.GetTimerFired(), timestamp, replaying)
+	case event.GetEntityOperationCalled() != nil:
+		o.callEntity(event.EventId, event.GetEntityOperationCalled(), timestamp)
+	case event.GetEntityOperationCompleted() != nil:
+		o.completeEntity(event.GetEntityOperationCompleted().RequestId, timestamp, replaying, nil)
+	case event.GetEntityOperationFailed() != nil:
+		failed := event.GetEntityOperationFailed()
+		o.completeEntity(failed.RequestId, timestamp, replaying, failureOrDefault(failed.FailureDetails))
 	}
 }
 
@@ -701,11 +721,15 @@ func (o *Orchestration) Emit(response *protos.OrchestratorResponse) {
 	o.emitted = true
 	logical := o.SpanContext()
 	for _, action := range response.GetActions() {
-		if action.GetSendEvent() == nil {
-			continue
-		}
-		if span, ok := o.sendSpan(action); ok {
-			o.pending = append(o.pending, span)
+		switch {
+		case action.GetSendEvent() != nil:
+			if span, ok := o.sendSpan(action); ok {
+				o.pending = append(o.pending, span)
+			}
+		case action.GetSendEntityMessage().GetEntityOperationSignaled() != nil:
+			if span, ok := o.signalSpan(action); ok {
+				o.pending = append(o.pending, span)
+			}
 		}
 	}
 	for _, span := range o.pending {

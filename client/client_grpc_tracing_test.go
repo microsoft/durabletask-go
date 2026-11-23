@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,9 +22,22 @@ import (
 
 type tracingSchedulerClient struct {
 	protos.TaskHubSidecarServiceClient
-	start *protos.CreateInstanceRequest
-	event *protos.RaiseEventRequest
-	err   error
+	start  *protos.CreateInstanceRequest
+	event  *protos.RaiseEventRequest
+	signal *protos.SignalEntityRequest
+	err    error
+}
+
+func (c *tracingSchedulerClient) SignalEntity(
+	_ context.Context,
+	req *protos.SignalEntityRequest,
+	_ ...grpc.CallOption,
+) (*protos.SignalEntityResponse, error) {
+	c.signal = req
+	if c.err != nil {
+		return nil, c.err
+	}
+	return &protos.SignalEntityResponse{}, nil
 }
 
 func (c *tracingSchedulerClient) StartInstance(
@@ -239,4 +253,56 @@ func TestClientTracingDisabledKeepsPropagationOnly(t *testing.T) {
 			require.Nil(t, fake.start.ParentTraceContext)
 		})
 	}
+}
+
+func TestClientSignalEntityPropagatesCallerWithoutCreatingSpan(t *testing.T) {
+	entityID := api.NewEntityID("Counter", "c1")
+	for _, enabled := range []bool{false, true} {
+		for _, sampled := range []bool{false, true} {
+			name := fmt.Sprintf("provider=%t/sampled=%t", enabled, sampled)
+			t.Run(name, func(t *testing.T) {
+				recorder := tracetest.NewSpanRecorder()
+				provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+				t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+				fake := &tracingSchedulerClient{}
+				var opts []TaskHubGrpcClientOption
+				if enabled {
+					opts = append(opts, WithTracerProvider(provider))
+				}
+				client := newTracedClient(fake, opts...)
+				var flags trace.TraceFlags
+				if sampled {
+					flags = trace.FlagsSampled
+				}
+				caller, wire := newTraceParent(flags)
+				ctx := trace.ContextWithRemoteSpanContext(context.Background(), caller)
+
+				require.NoError(t, client.SignalEntity(ctx, entityID, "add"))
+				if sampled {
+					require.Equal(t, wire.GetTraceParent(), fake.signal.ParentTraceContext.GetTraceParent())
+					require.Equal(t, wire.GetTraceState().GetValue(), fake.signal.ParentTraceContext.GetTraceState().GetValue())
+				} else {
+					require.Nil(t, fake.signal.ParentTraceContext)
+				}
+				require.Empty(t, recorder.Ended())
+			})
+		}
+	}
+}
+
+func TestClientSignalEntityPreservesOptionTraceContext(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	fake := &tracingSchedulerClient{}
+	client := newTracedClient(fake, WithTracerProvider(provider))
+	_, explicit := newTraceParent(trace.FlagsSampled)
+	option := func(req *protos.SignalEntityRequest, _ api.DataConverter) error {
+		req.ParentTraceContext = explicit
+		return nil
+	}
+
+	require.NoError(t, client.SignalEntity(context.Background(), api.NewEntityID("Counter", "c1"), "add", option))
+	require.Equal(t, explicit, fake.signal.ParentTraceContext)
+	require.Empty(t, recorder.Ended())
 }

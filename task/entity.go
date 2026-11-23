@@ -12,6 +12,7 @@ import (
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -54,6 +55,9 @@ type EntityContext struct {
 	actions     []*protos.OperationAction
 	actionIDSeq int32
 	currentTime time.Time
+	// spanContext is the operation's reserved span identity when tracing is
+	// enabled. Entity-started orchestrations and signals carry it.
+	spanContext trace.SpanContext
 	ctx         context.Context
 	logger      *slog.Logger
 	converter   api.DataConverter
@@ -153,7 +157,9 @@ func (ctx *EntityContext) DeleteState() {
 	ctx.state.hasValue = false
 }
 
-// Context returns the Go context for the current entity operation.
+// Context returns the Go context for the current entity operation. When worker
+// tracing is enabled, it carries the operation's span context, so application
+// spans started from it nest under the operation's span.
 func (ctx *EntityContext) Context() context.Context {
 	if ctx.ctx == nil {
 		return context.Background()
@@ -204,11 +210,12 @@ func (ctx *EntityContext) signalEntity(entityID api.EntityID, operationName stri
 		Id: ctx.nextActionID(),
 		OperationActionType: &protos.OperationAction_SendSignal{
 			SendSignal: &protos.SendSignalAction{
-				InstanceId:    entityID.String(),
-				Name:          operationName,
-				Input:         rawInput,
-				RequestTime:   timestampOrNil(ctx.currentTime),
-				ScheduledTime: timestampOrNil(scheduledTime),
+				InstanceId:         entityID.String(),
+				Name:               operationName,
+				Input:              rawInput,
+				RequestTime:        timestampOrNil(ctx.currentTime),
+				ScheduledTime:      timestampOrNil(scheduledTime),
+				ParentTraceContext: helpers.TraceContextFromSpanContext(ctx.spanContext),
 			},
 		},
 	}
@@ -239,12 +246,13 @@ func (ctx *EntityContext) StartNewOrchestration(name string, opts ...EntityStart
 		Id: ctx.nextActionID(),
 		OperationActionType: &protos.OperationAction_StartNewOrchestration{
 			StartNewOrchestration: &protos.StartNewOrchestrationAction{
-				InstanceId:    options.instanceID,
-				Name:          name,
-				Version:       options.version,
-				Input:         options.rawInput,
-				ScheduledTime: timestampOrNil(options.scheduledTime),
-				RequestTime:   timestampOrNil(ctx.currentTime),
+				InstanceId:         options.instanceID,
+				Name:               name,
+				Version:            options.version,
+				Input:              options.rawInput,
+				ScheduledTime:      timestampOrNil(options.scheduledTime),
+				RequestTime:        timestampOrNil(ctx.currentTime),
+				ParentTraceContext: helpers.TraceContextFromSpanContext(ctx.spanContext),
 			},
 		},
 	}
