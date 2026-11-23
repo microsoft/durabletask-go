@@ -192,7 +192,8 @@ func (p *loopProbe) scan(body *ast.BlockStmt, inLoop bool) {
 				return false
 			}
 		case *ast.RangeStmt:
-			if isChannel(p.checker.pass.TypesInfo.TypeOf(node.X)) {
+			rangeType := p.checker.pass.TypesInfo.TypeOf(node.X)
+			if isChannel(rangeType) || isFunction(rangeType) {
 				p.inconclusive = true
 				return false
 			}
@@ -246,6 +247,14 @@ func (p *loopProbe) scanCallee(node ast.Node) {
 		return
 	}
 	p.scan(body, false)
+}
+
+func isFunction(value types.Type) bool {
+	if value == nil {
+		return false
+	}
+	_, ok := value.Underlying().(*types.Signature)
+	return ok
 }
 
 func isConstantTrue(pass *analysis.Pass, expression ast.Expr) bool {

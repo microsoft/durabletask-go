@@ -152,6 +152,14 @@ func pollingLoopsThatProgress(ctx *task.OrchestrationContext) (any, error) {
 	for !task.IsCompleted(work) {
 		_ = ctx.CreateTimer(time.Second).Await(nil)
 	}
+	wait := func(yield func() bool) {
+		_ = ctx.CreateTimer(time.Second).Await(nil)
+		yield()
+	}
+	for !task.IsCompleted(work) {
+		for range wait {
+		}
+	}
 	for !task.IsCompleted(work) {
 		break
 	}

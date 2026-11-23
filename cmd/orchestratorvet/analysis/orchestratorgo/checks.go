@@ -79,16 +79,11 @@ func (c *checker) checkFunction(node ast.Node) {
 	}
 	file := c.index.fileOf[node]
 	stack := c.index.enclosingFunctionStack(node)
-	ast.Inspect(body, func(current ast.Node) bool {
-		if current == nil {
-			stack = stack[:len(stack)-1]
-			return true
-		}
+	ast.PreorderStack(body, stack, func(current ast.Node, stack []ast.Node) bool {
 		if _, ok := current.(*ast.FuncLit); ok {
 			return false
 		}
-		stack = append(stack, current)
-		c.inspect(current, stack, file)
+		c.inspect(current, append(stack, current), file)
 		return true
 	})
 }
