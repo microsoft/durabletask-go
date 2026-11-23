@@ -40,7 +40,7 @@ internal contracts. The catalogue demonstrates user-facing behavior.
 
 ## Run an example
 
-Go 1.25 or later is required. Choose an example and configure `DTS_CONNECTION_STRING`.
+Go 1.26 or later is required. Choose an example and configure `DTS_CONNECTION_STRING`.
 Most examples can use either the emulator or Azure DTS:
 
 ```bash
