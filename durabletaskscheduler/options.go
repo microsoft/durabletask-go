@@ -112,7 +112,8 @@ type Options struct {
 	HelloTimeout time.Duration
 
 	// MaxReceiveMessageSize and MaxSendMessageSize bound individual gRPC
-	// messages. Zero uses the 4 MiB SDK default, which matches the DTS service.
+	// messages. Zero uses the 4 MiB SDK default. DTS rejects incoming messages
+	// over 4 MiB, so raising MaxSendMessageSize does not help.
 	MaxReceiveMessageSize int
 	MaxSendMessageSize    int
 
