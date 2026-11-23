@@ -136,7 +136,7 @@ func countActivityLeases(leases map[string]*activityLease, streamID uint64) int 
 // leaseOrchestrationLocked leases an instance's pending events as a work item
 // that fits in one gRPC message. History that doesn't fit is streamed, and new
 // events that don't fit stay pending for later turns. If the first new event
-// can't fit on its own, the instance fails and nil is returned.
+// or a rewind can't fit on its own, the instance fails and nil is returned.
 func (s *Server) leaseOrchestrationLocked(inst *instance, streamID uint64) *protos.WorkItem {
 	rewinding := inst.rewind != nil
 	var events []*protos.HistoryEvent
@@ -164,6 +164,17 @@ func (s *Server) leaseOrchestrationLocked(inst *instance, streamID uint64) *prot
 	if len(request.PastEvents) > 0 && proto.Size(item) > maxOrchestrationWorkItemSize {
 		request.PastEvents = nil
 		request.RequiresHistoryStreaming = true
+	}
+	if rewinding && proto.Size(item) > maxOrchestrationWorkItemSize {
+		// Requeuing would fail the same way, so end the attempt.
+		s.failRewindLocked(inst, &protos.TaskFailureDetails{
+			ErrorType: "OrchestrationWorkItemTooLarge",
+			ErrorMessage: fmt.Sprintf(
+				"a %d-byte rewind work item can't be delivered within the %d-byte gRPC message limit of the in-memory test backend",
+				proto.Size(item), maxOrchestrationWorkItemSize),
+			IsNonRetriable: true,
+		})
+		return nil
 	}
 	if !rewinding && proto.Size(item) > maxOrchestrationWorkItemSize {
 		n := fittingNewEventCount(item, events)

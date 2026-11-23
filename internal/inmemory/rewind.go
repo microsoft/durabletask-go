@@ -29,27 +29,51 @@ func (s *Server) RewindInstance(_ context.Context, req *protos.RewindInstanceReq
 		return nil, grpcerrors.New(codes.FailedPrecondition,
 			fmt.Sprintf("orchestration instance %q is not in a failed state", inst.id), grpcerrors.ReasonInvalidState)
 	}
+	rewind := newRewindEvent(req.GetReason(), nil)
+	if size := rewindWorkItemSize(inst, rewind); size > maxOrchestrationWorkItemSize {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"rewind reason is too large: the %d-byte rewind work item exceeds the %d-byte gRPC message limit of the in-memory test backend",
+			size, maxOrchestrationWorkItemSize)
+	}
 	if err := s.validateRewindChildrenLocked(inst, inst.history, make(map[*instance]bool)); err != nil {
 		return nil, err
 	}
-	s.prepareRewindLocked(inst, req.GetReason(), nil)
+	s.prepareRewindLocked(inst, rewind)
 	return &protos.RewindInstanceResponse{}, nil
 }
 
-func (s *Server) prepareRewindLocked(inst *instance, reason, parentExecutionID *wrapperspb.StringValue) {
-	inst.stopTimers()
-	inst.status = protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING
-	inst.output = nil
-	inst.failure = nil
-	inst.completedAt = time.Time{}
-	inst.updatedAt = time.Now()
-	inst.rewind = &protos.HistoryEvent{
+func newRewindEvent(reason, parentExecutionID *wrapperspb.StringValue) *protos.HistoryEvent {
+	return &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.Now(),
 		EventType: &protos.HistoryEvent_ExecutionRewound{ExecutionRewound: &protos.ExecutionRewoundEvent{
 			Reason: reason, ParentExecutionId: parentExecutionID,
 		}},
 	}
+}
+
+// rewindWorkItemSize returns the size of the work item that delivers a rewind
+// with streamed history, which is the smallest form it can take.
+func rewindWorkItemSize(inst *instance, rewind *protos.HistoryEvent) int {
+	return proto.Size(&protos.WorkItem{
+		Request: &protos.WorkItem_OrchestratorRequest{OrchestratorRequest: &protos.OrchestratorRequest{
+			InstanceId:               inst.id,
+			ExecutionId:              wrapperspb.String(inst.executionID),
+			NewEvents:                []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), rewind},
+			RequiresHistoryStreaming: true,
+		}},
+		CompletionToken: newID(),
+	})
+}
+
+func (s *Server) prepareRewindLocked(inst *instance, rewind *protos.HistoryEvent) {
+	inst.stopTimers()
+	inst.status = protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING
+	inst.output = nil
+	inst.failure = nil
+	inst.completedAt = time.Time{}
+	inst.updatedAt = time.Now()
+	inst.rewind = rewind
 	s.enqueueLocked(inst)
 }
 
@@ -280,7 +304,7 @@ func (s *Server) applyRewindLocked(inst *instance, action *protos.RewindOrchestr
 			// Retarget now: the renewed parent can fail and be rewound again
 			// before this child's replacement history is committed.
 			s.retargetChildLocked(child, parent)
-			s.prepareRewindLocked(child, reason, wrapperspb.String(inst.executionID))
+			s.prepareRewindLocked(child, newRewindEvent(reason, wrapperspb.String(inst.executionID)))
 		case isTerminal(child.status):
 			s.retargetChildLocked(child, parent)
 			result := subOrchestrationResultEvent(child)

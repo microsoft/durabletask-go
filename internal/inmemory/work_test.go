@@ -290,6 +290,38 @@ func TestRewindWorkItemStreamsLargeHistory(t *testing.T) {
 	require.Equal(t, inst.executionID, request.GetExecutionId().GetValue())
 }
 
+func TestRewindRejectsOversizedWorkItem(t *testing.T) {
+	ctx := context.Background()
+	s := NewServer()
+	defer s.Close()
+	inst := s.newInstanceLocked("id", "orchestrator", nil, nil, nil, nil, nil, nil)
+	inst.history = []*protos.HistoryEvent{inst.pending[0]}
+	s.completeLocked(inst, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, failureDetails("failure", "boom"))
+	history := append([]*protos.HistoryEvent(nil), inst.history...)
+	reason := wrapperspb.String(strings.Repeat("x", maxOrchestrationWorkItemSize))
+
+	_, err := s.RewindInstance(ctx, &protos.RewindInstanceRequest{InstanceId: inst.id, Reason: reason})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, inst.status)
+	require.Nil(t, inst.rewind)
+
+	// A child's rewind carries its parent's reason, so leasing checks the size too.
+	s.prepareRewindLocked(inst, newRewindEvent(reason, nil))
+	require.Nil(t, s.nextWorkItemLocked(nil, 1, workItemLimits{}))
+	require.Empty(t, s.orchLeases)
+	require.False(t, inst.queued)
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, inst.status)
+	require.Equal(t, "OrchestrationWorkItemTooLarge", inst.failure.GetErrorType())
+	require.Nil(t, inst.rewind)
+	require.Len(t, inst.history, len(history))
+	require.Equal(t, history[:len(history)-1], inst.history[:len(history)-1], "only the failure is replaced")
+
+	_, err = s.RewindInstance(ctx, &protos.RewindInstanceRequest{InstanceId: inst.id, Reason: wrapperspb.String("short")})
+	require.NoError(t, err)
+	item := s.nextWorkItemLocked(nil, 1, workItemLimits{})
+	require.Equal(t, "short", item.GetOrchestratorRequest().GetNewEvents()[1].GetExecutionRewound().GetReason().GetValue())
+}
+
 func TestRewindReconcilesRetainedActivities(t *testing.T) {
 	for _, mode := range []string{"before", "during", "in-flight", "queued", "missing"} {
 		t.Run(mode, func(t *testing.T) {
