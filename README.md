@@ -666,7 +666,7 @@ The in-memory service has these limits:
 - Timers use the Go runtime clock. `testing/synctest`
   can advance timers without waiting in real time while the test goroutines are
   blocked. The `durabletasktest` tests include a 24-hour timer example.
-- Durable entities and rewind aren't supported. Entity client calls and `RewindInstance` return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails.
+- Durable entities and rewind aren't supported. Entity client calls and `RewindInstance` return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails. The service has no task hub name, so a query filtered by `TaskHubNames` also returns `api.ErrFeatureNotSupported`.
 - State is kept in memory only. It is discarded when the host closes.
 
 ## Development

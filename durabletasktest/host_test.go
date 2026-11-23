@@ -555,3 +555,10 @@ func TestUnsupportedFeatures(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrFeatureNotSupported)
 	assert.ErrorIs(t, host.Client().RewindInstance(ctx, metadata.InstanceID), api.ErrFeatureNotSupported)
 }
+
+func TestQueryByTaskHubNameIsNotSupported(t *testing.T) {
+	host := durabletasktest.New(t, task.NewTaskRegistry())
+
+	_, err := host.Client().QueryInstances(testContext(t), api.OrchestrationQuery{TaskHubNames: []string{"hub"}})
+	assert.ErrorIs(t, err, api.ErrFeatureNotSupported)
+}
