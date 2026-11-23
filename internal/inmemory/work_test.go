@@ -95,6 +95,37 @@ func TestRecursiveTerminationDoesNotTerminateReusedChildID(t *testing.T) {
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING, replacement.status)
 }
 
+func TestRecursiveTerminationDuringTurnTerminatesNewChildren(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	ctx := t.Context()
+
+	_, err := s.StartInstance(ctx, &protos.CreateInstanceRequest{InstanceId: "parent", Name: "orchestrator"})
+	require.NoError(t, err)
+	s.mu.Lock()
+	item := s.nextWorkItemLocked(nil, 1, workItemLimits{})
+	s.mu.Unlock()
+	require.NotNil(t, item.GetOrchestratorRequest())
+
+	_, err = s.TerminateInstance(ctx, &protos.TerminateRequest{InstanceId: "parent", Recursive: true})
+	require.NoError(t, err)
+	_, err = s.CompleteOrchestratorTask(ctx, &protos.OrchestratorResponse{
+		CompletionToken: item.GetCompletionToken(),
+		Actions: []*protos.OrchestratorAction{{
+			Id: 0,
+			OrchestratorActionType: &protos.OrchestratorAction_CreateSubOrchestration{
+				CreateSubOrchestration: &protos.CreateSubOrchestrationAction{InstanceId: "child", Name: "orchestrator"},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	resp, err := s.GetInstance(ctx, &protos.GetInstanceRequest{InstanceId: "child"})
+	require.NoError(t, err)
+	require.True(t, resp.GetExists())
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, resp.GetOrchestrationState().GetOrchestrationStatus())
+}
+
 func TestWorkItemTooLargeForOneMessageFailsInstance(t *testing.T) {
 	s := NewServer()
 	defer s.Close()
