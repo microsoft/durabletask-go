@@ -612,7 +612,9 @@ func TestRewindRecovery(t *testing.T) {
 			require.NoError(t, completed.ReadOutput(&output))
 			require.Equal(t, want, output)
 			require.Nil(t, completed.FailureDetails)
-			require.True(t, completed.CompletedAt.After(failed.CompletedAt))
+			require.False(t, completed.CompletedAt.IsZero())
+			// Successive completions can share a wall-clock tick.
+			require.False(t, completed.CompletedAt.Before(failed.CompletedAt))
 			goodWant := int32(1)
 			if mode == "purged-child" {
 				goodWant = 2 // A purged child's successful history is no longer available.
