@@ -18,7 +18,7 @@
 // that production workers use. To isolate an orchestrator from external
 // dependencies, register stub activities in the test's registry.
 //
-// Timers use the Go runtime clock. Go 1.25+ tests can use testing/synctest to
+// Timers use the Go runtime clock. Tests can use testing/synctest to
 // advance timers without waiting in real time.
 // Durable entities and orchestration rewind are not supported: entity client
 // operations and rewind fail with [api.ErrFeatureNotSupported], and an

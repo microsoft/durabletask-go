@@ -663,7 +663,7 @@ To isolate an orchestration from its dependencies, register stub activities and 
 
 The in-memory service has these limits:
 
-- Timers use the Go runtime clock. With Go 1.25 or later, `testing/synctest`
+- Timers use the Go runtime clock. `testing/synctest`
   can advance timers without waiting in real time while the test goroutines are
   blocked. The `durabletasktest` tests include a 24-hour timer example.
 - Durable entities and rewind aren't supported. Entity client calls and `RewindInstance` return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails.
