@@ -5,7 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"strconv"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,8 +21,9 @@ import (
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
-// ScopeName is the instrumentation scope shared with the other Durable Task SDKs.
-const ScopeName = "durabletask"
+// ScopeName is the instrumentation scope name, matching the Durable Task .NET,
+// JavaScript, and Java SDKs.
+const ScopeName = "Microsoft.DurableTask"
 
 // Attribute keys shared with the other Durable Task SDKs.
 const (
@@ -60,16 +62,17 @@ func NewTracer(provider trace.TracerProvider) (*Tracer, error) {
 		return nil, errors.New("tracer provider cannot be nil")
 	}
 	tracer := provider.Tracer(ScopeName)
-	if !supportsReconstruction(tracer) {
-		return nil, ErrUnsupportedTracerProvider
+	if err := checkReconstruction(tracer); err != nil {
+		return nil, err
 	}
 	return &Tracer{tracer: tracer}, nil
 }
 
-// supportsReconstruction starts, but never ends, a probe span under an
-// unsampled parent. With the Durable Task sampler installed the probe is
-// dropped before any span processor sees it.
-func supportsReconstruction(tracer trace.Tracer) bool {
+// checkReconstruction starts a probe span under an unsampled parent. The
+// Durable Task sampler drops the probe before any span processor sees it. Any
+// other sampler that records the probe has it ended immediately, so a rejected
+// provider never keeps a started span.
+func checkReconstruction(tracer trace.Tracer) error {
 	want := RandomSpanID()
 	parent := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID: RandomTraceID(),
@@ -79,7 +82,20 @@ func supportsReconstruction(tracer trace.Tracer) bool {
 	query := &samplingQuery{}
 	ctx := context.WithValue(withIDOverride(context.Background(), trace.TraceID{}, want), samplingQueryKey{}, query)
 	_, span := tracer.Start(trace.ContextWithRemoteSpanContext(ctx, parent), "durabletask.probe")
-	return query.answered && span.SpanContext().SpanID() == want
+	if span.IsRecording() {
+		span.End()
+	}
+	var problems []string
+	if !query.answered {
+		problems = append(problems, "its top-level sampler is not tracing.WithSampler")
+	}
+	if span.SpanContext().SpanID() != want {
+		problems = append(problems, "its ID generator is not tracing.WithIDGenerator")
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%w: %s", ErrUnsupportedTracerProvider, strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 // reconstructionContext returns a private context that starts a span with a
@@ -140,53 +156,84 @@ func taskAttributes(kind, name, version, instanceID string) []attribute.KeyValue
 	return attrs
 }
 
-type activitySpanKey struct{}
+// Activity holds the trace state of one activity work item. Its SERVER span
+// starts only when the executor is about to produce a result, so work the
+// executor rejects back to the backend exports nothing.
+type Activity struct {
+	tracer *Tracer
+	name   string
+	attrs  []attribute.KeyValue
+	parent trace.SpanContext
+	span   trace.Span
+}
 
-// StartActivity starts the live SERVER span for one activity execution, parented
-// by the persisted scheduling span. It returns nil when parent is unusable.
-func (t *Tracer) StartActivity(
-	ctx context.Context,
+// NewActivity prepares the SERVER span for one activity work item, parented by
+// the persisted scheduling span. It returns nil when parent is unusable.
+func (t *Tracer) NewActivity(
 	name, version, instanceID string,
 	taskID int32,
 	parent *protos.TraceContext,
-) (context.Context, trace.Span) {
+) *Activity {
 	parentContext := helpers.SpanContextFromTraceContext(parent)
 	if !parentContext.IsValid() {
-		return ctx, nil
+		return nil
 	}
-	attrs := append(taskAttributes(typeActivity, name, version, instanceID),
-		AttrTaskID.String(strconv.Itoa(int(taskID))))
-	_, span := t.tracer.Start(
-		trace.ContextWithRemoteSpanContext(context.Background(), parentContext),
-		SpanName(typeActivity, name, version),
+	return &Activity{
+		tracer: t,
+		name:   SpanName(typeActivity, name, version),
+		attrs: append(taskAttributes(typeActivity, name, version, instanceID),
+			AttrTaskID.Int(int(taskID))),
+		parent: parentContext,
+	}
+}
+
+type activityKey struct{}
+
+// WithActivity attaches an activity trace to an executor call.
+func WithActivity(ctx context.Context, activity *Activity) context.Context {
+	if activity == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, activityKey{}, activity)
+}
+
+// StartActivitySpan starts the span of the activity trace attached to ctx and
+// returns ctx with that span active, so application spans nest under it.
+func StartActivitySpan(ctx context.Context) context.Context {
+	activity, _ := ctx.Value(activityKey{}).(*Activity)
+	if activity == nil || activity.span != nil {
+		return ctx
+	}
+	_, activity.span = activity.tracer.tracer.Start(
+		trace.ContextWithRemoteSpanContext(context.Background(), activity.parent),
+		activity.name,
 		trace.WithSpanKind(trace.SpanKindServer),
-		trace.WithAttributes(attrs...),
+		trace.WithAttributes(activity.attrs...),
 	)
-	return context.WithValue(ctx, activitySpanKey{}, span), span
+	return trace.ContextWithSpan(ctx, activity.span)
 }
 
-// ActivitySpanFromContext returns the activity span started by StartActivity.
-func ActivitySpanFromContext(ctx context.Context) trace.Span {
-	span, _ := ctx.Value(activitySpanKey{}).(trace.Span)
-	return span
-}
-
-// EndActivity ends an activity span. Durable failures are reported as errors
-// even though the executor returns them as failure events without a Go error.
-func EndActivity(span trace.Span, failure *protos.TaskFailureDetails, abandoned bool) {
-	if span == nil {
+// End ends the activity span with the executor's outcome. Delivering that
+// outcome to the backend is transport work and does not change the span.
+// Durable failures are reported as errors even though the executor returns
+// them as failure events without a Go error.
+func (a *Activity) End(result *protos.HistoryEvent, err error) {
+	if a == nil || a.span == nil {
 		return
 	}
 	switch {
-	case abandoned:
-		span.SetStatus(codes.Error, "activity work item abandoned")
-	case failure != nil:
-		span.SetAttributes(AttrStatus.String("Failed"))
-		span.SetStatus(codes.Error, failure.GetErrorMessage())
+	case err != nil:
+		a.span.SetStatus(codes.Error, err.Error())
+	case result.GetTaskCompleted() != nil:
+		a.span.SetAttributes(AttrStatus.String("Completed"))
+	case result.GetTaskFailed() != nil:
+		a.span.SetAttributes(AttrStatus.String("Failed"))
+		a.span.SetStatus(codes.Error, result.GetTaskFailed().GetFailureDetails().GetErrorMessage())
 	default:
-		span.SetAttributes(AttrStatus.String("Completed"))
+		a.span.SetStatus(codes.Error, "activity executor returned an unknown task result")
 	}
-	span.End()
+	a.span.End()
+	a.span = nil
 }
 
 type orchestrationKey struct{}
@@ -203,12 +250,11 @@ func OrchestrationFromContext(ctx context.Context) *Orchestration {
 }
 
 type scheduledTask struct {
-	kind       string
-	name       string
-	version    string
-	instanceID string
-	spanID     trace.SpanID
-	start      time.Time
+	kind    string
+	name    string
+	version string
+	spanID  trace.SpanID
+	start   time.Time
 }
 
 type createdTimer struct {
@@ -239,7 +285,6 @@ type Orchestration struct {
 	parent      trace.SpanContext
 	spanID      trace.SpanID
 	start       time.Time
-	passthrough *protos.OrchestrationTraceContext
 	scheduled   map[int32]scheduledTask
 	timers      map[int32]createdTimer
 	pending     []pendingSpan
@@ -249,18 +294,18 @@ type Orchestration struct {
 }
 
 // StartOrchestration restores the persisted orchestration span identity, or
-// reserves one on the first dispatch of an execution.
+// reserves one on the first dispatch of an execution. A rewind that carries a
+// new parent trace context reparents the orchestration, as in the .NET SDK.
 func (t *Tracer) StartOrchestration(
 	instanceID string,
 	persisted *protos.OrchestrationTraceContext,
 	eventLists ...[]*protos.HistoryEvent,
 ) *Orchestration {
 	o := &Orchestration{
-		tracer:      t,
-		instanceID:  instanceID,
-		passthrough: persisted,
-		scheduled:   make(map[int32]scheduledTask),
-		timers:      make(map[int32]createdTimer),
+		tracer:     t,
+		instanceID: instanceID,
+		scheduled:  make(map[int32]scheduledTask),
+		timers:     make(map[int32]createdTimer),
 	}
 	for _, events := range eventLists {
 		for _, event := range events {
@@ -270,6 +315,11 @@ func (t *Tracer) StartOrchestration(
 				o.version = started.GetVersion().GetValue()
 				o.executionID = started.GetOrchestrationInstance().GetExecutionId().GetValue()
 				o.parent = helpers.SpanContextFromTraceContext(started.GetParentTraceContext())
+			}
+			if rewound := event.GetExecutionRewound(); rewound != nil {
+				if parent := helpers.SpanContextFromTraceContext(rewound.GetParentTraceContext()); parent.IsValid() {
+					o.parent = parent
+				}
 			}
 		}
 	}
@@ -383,25 +433,23 @@ func (o *Orchestration) Observe(event *protos.HistoryEvent, replaying bool) {
 	if !o.Enabled() || event == nil {
 		return
 	}
-	timestamp := event.GetTimestamp().AsTime()
+	timestamp := eventTime(event)
 	switch {
 	case event.GetTaskScheduled() != nil:
 		scheduled := event.GetTaskScheduled()
 		o.schedule(event.EventId, scheduledTask{
-			kind:       typeActivity,
-			name:       scheduled.GetName(),
-			version:    scheduled.GetVersion().GetValue(),
-			instanceID: o.instanceID,
-			start:      timestamp,
+			kind:    typeActivity,
+			name:    scheduled.GetName(),
+			version: scheduled.GetVersion().GetValue(),
+			start:   timestamp,
 		}, scheduled.GetParentTraceContext())
 	case event.GetSubOrchestrationInstanceCreated() != nil:
 		created := event.GetSubOrchestrationInstanceCreated()
 		o.schedule(event.EventId, scheduledTask{
-			kind:       typeOrchestration,
-			name:       created.GetName(),
-			version:    created.GetVersion().GetValue(),
-			instanceID: created.GetInstanceId(),
-			start:      timestamp,
+			kind:    typeOrchestration,
+			name:    created.GetName(),
+			version: created.GetVersion().GetValue(),
+			start:   timestamp,
 		}, created.GetParentTraceContext())
 	case event.GetTaskCompleted() != nil:
 		o.complete(event.GetTaskCompleted().TaskScheduledId, timestamp, replaying, nil)
@@ -427,6 +475,26 @@ func failureOrDefault(details *protos.TaskFailureDetails) *protos.TaskFailureDet
 	return details
 }
 
+// eventTime returns an event's timestamp, or the zero time when it has none.
+func eventTime(event *protos.HistoryEvent) time.Time {
+	if event.GetTimestamp() == nil {
+		return time.Time{}
+	}
+	return event.GetTimestamp().AsTime()
+}
+
+// spanTimes fills timestamps missing from history: a missing end is the
+// current time and a missing start collapses onto the end.
+func spanTimes(start, end time.Time) (time.Time, time.Time) {
+	if end.IsZero() {
+		end = time.Now()
+	}
+	if start.IsZero() {
+		start = end
+	}
+	return start, end
+}
+
 func (o *Orchestration) schedule(eventID int32, task scheduledTask, traceContext *protos.TraceContext) {
 	spanContext := helpers.SpanContextFromTraceContext(traceContext)
 	if !spanContext.IsValid() {
@@ -445,13 +513,14 @@ func (o *Orchestration) complete(taskID int32, end time.Time, replaying bool, fa
 	if replaying {
 		return
 	}
-	attrs := append(taskAttributes(task.kind, task.name, task.version, task.instanceID),
-		AttrTaskID.String(strconv.Itoa(int(taskID))))
+	attrs := append(taskAttributes(task.kind, task.name, task.version, o.instanceID),
+		AttrTaskID.Int(int(taskID)))
+	start, end := spanTimes(task.start, end)
 	o.pending = append(o.pending, pendingSpan{
 		name:    SpanName(task.kind, task.name, task.version),
 		kind:    trace.SpanKindClient,
 		spanID:  task.spanID,
-		start:   task.start,
+		start:   start,
 		end:     end,
 		attrs:   attrs,
 		failure: failure,
@@ -471,7 +540,7 @@ func (o *Orchestration) fireTimer(fired *protos.TimerFiredEvent, end time.Time, 
 		AttrType.String(typeTimer),
 		AttrName.String(o.name),
 		AttrInstanceID.String(o.instanceID),
-		AttrTaskID.String(strconv.Itoa(int(fired.TimerId))),
+		AttrTaskID.Int(int(fired.TimerId)),
 	}
 	fireAt := timer.fireAt
 	if fireAt == nil {
@@ -480,11 +549,12 @@ func (o *Orchestration) fireTimer(fired *protos.TimerFiredEvent, end time.Time, 
 	if fireAt != nil {
 		attrs = append(attrs, AttrFireAt.String(fireAt.AsTime().UTC().Format(time.RFC3339Nano)))
 	}
+	start, end := spanTimes(timer.start, end)
 	o.pending = append(o.pending, pendingSpan{
 		name:   SpanName(typeOrchestration, o.name, "") + ":timer",
 		kind:   trace.SpanKindInternal,
 		spanID: RandomSpanID(),
-		start:  timer.start,
+		start:  start,
 		end:    end,
 		attrs:  attrs,
 	})
@@ -495,13 +565,7 @@ func (o *Orchestration) fireTimer(fired *protos.TimerFiredEvent, end time.Time, 
 // Continue-as-new and rewind responses carry a fresh identity so the next
 // execution never reuses this execution's span.
 func (o *Orchestration) PrepareResponse(response *protos.OrchestratorResponse) {
-	if response == nil {
-		return
-	}
-	if !o.Enabled() {
-		if response.OrchestrationTraceContext == nil {
-			response.OrchestrationTraceContext = o.passthrough
-		}
+	if response == nil || !o.Enabled() {
 		return
 	}
 	spanID, start := o.spanID, o.start

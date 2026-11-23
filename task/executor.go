@@ -15,7 +15,6 @@ import (
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/internal/tagcodec"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -180,17 +179,19 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 		return nil, fmt.Errorf("unexpected event type for ExecuteActivity: %v", e.EventType)
 	}
 	activityVersion := ts.GetVersion().GetValue()
-	if versionErr := te.versioning.check(activityVersion); versionErr != nil &&
-		!allowsUnversionedTask(te.unversionedActivities, ts.GetName(), activityVersion) {
-		if te.versioning.FailureStrategy == VersionFailureReject {
-			return nil, versionErr
-		}
-		return helpers.NewTaskFailedEvent(e.EventId, versionFailureDetails(versionErr)), nil
+	versionErr := te.versioning.check(activityVersion)
+	if versionErr != nil && allowsUnversionedTask(te.unversionedActivities, ts.GetName(), activityVersion) {
+		versionErr = nil
+	}
+	if versionErr != nil && te.versioning.FailureStrategy == VersionFailureReject {
+		return nil, versionErr
 	}
 	ctx = api.ContextWithFields(ctx, te.contextFields)
 	ctx = helpers.ContextWithTraceContext(ctx, ts.GetParentTraceContext())
-	if span := dttrace.ActivitySpanFromContext(ctx); span != nil {
-		ctx = trace.ContextWithSpan(ctx, span)
+	// The activity span covers only work this executor reports a result for.
+	ctx = dttrace.StartActivitySpan(ctx)
+	if versionErr != nil {
+		return helpers.NewTaskFailedEvent(e.EventId, versionFailureDetails(versionErr)), nil
 	}
 	ctx = api.ContextWithFields(ctx, api.ContextFields(tagcodec.DecodeContextFields(ts.GetTags())))
 	orchestrationInfo, _ := api.OrchestrationContextInfoFromContext(ctx)

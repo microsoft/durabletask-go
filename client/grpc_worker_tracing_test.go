@@ -3,15 +3,20 @@ package client
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+	grpccodes "google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/api"
@@ -163,6 +168,18 @@ func spanAttribute(span sdktrace.ReadOnlySpan, key string) string {
 	return ""
 }
 
+func requireTaskIDAttribute(t *testing.T, span sdktrace.ReadOnlySpan, want int32) {
+	t.Helper()
+	for _, attr := range span.Attributes() {
+		if attr.Key == "durabletask.task.task_id" {
+			require.Equal(t, attribute.INT64, attr.Value.Type())
+			require.Equal(t, int64(want), attr.Value.AsInt64())
+			return
+		}
+	}
+	require.Fail(t, "span has no durabletask.task.task_id attribute", span.Name())
+}
+
 type fixedIDGenerator struct{}
 
 func (fixedIDGenerator) NewIDs(context.Context) (trace.TraceID, trace.SpanID) {
@@ -174,32 +191,58 @@ func (fixedIDGenerator) NewSpanID(context.Context, trace.TraceID) trace.SpanID {
 }
 
 func TestWorkerTracerProviderRejectsUnsupportedProviders(t *testing.T) {
-	for name, provider := range map[string]trace.TracerProvider{
-		"nil":          nil,
-		"noop":         noop.NewTracerProvider(),
-		"default-sdk":  sdktrace.NewTracerProvider(),
-		"replaced-idgen": sdktrace.NewTracerProvider(
+	var options taskHubGrpcWorkerOptions
+	require.Error(t, WithWorkerTracerProvider(nil)(&options))
+	err := WithWorkerTracerProvider(noop.NewTracerProvider())(&options)
+	require.ErrorIs(t, err, tracing.ErrUnsupportedTracerProvider)
+	require.Nil(t, options.tracer)
+
+	for name, test := range map[string]struct {
+		options    []sdktrace.TracerProviderOption
+		badSampler bool
+		badIDs     bool
+	}{
+		"default-sdk": {badSampler: true, badIDs: true},
+		"replaced-idgen": {options: []sdktrace.TracerProviderOption{
 			tracing.WithIDGenerator(nil),
 			tracing.WithSampler(nil),
 			sdktrace.WithIDGenerator(fixedIDGenerator{}),
-		),
-		"missing-sampler": sdktrace.NewTracerProvider(tracing.WithIDGenerator(nil)),
-		"replaced-sampler": sdktrace.NewTracerProvider(
+		}, badIDs: true},
+		"missing-sampler": {options: []sdktrace.TracerProviderOption{
+			tracing.WithIDGenerator(nil),
+		}, badSampler: true},
+		// A recording sampler sees the probe span, which must still be ended.
+		"replaced-sampler": {options: []sdktrace.TracerProviderOption{
 			tracing.WithIDGenerator(nil),
 			tracing.WithSampler(nil),
 			sdktrace.WithSampler(sdktrace.AlwaysSample()),
-		),
+		}, badSampler: true},
+		"nested-sampler": {options: []sdktrace.TracerProviderOption{
+			tracing.WithIDGenerator(nil),
+			sdktrace.WithSampler(sdktrace.ParentBased(tracing.NewSampler(nil))),
+		}, badSampler: true},
 	} {
 		t.Run(name, func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(append(test.options, sdktrace.WithSpanProcessor(recorder))...)
+			t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 			var options taskHubGrpcWorkerOptions
 			err := WithWorkerTracerProvider(provider)(&options)
-			require.Error(t, err)
-			if provider != nil {
-				require.ErrorIs(t, err, tracing.ErrUnsupportedTracerProvider)
-			}
+			require.ErrorIs(t, err, tracing.ErrUnsupportedTracerProvider)
+			require.Equal(t, test.badSampler, strings.Contains(err.Error(), "sampler is not tracing.WithSampler"))
+			require.Equal(t, test.badIDs, strings.Contains(err.Error(), "ID generator is not tracing.WithIDGenerator"))
 			require.Nil(t, options.tracer)
+			require.Len(t, recorder.Ended(), len(recorder.Started()))
+			if name == "replaced-sampler" {
+				require.NotEmpty(t, recorder.Started())
+			}
 		})
 	}
+}
+
+func TestWorkerTracingSamplerDescription(t *testing.T) {
+	require.Equal(t, "DurableTaskSampler{TraceIDRatioBased{1}}",
+		tracing.NewSampler(sdktrace.TraceIDRatioBased(1)).Description())
 }
 
 func TestWorkerTracingReplayAwareLifecycle(t *testing.T) {
@@ -242,6 +285,7 @@ func TestWorkerTracingReplayAwareLifecycle(t *testing.T) {
 	persisted := response.OrchestrationTraceContext
 	scheduleTrace := response.Actions[0].GetScheduleTask().ParentTraceContext
 	require.NotNil(t, scheduleTrace)
+	activityTaskID := response.Actions[0].Id
 
 	activity := newTracingHarness(t, registry, true)
 	activity.worker.processActivity(context.Background(), activity.client, "token", &protos.ActivityRequest{
@@ -257,6 +301,8 @@ func TestWorkerTracingReplayAwareLifecycle(t *testing.T) {
 	require.Equal(t, "activity:Hello", activitySpans[0].Name())
 	require.Equal(t, trace.SpanKindServer, activitySpans[0].SpanKind())
 	require.Equal(t, scheduleSpan.SpanID(), activitySpans[0].Parent().SpanID())
+	require.Equal(t, "Microsoft.DurableTask", activitySpans[0].InstrumentationScope().Name)
+	requireTaskIDAttribute(t, activitySpans[0], activityTaskID)
 	appSpans := appRecorder.Ended()
 	require.Len(t, appSpans, 1)
 	require.Equal(t, activitySpans[0].SpanContext(), appSpans[0].Parent())
@@ -273,6 +319,8 @@ func TestWorkerTracingReplayAwareLifecycle(t *testing.T) {
 	require.Equal(t, scheduleSpan.SpanID(), clientSpans[0].SpanContext().SpanID())
 	require.Equal(t, persisted.SpanID.GetValue(), clientSpans[0].Parent().SpanID().String())
 	require.Equal(t, "Hello", spanAttribute(clientSpans[0], "durabletask.task.name"))
+	require.Equal(t, "parent", spanAttribute(clientSpans[0], "durabletask.task.instance_id"))
+	requireTaskIDAttribute(t, clientSpans[0], activityTaskID)
 	timer := response.Actions[0].GetCreateTimer()
 	require.NotNil(t, timer)
 
@@ -306,7 +354,10 @@ func TestWorkerTracingReplayAwareLifecycle(t *testing.T) {
 	require.Equal(t, trace.SpanKindClient, subSpan[0].SpanKind())
 	require.Equal(t, helpers.SpanContextFromTraceContext(subOrchestration.ParentTraceContext).SpanID(),
 		subSpan[0].SpanContext().SpanID())
-	require.Equal(t, "child", spanAttribute(subSpan[0], "durabletask.task.instance_id"))
+	// Like activity CLIENT spans, the sub-orchestration CLIENT span carries the
+	// calling orchestration's instance ID.
+	require.Equal(t, "parent", spanAttribute(subSpan[0], "durabletask.task.instance_id"))
+	requireTaskIDAttribute(t, subSpan[0], response.Actions[0].Id)
 	orchestration := spansNamed(finalSpans, "orchestration:Parent")
 	require.Len(t, orchestration, 1)
 	require.Equal(t, trace.SpanKindServer, orchestration[0].SpanKind())
@@ -646,6 +697,19 @@ func TestWorkerTracingSamplingAndDisabledMode(t *testing.T) {
 		backend.dispatch(t, h, helpers.NewTaskCompletedEvent(0, nil))
 		require.Empty(t, h.spans())
 	})
+	t.Run("root custom base sampler", func(t *testing.T) {
+		h := newTracingHarnessWithProviderOptions(t, registry, true,
+			[]sdktrace.TracerProviderOption{tracing.WithSampler(sdktrace.TraceIDRatioBased(1))})
+		backend := newFakeOrchestrationBackend("root-ratio", helpers.NewExecutionStartedEvent(
+			"Work", "root-ratio", nil, nil, nil, nil))
+		response := backend.dispatch(t, h)
+		scheduled := helpers.SpanContextFromTraceContext(response.Actions[0].GetScheduleTask().ParentTraceContext)
+		require.True(t, scheduled.IsSampled())
+		backend.dispatch(t, h, helpers.NewTaskCompletedEvent(0, nil))
+		require.Len(t, spansNamed(h.spans(), "activity:Work"), 1)
+		require.Len(t, spansNamed(h.spans(), "orchestration:Work"), 1)
+		require.Len(t, h.recorder.Started(), len(h.recorder.Ended()))
+	})
 	t.Run("disabled", func(t *testing.T) {
 		_, parentTrace := newTraceParent(trace.FlagsSampled)
 		h := newTracingHarness(t, registry, false)
@@ -660,4 +724,163 @@ func TestWorkerTracingSamplingAndDisabledMode(t *testing.T) {
 		backend.dispatch(t, h, helpers.NewTaskCompletedEvent(0, nil))
 		require.Empty(t, h.spans())
 	})
+}
+
+func TestWorkerTracingActivitySpanReflectsExecution(t *testing.T) {
+	_, parentTrace := newTraceParent(trace.FlagsSampled)
+	var ran bool
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddActivityN("Work", func(task.ActivityContext) (any, error) {
+		ran = true
+		return "done", nil
+	}))
+	request := func(version string) *protos.ActivityRequest {
+		return &protos.ActivityRequest{
+			Name:                  "Work",
+			Version:               wrapperspb.String(version),
+			TaskId:                3,
+			OrchestrationInstance: &protos.OrchestrationInstance{InstanceId: "instance"},
+			ParentTraceContext:    parentTrace,
+		}
+	}
+
+	t.Run("rejected before running", func(t *testing.T) {
+		ran = false
+		h := newTracingHarness(t, registry, true, task.WithVersioning(task.VersioningOptions{
+			Version:         "1.0",
+			MatchStrategy:   task.VersionMatchStrict,
+			FailureStrategy: task.VersionFailureReject,
+		}))
+		// A canceled context skips the abandon delay.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		h.worker.processActivity(ctx, h.client, "token", request("2.0"))
+		require.False(t, ran)
+		require.Empty(t, h.client.activityCompletions)
+		require.Empty(t, h.recorder.Started())
+	})
+	t.Run("completed but work item gone", func(t *testing.T) {
+		ran = false
+		h := newTracingHarness(t, registry, true)
+		h.client.activityCompletionErr = status.Error(grpccodes.NotFound, "work item gone")
+		h.worker.processActivity(context.Background(), h.client, "token", request("2.0"))
+		require.True(t, ran)
+		require.Len(t, h.client.activityCompletions, 1)
+		spans := h.spans()
+		require.Len(t, spans, 1)
+		require.Equal(t, "activity:Work@(2.0)", spans[0].Name())
+		require.Equal(t, "2.0", spanAttribute(spans[0], "durabletask.task.version"))
+		require.Equal(t, "Completed", spanAttribute(spans[0], "durabletask.task.status"))
+		require.Equal(t, codes.Unset, spans[0].Status().Code)
+		requireTaskIDAttribute(t, spans[0], 3)
+	})
+	t.Run("custom base ID generator", func(t *testing.T) {
+		h := newTracingHarnessWithProviderOptions(t, registry, true,
+			[]sdktrace.TracerProviderOption{tracing.WithIDGenerator(fixedIDGenerator{})})
+		h.worker.processActivity(context.Background(), h.client, "token", request(""))
+		spans := h.spans()
+		require.Len(t, spans, 1)
+		require.Equal(t, "activity:Work", spans[0].Name())
+		require.Equal(t, trace.SpanID{1}, spans[0].SpanContext().SpanID())
+		require.Equal(t, helpers.SpanContextFromTraceContext(parentTrace).TraceID(), spans[0].SpanContext().TraceID())
+	})
+}
+
+func TestWorkerTracingVersionedTerminatedOrchestration(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorNVersion("Versioned", "1.0", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.CallActivity("Work", task.WithActivityVersion("2.0")).Await(nil); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("never", -1).Await(nil)
+	}))
+	_, parentTrace := newTraceParent(trace.FlagsSampled)
+	backend := newFakeOrchestrationBackend("versioned", helpers.NewExecutionStartedEvent(
+		"Versioned", "versioned", nil, nil, parentTrace, nil, wrapperspb.String("1.0")))
+	h := newTracingHarness(t, registry, true)
+	backend.dispatch(t, h)
+	backend.dispatch(t, h, helpers.NewTaskCompletedEvent(0, nil))
+	activities := spansNamed(h.spans(), "activity:Work@(2.0)")
+	require.Len(t, activities, 1)
+	require.Equal(t, "2.0", spanAttribute(activities[0], "durabletask.task.version"))
+
+	backend.dispatch(t, h, helpers.NewExecutionTerminatedEvent(wrapperspb.String(`"stop"`), false))
+	orchestrations := spansNamed(h.spans(), "orchestration:Versioned@(1.0)")
+	require.Len(t, orchestrations, 1)
+	require.Equal(t, "1.0", spanAttribute(orchestrations[0], "durabletask.task.version"))
+	require.Equal(t, "Terminated", spanAttribute(orchestrations[0], "durabletask.task.status"))
+	require.Equal(t, codes.Unset, orchestrations[0].Status().Code)
+}
+
+func TestWorkerTracingRewindReparentsOrchestration(t *testing.T) {
+	_, originalTrace := newTraceParent(trace.FlagsSampled)
+	rewindParent := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    trace.TraceID{9, 8, 7, 6, 5, 4, 3, 2, 1, 9, 8, 7, 6, 5, 4, 3},
+		SpanID:     trace.SpanID{9, 8, 7, 6, 5, 4, 3, 2},
+		TraceFlags: trace.FlagsSampled,
+		Remote:     true,
+	})
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Child", func(*task.OrchestrationContext) (any, error) {
+		return nil, nil
+	}))
+	h := newTracingHarness(t, registry, true)
+	h.worker.processOrchestration(context.Background(), h.client, "token", &protos.OrchestratorRequest{
+		InstanceId: "child",
+		PastEvents: []*protos.HistoryEvent{
+			helpers.NewOrchestratorStartedEvent(),
+			helpers.NewExecutionStartedEvent("Child", "child", nil, nil, originalTrace, nil),
+			helpers.NewOrchestratorStartedEvent(),
+			{EventId: -1, EventType: &protos.HistoryEvent_ExecutionRewound{ExecutionRewound: &protos.ExecutionRewoundEvent{
+				ParentTraceContext: helpers.TraceContextFromSpanContext(rewindParent),
+			}}},
+		},
+		NewEvents: []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent()},
+	})
+	spans := spansNamed(h.spans(), "orchestration:Child")
+	require.Len(t, spans, 1)
+	require.Equal(t, rewindParent.TraceID(), spans[0].SpanContext().TraceID())
+	require.Equal(t, rewindParent.SpanID(), spans[0].Parent().SpanID())
+}
+
+func TestWorkerTracingMissingHistoryTimestamps(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Work", func(ctx *task.OrchestrationContext) (any, error) {
+		return nil, ctx.CallActivity("Work").Await(nil)
+	}))
+	_, parentTrace := newTraceParent(trace.FlagsSampled)
+	completedAt := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
+	for name, completedTimestamp := range map[string]*timestamppb.Timestamp{
+		"both missing":      nil,
+		"scheduled missing": timestamppb.New(completedAt),
+	} {
+		t.Run(name, func(t *testing.T) {
+			scheduled := helpers.NewTaskScheduledEvent(0, "Work", nil, nil,
+				helpers.TraceContextFromSpanContext(
+					helpers.SpanContextFromTraceContext(parentTrace).WithSpanID(trace.SpanID{9})))
+			scheduled.Timestamp = nil
+			completed := helpers.NewTaskCompletedEvent(0, nil)
+			completed.Timestamp = completedTimestamp
+			h := newTracingHarness(t, registry, true)
+			before := time.Now()
+			h.worker.processOrchestration(context.Background(), h.client, "token", &protos.OrchestratorRequest{
+				InstanceId: "timestamps",
+				NewEvents: []*protos.HistoryEvent{
+					helpers.NewOrchestratorStartedEvent(),
+					helpers.NewExecutionStartedEvent("Work", "timestamps", nil, nil, parentTrace, nil),
+					scheduled,
+					completed,
+				},
+			})
+			spans := spansNamed(h.spans(), "activity:Work")
+			require.Len(t, spans, 1)
+			if completedTimestamp == nil {
+				require.False(t, spans[0].StartTime().Before(before))
+				require.False(t, spans[0].EndTime().Before(spans[0].StartTime()))
+			} else {
+				require.True(t, completedAt.Equal(spans[0].StartTime()))
+				require.True(t, completedAt.Equal(spans[0].EndTime()))
+			}
+		})
+	}
 }

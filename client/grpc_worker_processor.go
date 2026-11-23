@@ -18,7 +18,6 @@ import (
 	"github.com/microsoft/durabletask-go/internal/largepayload"
 	"github.com/microsoft/durabletask-go/internal/protos"
 	"github.com/microsoft/durabletask-go/task"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -553,22 +552,21 @@ func (w *TaskHubGrpcWorker) processActivity(
 	)
 	event.GetTaskScheduled().Tags = contextprop.Clone(request.Tags)
 	executeCtx := ctx
-	var activitySpan trace.Span
+	var activityTrace *dttrace.Activity
 	if w.options.tracer != nil {
-		executeCtx, activitySpan = w.options.tracer.StartActivity(
-			ctx,
+		activityTrace = w.options.tracer.NewActivity(
 			request.Name,
 			request.Version.GetValue(),
 			request.OrchestrationInstance.InstanceId,
 			request.TaskId,
 			request.ParentTraceContext,
 		)
+		executeCtx = dttrace.WithActivity(ctx, activityTrace)
 	}
-	// Work that is abandoned rather than completed is reported as an error.
-	var activityFailure *protos.TaskFailureDetails
-	activityAbandoned := true
-	defer func() { dttrace.EndActivity(activitySpan, activityFailure, activityAbandoned) }()
 	result, err := w.executor.ExecuteActivity(executeCtx, api.InstanceID(request.OrchestrationInstance.InstanceId), event)
+	// The span reports the activity's own outcome; whether that outcome reaches
+	// the backend does not change it. Rejected work never starts a span.
+	activityTrace.End(result, err)
 	var delayed workItemAbandonDelayError
 	if errors.As(err, &delayed) {
 		w.logger.Warnf(
@@ -634,9 +632,7 @@ func (w *TaskHubGrpcWorker) processActivity(
 		}
 		w.logger.Errorf("%s/%s#%d: failed to complete activity work item: %v", request.OrchestrationInstance.InstanceId, request.Name, request.TaskId, err)
 		w.abandonActivity(ctx, client, completionToken)
-		return
 	}
-	activityFailure, activityAbandoned = response.FailureDetails, false
 }
 
 func (w *TaskHubGrpcWorker) processEntityV2(

@@ -19,14 +19,13 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Tracing on the Durable Task Scheduler surface is owned by the scheduler service, not by
-// this SDK: the Go process only runs the client and the worker, and neither creates
-// orchestration, activity, or timer spans. These tests therefore assert the two halves of
-// the contract that this SDK is actually responsible for:
+// The scheduler service propagates and persists trace context but does not export durable
+// spans. By default the Go client and worker do not create orchestration, activity, or
+// timer spans either. These tests therefore assert the default contract:
 //
 //  1. The caller's W3C trace context reaches the scheduler and is durably recorded on the
-//     history, so the scheduler-side span tree is rooted in the caller's trace.
-//  2. The worker process itself never emits duplicate durabletask spans for work it runs.
+//     history, so the durable work joins the caller's trace.
+//  2. Without client.WithWorkerTracerProvider, the worker emits no Microsoft.DurableTask spans.
 //
 // Emulator limitations that are asserted loosely on purpose are called out inline.
 
@@ -103,21 +102,21 @@ func requireTraceContextsShareTrace(t *testing.T, events []*api.HistoryEvent, wa
 	}
 }
 
-// requireNoWorkerEmittedSpans asserts the documented Durable Task Scheduler limitation: the
-// Go worker and client do not emit durabletask spans, because the scheduler service owns
-// orchestration, activity, and timer span emission. This also guards against a regression
-// that would duplicate the service-side spans locally.
+// requireNoWorkerEmittedSpans asserts that the Go worker and client emit no
+// Microsoft.DurableTask spans by default. The scheduler service only propagates and
+// persists trace context, so durable spans come from the SDK only when
+// client.WithWorkerTracerProvider enables them.
 func requireNoWorkerEmittedSpans(t *testing.T, exporter *tracetest.InMemoryExporter) {
 	t.Helper()
 	spans := exporter.GetSpans().Snapshots()
 	durableSpans := make([]sdktrace.ReadOnlySpan, 0, len(spans))
 	for _, span := range spans {
-		if span.InstrumentationScope().Name == "durabletask" {
+		if span.InstrumentationScope().Name == "Microsoft.DurableTask" {
 			durableSpans = append(durableSpans, span)
 		}
 	}
 	require.Emptyf(t, durableSpans,
-		"the Durable Task Scheduler worker must not emit durabletask spans locally; got: %s",
+		"the Durable Task Scheduler worker must not emit durable spans unless tracing is enabled; got: %s",
 		tracingtree.Describe(durableSpans))
 }
 

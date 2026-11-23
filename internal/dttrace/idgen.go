@@ -86,7 +86,7 @@ func (s Sampler) ShouldSample(parameters sdktrace.SamplingParameters) sdktrace.S
 
 // Description implements sdktrace.Sampler.
 func (s Sampler) Description() string {
-	return s.base().Description()
+	return "DurableTaskSampler{" + s.base().Description() + "}"
 }
 
 func (s Sampler) base() sdktrace.Sampler {
