@@ -173,6 +173,49 @@ func finishTestRewind(
 	require.NoError(t, err)
 }
 
+func TestRewindDiscardsLifecycleRequestsFromFailedTurn(t *testing.T) {
+	ctx := context.Background()
+	for name, request := range map[string]func(s *Server, id string) error{
+		"suspend": func(s *Server, id string) error {
+			_, err := s.SuspendInstance(ctx, &protos.SuspendRequest{InstanceId: id})
+			return err
+		},
+		"terminate": func(s *Server, id string) error {
+			_, err := s.TerminateInstance(ctx, &protos.TerminateRequest{InstanceId: id})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := NewServer()
+			defer s.Close()
+			inst := s.newInstanceLocked("id", "orchestrator", nil, nil, nil, nil, nil, nil)
+			started := inst.pending[0]
+			item := s.nextWorkItemLocked(nil, 1, workItemLimits{})
+			require.NoError(t, request(s, inst.id))
+			require.NotEmpty(t, inst.pending)
+			_, err := s.CompleteOrchestratorTask(ctx, &protos.OrchestratorResponse{
+				CompletionToken: item.GetCompletionToken(),
+				Actions: []*protos.OrchestratorAction{{OrchestratorActionType: &protos.OrchestratorAction_CompleteOrchestration{
+					CompleteOrchestration: &protos.CompleteOrchestrationAction{
+						OrchestrationStatus: protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,
+						FailureDetails:      failureDetails("failure", "boom"),
+					},
+				}}},
+			})
+			require.NoError(t, err)
+			require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, inst.status)
+
+			_, err = s.RewindInstance(ctx, &protos.RewindInstanceRequest{InstanceId: inst.id})
+			require.NoError(t, err)
+			item = s.nextWorkItemLocked(nil, 1, workItemLimits{})
+			finishTestRewind(t, s, item, started, "renewed")
+			require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING, inst.status)
+			require.Len(t, inst.pending, 1, "a request superseded by failure must not reach the recovered worker")
+			require.NotNil(t, inst.pending[0].GetOrchestratorStarted())
+		})
+	}
+}
+
 func TestRewindIsolatesInboxAcrossRedelivery(t *testing.T) {
 	s := NewServer()
 	defer s.Close()
