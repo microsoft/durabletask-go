@@ -665,7 +665,7 @@ To isolate an orchestration from its dependencies, register stub activities and 
 
 The in-memory service has these limits:
 
-- Timers use the Go runtime clock. With Go 1.25 or later, `testing/synctest`
+- Timers use the Go runtime clock. `testing/synctest`
   can advance timers without waiting in real time while the test goroutines are
   blocked. The `durabletasktest` tests include a 24-hour timer example.
 - State is kept in memory only. It is discarded when the host closes.
