@@ -5,6 +5,7 @@ package loops
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -161,6 +162,13 @@ func pollingLoopsThatProgress(ctx *task.OrchestrationContext) (any, error) {
 		}
 	}
 	pollWithGenericIterator(work, wait)
+	waitValues := func(yield func(int) bool) {
+		_ = ctx.CreateTimer(time.Second).Await(nil)
+		yield(0)
+	}
+	for !task.IsCompleted(work) {
+		_ = slices.Collect(waitValues)
+	}
 	for !task.IsCompleted(work) {
 		break
 	}

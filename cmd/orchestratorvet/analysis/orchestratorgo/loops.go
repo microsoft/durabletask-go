@@ -230,9 +230,22 @@ func (p *loopProbe) scanCall(call *ast.CallExpr) {
 		// Any durable task interaction may make progress or block.
 		p.inconclusive = true
 	case pureLoopPackages[path]:
+		if callMayInvokeUserCode(p.checker.pass, call) {
+			p.inconclusive = true
+		}
 	default:
 		p.inconclusive = true
 	}
+}
+
+func callMayInvokeUserCode(pass *analysis.Pass, call *ast.CallExpr) bool {
+	for _, argument := range call.Args {
+		argumentType := pass.TypesInfo.TypeOf(argument)
+		if isFunction(argumentType) || isTypeParameter(argumentType) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *loopProbe) scanCallee(node ast.Node) {
