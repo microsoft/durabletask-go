@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -591,7 +592,471 @@ func TestUnsupportedFeatures(t *testing.T) {
 
 	err := host.Client().SignalEntity(ctx, api.NewEntityID("counter", "a"), "add")
 	assert.ErrorIs(t, err, api.ErrFeatureNotSupported)
-	assert.ErrorIs(t, host.Client().RewindInstance(ctx, metadata.InstanceID), api.ErrFeatureNotSupported)
+}
+
+func TestRewindRecovery(t *testing.T) {
+	for _, mode := range []string{"activity", "child", "purged-child", "nested-child"} {
+		t.Run(mode, func(t *testing.T) {
+			var repaired atomic.Bool
+			var goodCalls, failedCalls, parentGoodCalls atomic.Int32
+			r := task.NewTaskRegistry()
+			require.NoError(t, r.AddActivityN("Good", func(task.ActivityContext) (any, error) {
+				goodCalls.Add(1)
+				return "kept", nil
+			}))
+			require.NoError(t, r.AddActivityN("ParentGood", func(task.ActivityContext) (any, error) {
+				parentGoodCalls.Add(1)
+				return "parent", nil
+			}))
+			require.NoError(t, r.AddActivityN("Flaky", func(ctx task.ActivityContext) (any, error) {
+				failedCalls.Add(1)
+				var input string
+				if err := ctx.GetInput(&input); err != nil {
+					return nil, err
+				}
+				if !repaired.Load() {
+					return nil, errors.New("dependency unavailable")
+				}
+				return "recovered:" + input, nil
+			}))
+			require.NoError(t, r.AddOrchestratorN("Leaf", func(ctx *task.OrchestrationContext) (any, error) {
+				var input, good, result string
+				if err := ctx.GetInput(&input); err != nil {
+					return nil, err
+				}
+				if err := ctx.CallActivity("Good").Await(&good); err != nil {
+					return nil, err
+				}
+				err := ctx.CallActivity("Flaky", task.WithActivityInput(input)).Await(&result)
+				return good + ":" + result, err
+			}))
+			require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+				var input, good, result string
+				if err := ctx.GetInput(&input); err != nil {
+					return nil, err
+				}
+				if err := ctx.CallActivity("ParentGood").Await(&good); err != nil {
+					return nil, err
+				}
+				childName := "Leaf"
+				if mode == "nested-child" && ctx.ID == "root" {
+					childName = "Parent"
+				}
+				err := ctx.CallSubOrchestrator(childName, task.WithSubOrchestratorInput(input),
+					task.WithSubOrchestrationInstanceID(string(ctx.ID)+"-child")).Await(&result)
+				return good + ":" + result, err
+			}))
+			host := durabletasktest.New(t, r)
+			ctx := testContext(t)
+			name := "Leaf"
+			ids := []api.InstanceID{"root"}
+			want := "kept:recovered:payload"
+			if mode != "activity" {
+				name = "Parent"
+				ids = append(ids, "root-child")
+				want = "parent:" + want
+			}
+			if mode == "nested-child" {
+				ids = append(ids, "root-child-child")
+				want = "parent:" + want
+			}
+			failed := run(t, host, name, api.WithInstanceID("root"), api.WithInput("payload"))
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+			before := make(map[api.InstanceID]string)
+			for _, id := range ids {
+				metadata, err := host.Client().FetchOrchestrationMetadata(ctx, id)
+				require.NoError(t, err)
+				before[id] = metadata.ExecutionID
+			}
+			if mode == "purged-child" {
+				require.NoError(t, host.Client().PurgeOrchestrationState(ctx, "root-child"))
+			}
+			repaired.Store(true)
+			require.NoError(t, host.Client().RewindInstance(ctx, "root", api.WithRewindReason("dependency repaired")))
+			completed, err := host.Client().WaitForOrchestrationCompletion(ctx, "root")
+			require.NoError(t, err)
+			require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
+			var output string
+			require.NoError(t, completed.ReadOutput(&output))
+			require.Equal(t, want, output)
+			require.Nil(t, completed.FailureDetails)
+			require.False(t, completed.CompletedAt.IsZero())
+			// Successive completions can share a wall-clock tick.
+			require.False(t, completed.CompletedAt.Before(failed.CompletedAt))
+			goodWant := int32(1)
+			if mode == "purged-child" {
+				goodWant = 2 // A purged child's successful history is no longer available.
+			}
+			require.Equal(t, goodWant, goodCalls.Load())
+			require.EqualValues(t, 2, failedCalls.Load())
+			require.EqualValues(t, len(ids)-1, parentGoodCalls.Load())
+			for i, id := range ids {
+				history, historyErr := host.Client().GetOrchestrationHistory(ctx, id, api.HistoryQuery{})
+				require.NoError(t, historyErr)
+				require.NotEqual(t, before[id], history.ExecutionID)
+				rewinds := 0
+				for _, event := range history.Events {
+					require.NotEqual(t, api.HistoryEventTaskFailed, event.Type)
+					require.NotEqual(t, api.HistoryEventSubOrchestrationInstanceFailed, event.Type)
+					if event.ExecutionRewound != nil {
+						rewinds++
+						require.Equal(t, "dependency repaired", event.ExecutionRewound.Reason)
+					}
+					if i > 0 && event.ExecutionStarted != nil {
+						parent, parentErr := host.Client().FetchOrchestrationMetadata(ctx, ids[i-1])
+						require.NoError(t, parentErr)
+						require.Equal(t, parent.ExecutionID, event.ExecutionStarted.Parent.ExecutionID)
+					}
+				}
+				wantRewinds := 1
+				if mode == "purged-child" && i > 0 {
+					wantRewinds = 0
+				}
+				require.Equal(t, wantRewinds, rewinds)
+			}
+		})
+	}
+}
+
+func TestRewindRecoversOutstandingWork(t *testing.T) {
+	var repaired atomic.Bool
+	var siblingCalls atomic.Int32
+	var startedOnce, releaseOnce sync.Once
+	started, release := make(chan struct{}), make(chan struct{})
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddActivityN("Sibling", func(ctx task.ActivityContext) (any, error) {
+		siblingCalls.Add(1)
+		startedOnce.Do(func() { close(started) })
+		select {
+		case <-release:
+			return "sibling", nil
+		case <-ctx.Context().Done():
+			return nil, ctx.Context().Err()
+		}
+	}))
+	require.NoError(t, r.AddActivityN("Flaky", func(ctx task.ActivityContext) (any, error) {
+		select {
+		case <-started:
+		case <-ctx.Context().Done():
+			return nil, ctx.Context().Err()
+		}
+		if !repaired.Load() {
+			return nil, errors.New("dependency unavailable")
+		}
+		return "repaired", nil
+	}))
+	require.NoError(t, r.AddOrchestratorN("Concurrent", func(ctx *task.OrchestrationContext) (any, error) {
+		sibling := ctx.CallActivity("Sibling")
+		timer := ctx.CreateTimer(2 * time.Second)
+		flaky := ctx.CallActivity("Flaky")
+		var fixed, message, result string
+		if err := flaky.Await(&fixed); err != nil {
+			return nil, err
+		}
+		if err := ctx.WaitForSingleEvent("message", -1).Await(&message); err != nil {
+			return nil, err
+		}
+		if err := sibling.Await(&result); err != nil {
+			return nil, err
+		}
+		if err := timer.Await(nil); err != nil {
+			return nil, err
+		}
+		return fixed + ":" + result + ":" + message, nil
+	}))
+	host := durabletasktest.New(t, r)
+	t.Cleanup(unblock)
+	ctx := testContext(t)
+	failed := run(t, host, "Concurrent", api.WithInstanceID("concurrent"))
+	require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+	history, err := host.Client().GetOrchestrationHistory(ctx, failed.InstanceID, api.HistoryQuery{})
+	require.NoError(t, err)
+	var timerCreated bool
+	for _, event := range history.Events {
+		timerCreated = timerCreated || event.Type == api.HistoryEventTimerCreated
+		require.NotEqual(t, api.HistoryEventTimerFired, event.Type)
+	}
+	require.True(t, timerCreated)
+
+	repaired.Store(true)
+	require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID))
+	require.NoError(t, host.Client().RaiseEvent(ctx, failed.InstanceID, "message", api.WithEventPayload("kept")))
+	require.Eventually(t, func() bool {
+		metadata, fetchErr := host.Client().FetchOrchestrationMetadata(ctx, failed.InstanceID)
+		return fetchErr == nil && metadata.ExecutionID != failed.ExecutionID
+	}, 10*time.Second, 5*time.Millisecond)
+	unblock()
+
+	completed, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
+	var output string
+	require.NoError(t, completed.ReadOutput(&output))
+	require.Equal(t, "repaired:sibling:kept", output)
+	require.EqualValues(t, 1, siblingCalls.Load())
+}
+
+func TestRewindRecoversChildCompletedAfterParentFailure(t *testing.T) {
+	var repaired atomic.Bool
+	var childCalls atomic.Int32
+	var startedOnce, releaseOnce sync.Once
+	started, release := make(chan struct{}), make(chan struct{})
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddActivityN("ChildWork", func(ctx task.ActivityContext) (any, error) {
+		childCalls.Add(1)
+		startedOnce.Do(func() { close(started) })
+		select {
+		case <-release:
+			return "child result", nil
+		case <-ctx.Context().Done():
+			return nil, ctx.Context().Err()
+		}
+	}))
+	require.NoError(t, r.AddActivityN("Flaky", func(ctx task.ActivityContext) (any, error) {
+		select {
+		case <-started:
+		case <-ctx.Context().Done():
+			return nil, ctx.Context().Err()
+		}
+		if !repaired.Load() {
+			return nil, errors.New("dependency unavailable")
+		}
+		return nil, nil
+	}))
+	require.NoError(t, r.AddOrchestratorN("Child", func(ctx *task.OrchestrationContext) (any, error) {
+		var result string
+		err := ctx.CallActivity("ChildWork").Await(&result)
+		return result, err
+	}))
+	require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+		child := ctx.CallSubOrchestrator("Child", task.WithSubOrchestrationInstanceID("late-child"))
+		if err := ctx.CallActivity("Flaky").Await(nil); err != nil {
+			return nil, err
+		}
+		var result string
+		err := child.Await(&result)
+		return result, err
+	}))
+	host := durabletasktest.New(t, r)
+	t.Cleanup(unblock)
+	ctx := testContext(t)
+	failed := run(t, host, "Parent", api.WithInstanceID("parent"))
+	require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+	unblock()
+	child, err := host.Client().WaitForOrchestrationCompletion(ctx, "late-child")
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, child.RuntimeStatus)
+
+	repaired.Store(true)
+	require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID))
+	completed, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
+	var output string
+	require.NoError(t, completed.ReadOutput(&output))
+	require.Equal(t, "child result", output)
+	after, err := host.Client().FetchOrchestrationMetadata(ctx, child.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, child.ExecutionID, after.ExecutionID)
+	require.EqualValues(t, 1, childCalls.Load())
+}
+
+func TestRewindRejectsChildIDCollision(t *testing.T) {
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddOrchestratorN("Unrelated", func(ctx *task.OrchestrationContext) (any, error) {
+		return nil, ctx.WaitForSingleEvent("release", -1).Await(nil)
+	}))
+	require.NoError(t, r.AddOrchestratorN("Child", func(*task.OrchestrationContext) (any, error) {
+		return "owned", nil
+	}))
+	require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+		var result string
+		err := ctx.CallSubOrchestrator("Child", task.WithSubOrchestrationInstanceID("shared")).Await(&result)
+		return result, err
+	}))
+	host := durabletasktest.New(t, r)
+	ctx := testContext(t)
+	shared, err := host.Client().ScheduleNewOrchestration(ctx, "Unrelated", api.WithInstanceID("shared"))
+	require.NoError(t, err)
+	unrelated, err := host.Client().WaitForOrchestrationStart(ctx, shared)
+	require.NoError(t, err)
+	failed := run(t, host, "Parent", api.WithInstanceID("parent"))
+	require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+	require.Contains(t, failed.FailureDetails.ErrorMessage, "already exists")
+
+	require.ErrorIs(t, host.Client().RewindInstance(ctx, failed.InstanceID), api.ErrDuplicateInstance)
+	after, err := host.Client().FetchOrchestrationMetadata(ctx, shared)
+	require.NoError(t, err)
+	require.Equal(t, unrelated.ExecutionID, after.ExecutionID)
+	require.Equal(t, "Unrelated", after.Name)
+	require.Equal(t, api.RUNTIME_STATUS_RUNNING, after.RuntimeStatus)
+
+	require.NoError(t, host.Client().RaiseEvent(ctx, shared, "release"))
+	_, err = host.Client().WaitForOrchestrationCompletion(ctx, shared)
+	require.NoError(t, err)
+	require.NoError(t, host.Client().PurgeOrchestrationState(ctx, shared))
+	require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID))
+	completed, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
+	var output string
+	require.NoError(t, completed.ReadOutput(&output))
+	require.Equal(t, "owned", output)
+}
+
+func TestRewindInvalidState(t *testing.T) {
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddOrchestratorN("Done", func(*task.OrchestrationContext) (any, error) {
+		return nil, nil
+	}))
+	require.NoError(t, r.AddOrchestratorN("Waiting", func(ctx *task.OrchestrationContext) (any, error) {
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	host := durabletasktest.New(t, r)
+	ctx := testContext(t)
+	require.ErrorIs(t, host.Client().RewindInstance(ctx, "missing"), api.ErrInstanceNotFound)
+	done := run(t, host, "Done")
+	require.ErrorIs(t, host.Client().RewindInstance(ctx, done.InstanceID), api.ErrInvalidState)
+	id, err := host.Client().ScheduleNewOrchestration(ctx, "Waiting")
+	require.NoError(t, err)
+	_, err = host.Client().WaitForOrchestrationStart(ctx, id)
+	require.NoError(t, err)
+	require.ErrorIs(t, host.Client().RewindInstance(ctx, id), api.ErrInvalidState)
+	require.NoError(t, host.Client().SuspendOrchestration(ctx, id, "test"))
+	require.ErrorIs(t, host.Client().RewindInstance(ctx, id), api.ErrInvalidState)
+	require.NoError(t, host.Client().TerminateOrchestration(ctx, id))
+	_, err = host.Client().WaitForOrchestrationCompletion(ctx, id)
+	require.NoError(t, err)
+	require.ErrorIs(t, host.Client().RewindInstance(ctx, id), api.ErrInvalidState)
+}
+
+func TestRewindRejectsUnsafeHistory(t *testing.T) {
+	for _, mode := range []string{"root", "child"} {
+		t.Run(mode, func(t *testing.T) {
+			var calls atomic.Int32
+			r := task.NewTaskRegistry()
+			for _, name := range []string{"handled", "good", "terminal"} {
+				require.NoError(t, r.AddActivityN(name, func(task.ActivityContext) (any, error) {
+					calls.Add(1)
+					if name != "good" {
+						return nil, errors.New(name)
+					}
+					return "kept", nil
+				}))
+			}
+			require.NoError(t, r.AddOrchestratorN("Unsafe", func(ctx *task.OrchestrationContext) (any, error) {
+				if err := ctx.CallActivity("handled").Await(nil); err == nil {
+					return nil, errors.New("expected a handled failure")
+				}
+				if err := ctx.CallActivity("good").Await(nil); err != nil {
+					return nil, err
+				}
+				return nil, ctx.CallActivity("terminal").Await(nil)
+			}))
+			require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+				return nil, ctx.CallSubOrchestrator("Unsafe", task.WithSubOrchestrationInstanceID("unsafe-child")).Await(nil)
+			}))
+			host := durabletasktest.New(t, r)
+			ctx, cancel := context.WithTimeout(testContext(t), 10*time.Second)
+			defer cancel()
+			name := "Unsafe"
+			if mode == "child" {
+				name = "Parent"
+			}
+			failed := run(t, host, name)
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+			require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID))
+			rejected, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+			require.NoError(t, err)
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, rejected.RuntimeStatus)
+			if mode == "child" {
+				require.NotEqual(t, failed.ExecutionID, rejected.ExecutionID)
+				rejected, err = host.Client().FetchOrchestrationMetadata(ctx, "unsafe-child")
+				require.NoError(t, err)
+			} else {
+				require.Equal(t, failed.ExecutionID, rejected.ExecutionID)
+			}
+			require.Contains(t, rejected.FailureDetails.ErrorMessage, "Go SDK cannot safely rewind this history")
+			require.EqualValues(t, 3, calls.Load())
+		})
+	}
+}
+
+func TestRewindRetriesAfterRejectedReplacement(t *testing.T) {
+	for _, mode := range []string{"root", "child"} {
+		t.Run(mode, func(t *testing.T) {
+			var repaired atomic.Bool
+			r := task.NewTaskRegistry()
+			require.NoError(t, r.AddActivityN("Good", func(task.ActivityContext) (any, error) {
+				return strings.Repeat("x", 40_000), nil
+			}))
+			require.NoError(t, r.AddActivityN("Flaky", func(task.ActivityContext) (any, error) {
+				if !repaired.Load() {
+					return nil, errors.New("dependency unavailable")
+				}
+				return "recovered", nil
+			}))
+			require.NoError(t, r.AddOrchestratorN("Leaf", func(ctx *task.OrchestrationContext) (any, error) {
+				if err := ctx.CallActivity("Good").Await(nil); err != nil {
+					return nil, err
+				}
+				var result string
+				err := ctx.CallActivity("Flaky").Await(&result)
+				return result, err
+			}))
+			require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+				var result string
+				err := ctx.CallSubOrchestrator("Leaf", task.WithSubOrchestrationInstanceID("leaf-child")).Await(&result)
+				return result, err
+			}))
+			// The leaf's replacement history exceeds this limit only with the long reason.
+			host := durabletasktest.New(t, r,
+				durabletasktest.WithWorkerOptions(client.WithMaxOrchestratorCompletionBytes(64*1024)))
+			ctx := testContext(t)
+			name, leafID := "Leaf", api.InstanceID("")
+			if mode == "child" {
+				name, leafID = "Parent", "leaf-child"
+			}
+			failed := run(t, host, name)
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+			if leafID == "" {
+				leafID = failed.InstanceID
+			}
+			leafBefore, err := host.Client().FetchOrchestrationMetadata(ctx, leafID)
+			require.NoError(t, err)
+			repaired.Store(true)
+
+			require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID,
+				api.WithRewindReason(strings.Repeat("r", 30_000))))
+			rejected, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+			require.NoError(t, err)
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, rejected.RuntimeStatus)
+			if mode == "child" {
+				require.NotEqual(t, failed.ExecutionID, rejected.ExecutionID, "the renewed parent observes the rejection")
+			}
+			leaf, err := host.Client().FetchOrchestrationMetadata(ctx, leafID)
+			require.NoError(t, err)
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, leaf.RuntimeStatus)
+			require.Equal(t, leafBefore.ExecutionID, leaf.ExecutionID)
+			require.Equal(t, api.ErrorTypeOrchestratorResponseTooLarge, api.ErrorType(leaf.FailureDetails.ErrorType))
+			history, err := host.Client().GetOrchestrationHistory(ctx, leafID, api.HistoryQuery{})
+			require.NoError(t, err)
+			for _, event := range history.Events {
+				require.NotEqual(t, api.HistoryEventExecutionRewound, event.Type,
+					"a rejected rewind must not change the rewindable history")
+			}
+
+			require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID, api.WithRewindReason("short")))
+			completed, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+			require.NoError(t, err)
+			require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
+			var output string
+			require.NoError(t, completed.ReadOutput(&output))
+			require.Equal(t, "recovered", output)
+		})
+	}
 }
 
 func TestQueryByTaskHubNameIsNotSupported(t *testing.T) {

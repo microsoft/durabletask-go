@@ -20,9 +20,15 @@
 //
 // Timers use the Go runtime clock. Tests can use testing/synctest to
 // advance timers without waiting in real time.
-// Durable entities and orchestration rewind are not supported: entity client
-// operations and rewind fail with [api.ErrFeatureNotSupported], and an
-// orchestration that calls, signals, or locks an entity fails.
+// Failed orchestrations can be rewound with the same history-safety limitations
+// as the production worker. Rewind enqueues recovery and preserves successful
+// work; outstanding timers and activities are recovered. Activities can run
+// again if their results are unavailable. Purged children without retained
+// results are recreated without their previous history; conflicting child IDs
+// prevent rewind.
+// Durable entities are not supported: entity client operations fail with
+// [api.ErrFeatureNotSupported], and an orchestration that calls, signals, or
+// locks an entity fails.
 package durabletasktest
 
 import (
