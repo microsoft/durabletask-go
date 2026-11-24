@@ -351,7 +351,10 @@ func (s *Server) CompleteActivityTask(_ context.Context, resp *protos.ActivityRe
 	}
 	taskID := item.request.GetTaskId()
 	var event *protos.HistoryEvent
-	if resp.GetFailureDetails() != nil {
+	if failure := oversizedCompletionFailure(errorTypeActivityResponseTooLarge, "activity response", resp); failure != nil {
+		// Fail the task rather than store a result over the receive limit.
+		event = helpers.NewTaskFailedEvent(taskID, failure)
+	} else if resp.GetFailureDetails() != nil {
 		event = helpers.NewTaskFailedEvent(taskID, resp.GetFailureDetails())
 	} else {
 		event = helpers.NewTaskCompletedEvent(taskID, resp.GetResult())
@@ -589,10 +592,15 @@ func (s *Server) createSubOrchestrationLocked(parent *instance, taskID int32, ac
 	parentInfo := helpers.NewParentInfo(taskID, parent.name, parent.id)
 	parentInfo.Version = parent.version
 	parentInfo.OrchestrationInstance.ExecutionId = wrapperspb.String(parent.executionID)
-	s.newInstanceLocked(childID, action.GetName(), action.GetVersion(), action.GetInput(), action.GetTags(),
+	child := s.newInstanceLocked(childID, action.GetName(), action.GetVersion(), action.GetInput(), action.GetTags(),
 		parentInfo, action.GetParentTraceContext(), nil)
 	if !slices.Contains(parent.children, childID) {
 		parent.children = append(parent.children, childID)
+	}
+	if terminated := parent.recursiveTermination(); terminated != nil {
+		// The parent was terminated recursively while this turn was in flight,
+		// after its existing children were terminated.
+		s.terminateLocked(child, terminated.GetInput(), true)
 	}
 }
 

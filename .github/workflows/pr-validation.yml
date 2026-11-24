@@ -72,10 +72,29 @@ jobs:
         run: go mod download
       
       - name: Install Protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: ${{ env.PROTOC_VERSION }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version_pattern="${PROTOC_VERSION//./\\.}"
+          version_pattern="${version_pattern//x/[0-9]+}"
+          version="$(
+            gh api --paginate repos/protocolbuffers/protobuf/releases \
+              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' |
+              sed -nE "s/^v(${version_pattern})$/\\1/p" |
+              sort -V |
+              tail -n 1
+          )"
+          if [[ -z "$version" ]]; then
+            echo "::error::No stable protoc release matches PROTOC_VERSION=$PROTOC_VERSION"
+            exit 1
+          fi
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$RUNNER_TEMP/protoc.zip" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${version}/protoc-${version}-linux-x86_64.zip"
+          unzip -q "$RUNNER_TEMP/protoc.zip" -d "$RUNNER_TEMP/protoc"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/protoc/bin/protoc" --version
 
       - name: Installing protoc-gen-go
         run: |

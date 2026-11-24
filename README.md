@@ -668,8 +668,9 @@ The in-memory service has these limits:
 - Timers use the Go runtime clock. `testing/synctest`
   can advance timers without waiting in real time while the test goroutines are
   blocked. The `durabletasktest` tests include a 24-hour timer example.
-- Durable entities aren't supported. Entity client calls return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails.
+- Durable entities aren't supported. Entity client calls return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails. The service has no task hub name, so a query filtered by `TaskHubNames` also returns `api.ErrFeatureNotSupported`.
 - State is kept in memory only. It is discarded when the host closes.
+- Requests and worker completions are limited to 4 MiB, as in DTS. Larger client requests fail with `ResourceExhausted`. An activity whose completion is larger fails once with the non-retriable error type `ActivityResponseTooLarge` instead of running again.
 
 ## Development
 

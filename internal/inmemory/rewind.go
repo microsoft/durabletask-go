@@ -30,6 +30,8 @@ func (s *Server) RewindInstance(_ context.Context, req *protos.RewindInstanceReq
 			fmt.Sprintf("orchestration instance %q is not in a failed state", inst.id), grpcerrors.ReasonInvalidState)
 	}
 	rewind := newRewindEvent(req.GetReason(), nil)
+	// The request limit leaves room for a reason that fits the request but not
+	// the work item that delivers it.
 	if size := rewindWorkItemSize(inst, rewind); size > maxOrchestrationWorkItemSize {
 		return nil, status.Errorf(codes.InvalidArgument,
 			"rewind reason is too large: the %d-byte rewind work item exceeds the %d-byte gRPC message limit of the in-memory test backend",
