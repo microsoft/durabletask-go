@@ -21,11 +21,16 @@ const maxMessageSize = 4 << 20
 // exceeded maxMessageSize.
 const errorTypeActivityResponseTooLarge = "ActivityResponseTooLarge"
 
+// errorTypeEntityResultTooLarge identifies an entity batch whose completion
+// exceeded maxMessageSize.
+const errorTypeEntityResultTooLarge = "EntityResultTooLarge"
+
 // selfLimitedMethods check their request size themselves. They fail the work
 // item instead of rejecting the call, because a worker abandons a work item
 // whose completion is rejected and the service would dispatch it again forever.
 var selfLimitedMethods = map[string]bool{
 	protos.TaskHubSidecarService_CompleteActivityTask_FullMethodName: true,
+	protos.TaskHubSidecarService_CompleteEntityTask_FullMethodName:   true,
 }
 
 // ServerOptions returns the gRPC server options for the service. The transport

@@ -274,8 +274,7 @@ func (s *Server) rejectOversizedOperationsLocked(e *entity, events []*protos.His
 		message := s.oversizedOperationMessage(e.id, e.state, event, baseSize)
 		called := event.GetEntityOperationCalled()
 		if called == nil {
-			s.logger.Warnf("in-memory durable task service dropped entity signal %s: %s",
-				event.GetEntityOperationSignaled().GetRequestId(), message)
+			s.reportDroppedSignalLocked(event.GetEntityOperationSignaled(), message)
 			continue
 		}
 		s.respondToCallerLocked(called, &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.Now(), EventType: &protos.HistoryEvent_EntityOperationFailed{
@@ -285,6 +284,12 @@ func (s *Server) rejectOversizedOperationsLocked(e *entity, events []*protos.His
 			},
 		}})
 	}
+}
+
+// reportDroppedSignalLocked logs a warning for an entity signal that the
+// service drops, which has no caller to notify.
+func (s *Server) reportDroppedSignalLocked(signal *protos.EntityOperationSignaledEvent, reason string) {
+	s.logger.Warnf("in-memory durable task service dropped entity signal %s: %s", signal.GetRequestId(), reason)
 }
 
 // newEntityWorkItem returns a work item for an entity with no operations.
@@ -385,7 +390,9 @@ func (s *Server) AbandonTaskEntityWorkItem(
 }
 
 // CompleteEntityTask commits an entity batch: it stores the new state, sends
-// results to calling orchestrations, and applies the batch's actions.
+// results to calling orchestrations, and applies the batch's actions. A batch
+// result larger than the message limit isn't applied; its calls fail with
+// EntityResultTooLarge instead.
 func (s *Server) CompleteEntityTask(_ context.Context, result *protos.EntityBatchResult) (*protos.CompleteTaskResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -397,7 +404,18 @@ func (s *Server) CompleteEntityTask(_ context.Context, result *protos.EntityBatc
 	e := lease.entity
 	e.leased = false
 
-	if batchFailure := result.GetFailureDetails(); batchFailure != nil {
+	batchFailure := result.GetFailureDetails()
+	if failure := oversizedCompletionFailure(errorTypeEntityResultTooLarge, "entity batch result", result); failure != nil {
+		// Fail the batch rather than store a result over the receive limit.
+		batchFailure = failure
+		for _, event := range lease.events {
+			if signal := event.GetEntityOperationSignaled(); signal != nil {
+				s.reportDroppedSignalLocked(signal, fmt.Sprintf("operation %q on entity %q: %s",
+					signal.GetOperation(), e.id, failure.GetErrorMessage()))
+			}
+		}
+	}
+	if batchFailure != nil {
 		// The batch had no effect. Fail its calls rather than retrying the batch
 		// so that a persistent failure can't loop forever in a test.
 		for _, event := range lease.events {

@@ -36,9 +36,8 @@ const (
 	maxOrchestrationWorkItemSize = 4 << 20
 	maxHistoryChunkSize          = 4 << 20
 
-	// defaultMaxEntityWorkItemBytes matches gRPC's default client receive
-	// limit, which the test host's worker uses.
-	defaultMaxEntityWorkItemBytes = 4 << 20
+	// defaultMaxEntityWorkItemBytes matches the 4 MiB message limit of DTS.
+	defaultMaxEntityWorkItemBytes = maxMessageSize
 )
 
 // Server is an in-memory implementation of the TaskHubSidecarService.

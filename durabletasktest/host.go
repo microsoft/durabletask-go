@@ -35,6 +35,8 @@
 // SignalEntity returns an error wrapping [api.ErrInvalidArgument] if a signal
 // doesn't fit with the entity's current state. Calls that don't fit when they
 // are dispatched fail; signals are dropped, and the host logs a warning.
+// An entity batch whose result exceeds 4 MiB isn't applied, and its calls fail
+// with the non-retriable error type EntityResultTooLarge.
 package durabletasktest
 
 import (

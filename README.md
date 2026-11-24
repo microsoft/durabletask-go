@@ -670,7 +670,7 @@ The in-memory service has these limits:
   blocked. The `durabletasktest` tests include a 24-hour timer example.
 - The service has no task hub name, so an instance query filtered by `TaskHubNames` returns `api.ErrFeatureNotSupported`.
 - State is kept in memory only. It is discarded when the host closes.
-- Requests and worker completions are limited to 4 MiB, as in DTS. Larger client requests fail with `ResourceExhausted`. An activity whose completion is larger fails once with the non-retriable error type `ActivityResponseTooLarge` instead of running again.
+- Requests and worker completions are limited to 4 MiB, as in DTS. Larger client requests fail with `ResourceExhausted`. An activity whose completion is larger fails once with the non-retriable error type `ActivityResponseTooLarge` instead of running again. An entity batch whose result is larger isn't applied: the entity's state is unchanged, its calls fail with the non-retriable error type `EntityResultTooLarge`, and its signals are dropped with a warning.
 - An entity operation's input and the entity's state must fit together in a
   4 MiB work item. `SignalEntity` returns an error wrapping
   `api.ErrInvalidArgument` if a signal doesn't fit with the entity's current

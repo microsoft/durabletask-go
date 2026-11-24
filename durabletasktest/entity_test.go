@@ -3,6 +3,7 @@ package durabletasktest_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -504,4 +505,57 @@ func TestDroppedEntitySignalIsLogged(t *testing.T) {
 
 	require.NoError(t, c.SignalEntity(ctx, id, "set", api.WithSignalInput("small")))
 	waitForBlob(t, host, id, "small")
+}
+
+func TestOversizedEntityBatchResultFailsCalls(t *testing.T) {
+	var executions atomic.Int32
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddEntityN("large", func(ctx *task.EntityContext) (any, error) {
+		executions.Add(1)
+		if err := ctx.SetState(executions.Load()); err != nil {
+			return nil, err
+		}
+		return strings.Repeat("x", 1<<20), nil
+	}))
+	id := api.NewEntityID("large", "a")
+	require.NoError(t, r.AddOrchestratorN("CallsLarge", func(ctx *task.OrchestrationContext) (any, error) {
+		// The messages are queued together, so the entity runs them in one batch
+		// whose combined result exceeds the message limit.
+		if err := ctx.SignalEntity(id, "get"); err != nil {
+			return nil, err
+		}
+		var calls []task.Task
+		for range 5 {
+			calls = append(calls, ctx.CallEntity(id, "get"))
+		}
+		var failures []*api.FailureDetails
+		for _, call := range calls {
+			var failed *task.EntityOperationFailedError
+			if err := call.Await(nil); !errors.As(err, &failed) {
+				return nil, fmt.Errorf("expected an entity operation failure, got %w", err)
+			}
+			failures = append(failures, failed.FailureDetails)
+		}
+		return failures, nil
+	}))
+	var logs lockedBuffer
+	host := durabletasktest.New(t, r, durabletasktest.WithLogger(api.NewSlogLogger(slog.New(slog.NewTextHandler(&logs, nil)))))
+
+	metadata := run(t, host, "CallsLarge")
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, metadata.RuntimeStatus)
+	var failures []api.FailureDetails
+	require.NoError(t, metadata.ReadOutput(&failures))
+	require.Len(t, failures, 5)
+	for _, failure := range failures {
+		assert.Equal(t, api.ErrorType("EntityResultTooLarge"), failure.ErrorType)
+		assert.Contains(t, failure.ErrorMessage, "4194304-byte")
+		assert.True(t, failure.NonRetriable())
+	}
+	assert.Equal(t, int32(6), executions.Load(), "each operation runs once")
+	assert.Contains(t, logs.String(), `dropped entity signal`)
+	assert.Contains(t, logs.String(), `operation \"get\" on entity \"@large@a\": the `)
+
+	entity, err := host.Client().GetEntity(testContext(t), id)
+	require.NoError(t, err)
+	assert.Nil(t, entity, "the failed batch doesn't store state")
 }
