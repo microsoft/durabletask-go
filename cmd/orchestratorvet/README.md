@@ -237,7 +237,9 @@ The analyzer reports only what it can prove, and stays silent otherwise.
 - Imported bodies are summarized through Go analysis facts. The analyzer does
   not follow bodies across module boundaries, inside the standard library or
   the SDK's `task` package, or when module metadata is unavailable. Known
-  hazardous APIs are still checked at their call sites.
+  hazardous APIs are still checked at their call sites. Summaries do not trust
+  the initial value of an exported package variable, which an importer can
+  reassign.
 - Registry-name completeness and proofs about non-progressing loops do not
   use imported summaries.
 - Calls through interface values, struct fields, and function parameters cannot

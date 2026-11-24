@@ -530,7 +530,7 @@ func (c *checker) usesNondeterministicSource(call *ast.CallExpr) bool {
 // the single-assignment values the package index already recorded. An identifier
 // written more than once has no proven value and yields nothing.
 func (c *checker) generatorConstructor(identifier *ast.Ident) (*ast.CallExpr, bool) {
-	value := c.randomSourceValue(c.pass.TypesInfo.ObjectOf(identifier))
+	value := c.index.singleValue(c.pass.TypesInfo.ObjectOf(identifier))
 	call, ok := value.(*ast.CallExpr)
 	if !ok {
 		return nil, false
@@ -543,14 +543,6 @@ func (c *checker) generatorConstructor(identifier *ast.Ident) (*ast.CallExpr, bo
 		return nil, false
 	}
 	return call, true
-}
-
-func (c *checker) randomSourceValue(object types.Object) ast.Expr {
-	if c.collectHazard != nil && c.index.isExportedPackageVar(object) {
-		// An importer can replace a seed or generator before calling this code.
-		return nil
-	}
-	return c.index.singleValue(object)
 }
 
 // isNondeterministicValue reports whether an expression provably reaches a value
@@ -571,7 +563,7 @@ func (c *checker) isNondeterministicValue(expression ast.Expr, seen map[types.Ob
 			if _, ok := seen[object]; ok {
 				return true
 			}
-			value := c.randomSourceValue(object)
+			value := c.index.singleValue(object)
 			if value == nil {
 				return true
 			}

@@ -53,6 +53,10 @@ type packageIndex struct {
 
 	// Reuse the ancestor stack across bodies rather than allocating per function.
 	stack []ast.Node
+
+	// summarizing is set while building facts for importers, which can
+	// reassign exported package variables before calling into this package.
+	summarizing bool
 }
 
 func newPackageIndex(pass *analysis.Pass) *packageIndex {
@@ -320,6 +324,11 @@ func (index *packageIndex) singleValue(object types.Object) ast.Expr {
 	if object == nil {
 		return nil
 	}
+	if index.summarizing && index.isExportedPackageVar(object) {
+		// Importers can reassign an exported variable before calling a
+		// summarized function, without an assignment in this package.
+		return nil
+	}
 	values := index.functionValues[object]
 	if len(values) != 1 {
 		return nil
@@ -394,11 +403,6 @@ func (index *packageIndex) resolveObject(object types.Object, seen map[types.Obj
 		if function.Pkg() != nil && function.Pkg() != index.pass.Pkg && function.Exported() {
 			return functionTarget{imported: function.Origin()}
 		}
-		return functionTarget{}
-	}
-	if index.isExportedPackageVar(object) {
-		// Importers can mutate an exported function variable without an
-		// assignment in this package.
 		return functionTarget{}
 	}
 	if seen == nil {

@@ -113,6 +113,11 @@ func ambiguousVariable(ctx *task.OrchestrationContext) (any, error) {
 	return reassignedHelper(), nil
 }
 
+// ExportedOrchestrator is registered from its single package-level value.
+var ExportedOrchestrator = func(ctx *task.OrchestrationContext) (any, error) {
+	return time.Now(), nil // want `time\.Now is not deterministic in an orchestrator`
+}
+
 func register() {
 	registry := task.NewTaskRegistry()
 	_ = registry.AddOrchestrator(nestedHelpers)
@@ -123,4 +128,5 @@ func register() {
 	_ = registry.AddOrchestrator(firstSharer)
 	_ = registry.AddOrchestrator(secondSharer)
 	_ = registry.AddOrchestrator(ambiguousVariable)
+	_ = registry.AddOrchestratorN("ExportedOrchestrator", ExportedOrchestrator)
 }

@@ -57,6 +57,8 @@ func Sample() int {
 	r := rand.New(rand.NewSource(Seed))
 	return r.Int()
 }
+var Clock = Cutoff
+func Stamp() { Clock() }
 `,
 		`orders/orders.go`: `package orders
 import (
@@ -101,9 +103,10 @@ func local(ctx *task.OrchestrationContext) (any, error) {
 	fn()
 	billing.Hook(func() {}).RunAndNext()
 	_ = billing.Sample()
+	billing.Stamp()
 	return nil, nil
 }
-func init() { billing.Seed = 1 }
+func init() { billing.Seed, billing.Clock = 1, billing.Clean }
 func ignore(func()) {}
 func dynamic(r reader) { r.Read() }
 `,
@@ -142,13 +145,14 @@ func dynamic(r reader) { r.Read() }
 				"worker.go:9:24: example.com/workflows/orders.Fulfill -> example.com/workflows/billing.Cutoff -> example.com/workflows/billing.first -> example.com/workflows/billing.second: time.Now",
 				"worker.go:17:2: (example.com/workflows/billing.Ledger[T]).Read: os.Getenv",
 				"worker.go:18:9: example.com/workflows/billing.Callback: time.Now",
+				"worker.go:23:2: example.com/workflows/billing.Cutoff -> example.com/workflows/billing.first -> example.com/workflows/billing.second: time.Now",
 			} {
 				if !strings.Contains(got, want) {
 					t.Errorf("missing diagnostic %q in:\n%s", want, got)
 				}
 			}
-			if count := strings.Count(got, ".go:"); count != 3 {
-				t.Errorf("got %d diagnostic locations; want exactly 3:\n%s", count, got)
+			if count := strings.Count(got, ".go:"); count != 4 {
+				t.Errorf("got %d diagnostic locations; want exactly 4:\n%s", count, got)
 			}
 		})
 	}

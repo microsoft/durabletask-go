@@ -64,6 +64,8 @@ func (f *hazardFacts) report(c *checker, pos token.Pos, function *types.Func) {
 
 func (f *hazardFacts) export() {
 	index := f.index
+	index.summarizing = true
+	defer func() { index.summarizing = false }()
 
 	var bodies []ast.Node
 	names := make(map[ast.Node]*types.Func, len(index.functions))
