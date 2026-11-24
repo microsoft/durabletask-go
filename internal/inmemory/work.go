@@ -152,7 +152,7 @@ func countActivityLeases(leases map[string]*activityLease, streamID uint64) int 
 // leaseOrchestrationLocked leases an instance's pending events as a work item
 // that fits in one gRPC message. History that doesn't fit is streamed, and new
 // events that don't fit stay pending for later turns. If the first new event
-// can't fit on its own, the instance fails and nil is returned.
+// or a rewind can't fit on its own, the instance fails and nil is returned.
 func (s *Server) leaseOrchestrationLocked(inst *instance, streamID uint64) *protos.WorkItem {
 	rewinding := inst.rewind != nil
 	var events []*protos.HistoryEvent
@@ -182,6 +182,17 @@ func (s *Server) leaseOrchestrationLocked(inst *instance, streamID uint64) *prot
 	if len(request.PastEvents) > 0 && proto.Size(item) > maxOrchestrationWorkItemSize {
 		request.PastEvents = nil
 		request.RequiresHistoryStreaming = true
+	}
+	if rewinding && proto.Size(item) > maxOrchestrationWorkItemSize {
+		// Requeuing would fail the same way, so end the attempt.
+		s.failRewindLocked(inst, &protos.TaskFailureDetails{
+			ErrorType: "OrchestrationWorkItemTooLarge",
+			ErrorMessage: fmt.Sprintf(
+				"a %d-byte rewind work item can't be delivered within the %d-byte gRPC message limit of the in-memory test backend",
+				proto.Size(item), maxOrchestrationWorkItemSize),
+			IsNonRetriable: true,
+		})
+		return nil
 	}
 	if !rewinding && proto.Size(item) > maxOrchestrationWorkItemSize {
 		n := fittingNewEventCount(item, events)
@@ -363,7 +374,10 @@ func (s *Server) CompleteActivityTask(_ context.Context, resp *protos.ActivityRe
 	}
 	taskID := item.request.GetTaskId()
 	var event *protos.HistoryEvent
-	if resp.GetFailureDetails() != nil {
+	if failure := oversizedCompletionFailure(errorTypeActivityResponseTooLarge, "activity response", resp); failure != nil {
+		// Fail the task rather than store a result over the receive limit.
+		event = helpers.NewTaskFailedEvent(taskID, failure)
+	} else if resp.GetFailureDetails() != nil {
 		event = helpers.NewTaskFailedEvent(taskID, resp.GetFailureDetails())
 	} else {
 		event = helpers.NewTaskCompletedEvent(taskID, resp.GetResult())
@@ -424,7 +438,7 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 	inst.updatedAt = time.Now()
 	if rewind != nil {
 		if err := s.validateRewindChildrenLocked(inst, rewind.GetNewHistory(), make(map[*instance]bool)); err != nil {
-			s.failRewindLocked(inst, err)
+			s.failRewindLocked(inst, rewindValidationFailure(err))
 		} else {
 			s.applyRewindLocked(inst, rewind)
 			s.enqueueLocked(inst)
@@ -433,8 +447,10 @@ func (s *Server) CompleteOrchestratorTask(_ context.Context, resp *protos.Orches
 		return &protos.CompleteTaskResponse{}, nil
 	}
 	if lease.rewinding {
-		s.retargetRewindParentLocked(inst)
-		inst.rewind = nil
+		// The worker rejected the rewind. Don't record the attempt, so that a
+		// later rewind sees the original failure.
+		s.failRewindLocked(inst, resp.GetActions()[0].GetCompleteOrchestration().GetFailureDetails())
+		return &protos.CompleteTaskResponse{}, nil
 	}
 
 	processed := lease.events
@@ -605,10 +621,15 @@ func (s *Server) createSubOrchestrationLocked(parent *instance, taskID int32, ac
 	parentInfo := helpers.NewParentInfo(taskID, parent.name, parent.id)
 	parentInfo.Version = parent.version
 	parentInfo.OrchestrationInstance.ExecutionId = wrapperspb.String(parent.executionID)
-	s.newInstanceLocked(childID, action.GetName(), action.GetVersion(), action.GetInput(), action.GetTags(),
+	child := s.newInstanceLocked(childID, action.GetName(), action.GetVersion(), action.GetInput(), action.GetTags(),
 		parentInfo, action.GetParentTraceContext(), nil)
 	if !slices.Contains(parent.children, childID) {
 		parent.children = append(parent.children, childID)
+	}
+	if terminated := parent.recursiveTermination(); terminated != nil {
+		// The parent was terminated recursively while this turn was in flight,
+		// after its existing children were terminated.
+		s.terminateLocked(child, terminated.GetInput(), true)
 	}
 }
 

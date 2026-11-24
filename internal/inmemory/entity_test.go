@@ -150,7 +150,7 @@ func TestRewindRetainsEntityResults(t *testing.T) {
 					s.respondToCallerLocked(called.GetEntityOperationCalled(), result)
 				}
 				require.Equal(t, []*protos.HistoryEvent{result}, inst.pending)
-				s.prepareRewindLocked(inst, nil, nil)
+				s.prepareRewindLocked(inst, newRewindEvent(nil, nil))
 				renewed := proto.CloneOf(started)
 				renewed.GetExecutionStarted().OrchestrationInstance.ExecutionId = wrapperspb.String("renewed")
 				s.applyRewindLocked(inst, &protos.RewindOrchestrationAction{NewHistory: []*protos.HistoryEvent{renewed, called}})

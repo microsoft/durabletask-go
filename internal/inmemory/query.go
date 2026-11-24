@@ -14,12 +14,19 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	"github.com/microsoft/durabletask-go/internal/grpcerrors"
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
 
 // QueryInstances returns instances that match a query, ordered by creation time.
 func (s *Server) QueryInstances(_ context.Context, req *protos.QueryInstancesRequest) (*protos.QueryInstancesResponse, error) {
 	query := req.GetQuery()
+	if len(query.GetTaskHubNames()) > 0 {
+		// The in-memory service has no task hub identity, so it can't scope a query to one.
+		return nil, grpcerrors.New(codes.Unimplemented,
+			"filtering queries by task hub name is not supported by the in-memory test backend",
+			grpcerrors.ReasonFeatureUnsupported)
+	}
 	var cursorTime time.Time
 	var cursorID string
 	if token := query.GetContinuationToken().GetValue(); token != "" {

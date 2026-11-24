@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/client"
@@ -223,6 +225,41 @@ func TestEventsLargerThanOneMessageAreDeliveredAcrossTurns(t *testing.T) {
 	var total int
 	require.NoError(t, metadata.ReadOutput(&total))
 	assert.Equal(t, 2*len(payload), total)
+}
+
+func TestOversizedActivityResultFailsOnce(t *testing.T) {
+	var executions atomic.Int32
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddActivityN("Big", func(task.ActivityContext) (any, error) {
+		executions.Add(1)
+		return strings.Repeat("x", 5<<20), nil
+	}))
+	require.NoError(t, r.AddOrchestratorN("CallsBig", func(ctx *task.OrchestrationContext) (any, error) {
+		err := ctx.CallActivity("Big").Await(nil)
+		var failed *task.TaskFailedError
+		if !errors.As(err, &failed) {
+			return nil, fmt.Errorf("expected a task failure, got %w", err)
+		}
+		return failed.FailureDetails, nil
+	}))
+	host := durabletasktest.New(t, r)
+
+	metadata := run(t, host, "CallsBig")
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, metadata.RuntimeStatus)
+	var failure api.FailureDetails
+	require.NoError(t, metadata.ReadOutput(&failure))
+	assert.Equal(t, api.ErrorType("ActivityResponseTooLarge"), failure.ErrorType)
+	assert.Contains(t, failure.ErrorMessage, "4194304-byte")
+	assert.True(t, failure.NonRetriable())
+	assert.Equal(t, int32(1), executions.Load())
+}
+
+func TestRequestsOverMessageLimitAreRejected(t *testing.T) {
+	host := durabletasktest.New(t, task.NewTaskRegistry())
+
+	_, err := host.Client().ScheduleNewOrchestration(testContext(t), "Any",
+		api.WithInput(strings.Repeat("x", 5<<20)))
+	assert.Equal(t, codes.ResourceExhausted, status.Code(err))
 }
 
 func TestNewHostPreservesStartupContextAndDetachesAfterStart(t *testing.T) {
@@ -928,4 +965,86 @@ func TestRewindRejectsUnsafeHistory(t *testing.T) {
 			require.EqualValues(t, 3, calls.Load())
 		})
 	}
+}
+
+func TestRewindRetriesAfterRejectedReplacement(t *testing.T) {
+	for _, mode := range []string{"root", "child"} {
+		t.Run(mode, func(t *testing.T) {
+			var repaired atomic.Bool
+			r := task.NewTaskRegistry()
+			require.NoError(t, r.AddActivityN("Good", func(task.ActivityContext) (any, error) {
+				return strings.Repeat("x", 40_000), nil
+			}))
+			require.NoError(t, r.AddActivityN("Flaky", func(task.ActivityContext) (any, error) {
+				if !repaired.Load() {
+					return nil, errors.New("dependency unavailable")
+				}
+				return "recovered", nil
+			}))
+			require.NoError(t, r.AddOrchestratorN("Leaf", func(ctx *task.OrchestrationContext) (any, error) {
+				if err := ctx.CallActivity("Good").Await(nil); err != nil {
+					return nil, err
+				}
+				var result string
+				err := ctx.CallActivity("Flaky").Await(&result)
+				return result, err
+			}))
+			require.NoError(t, r.AddOrchestratorN("Parent", func(ctx *task.OrchestrationContext) (any, error) {
+				var result string
+				err := ctx.CallSubOrchestrator("Leaf", task.WithSubOrchestrationInstanceID("leaf-child")).Await(&result)
+				return result, err
+			}))
+			// The leaf's replacement history exceeds this limit only with the long reason.
+			host := durabletasktest.New(t, r,
+				durabletasktest.WithWorkerOptions(client.WithMaxOrchestratorCompletionBytes(64*1024)))
+			ctx := testContext(t)
+			name, leafID := "Leaf", api.InstanceID("")
+			if mode == "child" {
+				name, leafID = "Parent", "leaf-child"
+			}
+			failed := run(t, host, name)
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, failed.RuntimeStatus)
+			if leafID == "" {
+				leafID = failed.InstanceID
+			}
+			leafBefore, err := host.Client().FetchOrchestrationMetadata(ctx, leafID)
+			require.NoError(t, err)
+			repaired.Store(true)
+
+			require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID,
+				api.WithRewindReason(strings.Repeat("r", 30_000))))
+			rejected, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+			require.NoError(t, err)
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, rejected.RuntimeStatus)
+			if mode == "child" {
+				require.NotEqual(t, failed.ExecutionID, rejected.ExecutionID, "the renewed parent observes the rejection")
+			}
+			leaf, err := host.Client().FetchOrchestrationMetadata(ctx, leafID)
+			require.NoError(t, err)
+			require.Equal(t, api.RUNTIME_STATUS_FAILED, leaf.RuntimeStatus)
+			require.Equal(t, leafBefore.ExecutionID, leaf.ExecutionID)
+			require.Equal(t, api.ErrorTypeOrchestratorResponseTooLarge, api.ErrorType(leaf.FailureDetails.ErrorType))
+			history, err := host.Client().GetOrchestrationHistory(ctx, leafID, api.HistoryQuery{})
+			require.NoError(t, err)
+			for _, event := range history.Events {
+				require.NotEqual(t, api.HistoryEventExecutionRewound, event.Type,
+					"a rejected rewind must not change the rewindable history")
+			}
+
+			require.NoError(t, host.Client().RewindInstance(ctx, failed.InstanceID, api.WithRewindReason("short")))
+			completed, err := host.Client().WaitForOrchestrationCompletion(ctx, failed.InstanceID)
+			require.NoError(t, err)
+			require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
+			var output string
+			require.NoError(t, completed.ReadOutput(&output))
+			require.Equal(t, "recovered", output)
+		})
+	}
+}
+
+func TestQueryByTaskHubNameIsNotSupported(t *testing.T) {
+	host := durabletasktest.New(t, task.NewTaskRegistry())
+
+	_, err := host.Client().QueryInstances(testContext(t), api.OrchestrationQuery{TaskHubNames: []string{"hub"}})
+	assert.ErrorIs(t, err, api.ErrFeatureNotSupported)
 }

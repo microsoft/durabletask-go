@@ -446,6 +446,19 @@ func (s *Server) terminateLocked(inst *instance, reason *wrapperspb.StringValue,
 	s.deliverLocked(inst, terminated)
 }
 
+// recursiveTermination returns a recursive termination that the instance has
+// received but whose turn hasn't ended the instance yet, if any.
+func (inst *instance) recursiveTermination() *protos.ExecutionTerminatedEvent {
+	for _, events := range [][]*protos.HistoryEvent{inst.history, inst.pending} {
+		for _, event := range events {
+			if terminated := event.GetExecutionTerminated(); terminated.GetRecurse() {
+				return terminated
+			}
+		}
+	}
+	return nil
+}
+
 // SuspendInstance suspends a running instance.
 func (s *Server) SuspendInstance(_ context.Context, req *protos.SuspendRequest) (*protos.SuspendResponse, error) {
 	s.mu.Lock()

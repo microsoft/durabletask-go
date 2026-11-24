@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -17,6 +18,116 @@ import (
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
+
+type testWorkItemStream struct {
+	grpc.ServerStream
+	ctx   context.Context
+	items chan *protos.WorkItem
+}
+
+func (s *testWorkItemStream) Context() context.Context { return s.ctx }
+
+func (s *testWorkItemStream) Send(item *protos.WorkItem) error {
+	select {
+	case s.items <- item:
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+
+// openTestStream serves GetWorkItems on a test stream. The returned function
+// closes the stream and waits until its leases are released.
+func openTestStream(t *testing.T, s *Server) (*testWorkItemStream, func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	stream := &testWorkItemStream{ctx: ctx, items: make(chan *protos.WorkItem)}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = s.GetWorkItems(&protos.GetWorkItemsRequest{}, stream)
+	}()
+	closeStream := func() {
+		cancel()
+		<-done
+	}
+	t.Cleanup(closeStream)
+	return stream, closeStream
+}
+
+func (s *testWorkItemStream) receive(t *testing.T) *protos.WorkItem {
+	t.Helper()
+	select {
+	case item := <-s.items:
+		return item
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "timed out waiting for a work item")
+		return nil
+	}
+}
+
+func TestClosedStreamLeasesAreRedeliveredAndOldTokensRejected(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	ctx := t.Context()
+
+	_, err := s.StartInstance(ctx, &protos.CreateInstanceRequest{InstanceId: "id", Name: "orchestrator"})
+	require.NoError(t, err)
+	first, closeFirst := openTestStream(t, s)
+	start := first.receive(t)
+	require.NotNil(t, start.GetOrchestratorRequest())
+	_, err = s.CompleteOrchestratorTask(ctx, &protos.OrchestratorResponse{
+		CompletionToken: start.GetCompletionToken(),
+		Actions: []*protos.OrchestratorAction{{
+			Id: 0,
+			OrchestratorActionType: &protos.OrchestratorAction_ScheduleTask{
+				ScheduleTask: &protos.ScheduleTaskAction{Name: "activity"},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	oldActivity := first.receive(t)
+	require.NotNil(t, oldActivity.GetActivityRequest())
+	_, err = s.RaiseEvent(ctx, &protos.RaiseEventRequest{InstanceId: "id", Name: "A"})
+	require.NoError(t, err)
+	oldOrchestration := first.receive(t)
+	require.NotNil(t, oldOrchestration.GetOrchestratorRequest())
+	// B arrives while A's turn is leased.
+	_, err = s.RaiseEvent(ctx, &protos.RaiseEventRequest{InstanceId: "id", Name: "B"})
+	require.NoError(t, err)
+
+	closeFirst()
+	second, _ := openTestStream(t, s)
+	var orchestration, activity *protos.WorkItem
+	for orchestration == nil || activity == nil {
+		item := second.receive(t)
+		if item.GetOrchestratorRequest() != nil {
+			orchestration = item
+		} else {
+			activity = item
+		}
+	}
+
+	var raised []string
+	for _, event := range orchestration.GetOrchestratorRequest().GetNewEvents() {
+		if e := event.GetEventRaised(); e != nil {
+			raised = append(raised, e.GetName())
+		}
+	}
+	assert.Equal(t, []string{"A", "B"}, raised)
+	assert.Equal(t, "activity", activity.GetActivityRequest().GetName())
+	assert.NotEqual(t, oldOrchestration.GetCompletionToken(), orchestration.GetCompletionToken())
+	assert.NotEqual(t, oldActivity.GetCompletionToken(), activity.GetCompletionToken())
+
+	_, err = s.CompleteOrchestratorTask(ctx, &protos.OrchestratorResponse{CompletionToken: oldOrchestration.GetCompletionToken()})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	_, err = s.CompleteActivityTask(ctx, &protos.ActivityResponse{CompletionToken: oldActivity.GetCompletionToken()})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	_, err = s.CompleteOrchestratorTask(ctx, &protos.OrchestratorResponse{CompletionToken: orchestration.GetCompletionToken()})
+	require.NoError(t, err)
+	_, err = s.CompleteActivityTask(ctx, &protos.ActivityResponse{CompletionToken: activity.GetCompletionToken()})
+	require.NoError(t, err)
+}
 
 func TestContinueAsNewDropsPreviousExecutionResults(t *testing.T) {
 	s := NewServer()
@@ -288,6 +399,41 @@ func TestRewindWorkItemStreamsLargeHistory(t *testing.T) {
 	require.NotNil(t, request.NewEvents[0].GetOrchestratorStarted())
 	require.NotNil(t, request.NewEvents[1].GetExecutionRewound())
 	require.Equal(t, inst.executionID, request.GetExecutionId().GetValue())
+}
+
+func TestRewindRejectsOversizedWorkItem(t *testing.T) {
+	ctx := context.Background()
+	s := NewServer()
+	defer s.Close()
+	inst := s.newInstanceLocked("id", "orchestrator", nil, nil, nil, nil, nil, nil)
+	inst.history = []*protos.HistoryEvent{inst.pending[0]}
+	s.completeLocked(inst, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, nil, failureDetails("failure", "boom"))
+	history := append([]*protos.HistoryEvent(nil), inst.history...)
+	// The reason fits in a request but not in the work item that delivers it.
+	reason := wrapperspb.String(strings.Repeat("x", maxMessageSize-32))
+	request := &protos.RewindInstanceRequest{InstanceId: inst.id, Reason: reason}
+	require.LessOrEqual(t, proto.Size(request), maxMessageSize)
+
+	_, err := s.RewindInstance(ctx, request)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, inst.status)
+	require.Nil(t, inst.rewind)
+
+	// A child's rewind carries its parent's reason, so leasing checks the size too.
+	s.prepareRewindLocked(inst, newRewindEvent(reason, nil))
+	require.Nil(t, s.nextWorkItemLocked(nil, 1, workItemLimits{}))
+	require.Empty(t, s.orchLeases)
+	require.False(t, inst.queued)
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED, inst.status)
+	require.Equal(t, "OrchestrationWorkItemTooLarge", inst.failure.GetErrorType())
+	require.Nil(t, inst.rewind)
+	require.Len(t, inst.history, len(history))
+	require.Equal(t, history[:len(history)-1], inst.history[:len(history)-1], "only the failure is replaced")
+
+	_, err = s.RewindInstance(ctx, &protos.RewindInstanceRequest{InstanceId: inst.id, Reason: wrapperspb.String("short")})
+	require.NoError(t, err)
+	item := s.nextWorkItemLocked(nil, 1, workItemLimits{})
+	require.Equal(t, "short", item.GetOrchestratorRequest().GetNewEvents()[1].GetExecutionRewound().GetReason().GetValue())
 }
 
 func TestRewindReconcilesRetainedActivities(t *testing.T) {
@@ -739,6 +885,37 @@ func TestRecursiveTerminationDoesNotTerminateReusedChildID(t *testing.T) {
 	s.mu.Unlock()
 
 	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_RUNNING, replacement.status)
+}
+
+func TestRecursiveTerminationDuringTurnTerminatesNewChildren(t *testing.T) {
+	s := NewServer()
+	defer s.Close()
+	ctx := t.Context()
+
+	_, err := s.StartInstance(ctx, &protos.CreateInstanceRequest{InstanceId: "parent", Name: "orchestrator"})
+	require.NoError(t, err)
+	s.mu.Lock()
+	item := s.nextWorkItemLocked(nil, 1, workItemLimits{})
+	s.mu.Unlock()
+	require.NotNil(t, item.GetOrchestratorRequest())
+
+	_, err = s.TerminateInstance(ctx, &protos.TerminateRequest{InstanceId: "parent", Recursive: true})
+	require.NoError(t, err)
+	_, err = s.CompleteOrchestratorTask(ctx, &protos.OrchestratorResponse{
+		CompletionToken: item.GetCompletionToken(),
+		Actions: []*protos.OrchestratorAction{{
+			Id: 0,
+			OrchestratorActionType: &protos.OrchestratorAction_CreateSubOrchestration{
+				CreateSubOrchestration: &protos.CreateSubOrchestrationAction{InstanceId: "child", Name: "orchestrator"},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	resp, err := s.GetInstance(ctx, &protos.GetInstanceRequest{InstanceId: "child"})
+	require.NoError(t, err)
+	require.True(t, resp.GetExists())
+	assert.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_TERMINATED, resp.GetOrchestrationState().GetOrchestrationStatus())
 }
 
 func TestWorkItemTooLargeForOneMessageFailsInstance(t *testing.T) {

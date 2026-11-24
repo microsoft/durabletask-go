@@ -34,14 +34,15 @@ func NewWorker(
 		}
 		return connection, connection, nil
 	}
+	completionLimit := durabletaskclient.DefaultMaxOrchestratorCompletionBytes
+	if prepared.MaxSendMessageSize > 0 {
+		completionLimit = min(completionLimit, prepared.MaxSendMessageSize)
+	}
 	configuredOptions := []durabletaskclient.TaskHubGrpcWorkerOption{
 		durabletaskclient.WithWorkerHelloTimeout(prepared.HelloTimeout),
 		durabletaskclient.WithWorkerDataConverter(prepared.DataConverter),
 		durabletaskclient.WithMaximumTimerInterval(prepared.MaximumTimerInterval),
-		durabletaskclient.WithMaxOrchestratorCompletionBytes(min(
-			prepared.MaxSendMessageSize,
-			durabletaskclient.DefaultMaxOrchestratorCompletionBytes,
-		)),
+		durabletaskclient.WithMaxOrchestratorCompletionBytes(completionLimit),
 	}
 	if prepared.LargePayloads != nil {
 		configuredOptions = append(
