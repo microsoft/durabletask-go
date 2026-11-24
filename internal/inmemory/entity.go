@@ -287,9 +287,21 @@ func (s *Server) rejectOversizedOperationsLocked(e *entity, events []*protos.His
 }
 
 // reportDroppedSignalLocked logs a warning for an entity signal that the
-// service drops, which has no caller to notify.
+// service drops, which has no caller to notify, and passes the warning to the
+// dropped-signal reporter, if any.
 func (s *Server) reportDroppedSignalLocked(signal *protos.EntityOperationSignaledEvent, reason string) {
-	s.logger.Warnf("in-memory durable task service dropped entity signal %s: %s", signal.GetRequestId(), reason)
+	message := fmt.Sprintf("in-memory durable task service dropped entity signal %s: %s", signal.GetRequestId(), reason)
+	s.logger.Warn(message)
+	if s.reportDroppedSignal != nil && !s.closed {
+		s.reportDroppedSignal(message)
+	}
+}
+
+// WithDroppedSignalReporter sets a function that also receives the warning for
+// each entity signal that the service drops. The service calls it with its
+// lock held and not after the service is closed.
+func WithDroppedSignalReporter(report func(message string)) ServerOption {
+	return func(s *Server) { s.reportDroppedSignal = report }
 }
 
 // newEntityWorkItem returns a work item for an entity with no operations.

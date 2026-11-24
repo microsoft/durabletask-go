@@ -676,7 +676,8 @@ The in-memory service has these limits:
   `api.ErrInvalidArgument` if a signal doesn't fit with the entity's current
   state. Operations that don't fit when they're dispatched, such as scheduled
   signals or signals sent after the state grew, are rejected: calls fail, and
-  signals are dropped with a warning logged through `durabletasktest.WithLogger`.
+  signals are dropped with a warning logged through `durabletasktest.WithLogger`
+  and, for a host created with `durabletasktest.New`, the test log.
 
 ## Development
 

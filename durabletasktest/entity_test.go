@@ -433,7 +433,7 @@ func blob(ctx *task.EntityContext) (any, error) {
 	return nil, ctx.SetState(value)
 }
 
-func newBlobHost(t *testing.T, opts ...durabletasktest.Option) *durabletasktest.Host {
+func newBlobHost(t testing.TB, opts ...durabletasktest.Option) *durabletasktest.Host {
 	t.Helper()
 	r := task.NewTaskRegistry()
 	require.NoError(t, r.AddEntityN("blob", blob))
@@ -486,9 +486,21 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
+// logRecorder records the messages that a test logs with Log.
+type logRecorder struct {
+	testing.TB
+	logs lockedBuffer
+}
+
+func (r *logRecorder) Log(args ...any) {
+	_, _ = fmt.Fprintln(&r.logs, args...)
+	r.TB.Log(args...)
+}
+
 func TestDroppedEntitySignalIsLogged(t *testing.T) {
 	var logs lockedBuffer
-	host := newBlobHost(t, durabletasktest.WithLogger(api.NewSlogLogger(slog.New(slog.NewTextHandler(&logs, nil)))))
+	recorder := &logRecorder{TB: t}
+	host := newBlobHost(recorder, durabletasktest.WithLogger(api.NewSlogLogger(slog.New(slog.NewTextHandler(&logs, nil)))))
 	c := host.Client()
 	ctx := testContext(t)
 	id := api.NewEntityID("blob", "a")
@@ -499,8 +511,10 @@ func TestDroppedEntitySignalIsLogged(t *testing.T) {
 
 	// A signal from another entity can only be checked when it's dispatched.
 	require.NoError(t, c.SignalEntity(ctx, api.NewEntityID("blob", "sender"), "send", api.WithSignalInput("a")))
-	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "dropped entity signal") },
-		10*time.Second, 10*time.Millisecond)
+	// The service logs the warning before it reports it to the test log.
+	require.Eventually(t, func() bool { return strings.Contains(recorder.logs.String(), "dropped entity signal") },
+		10*time.Second, 10*time.Millisecond, "New reports the dropped signal in the test log")
+	assert.Contains(t, recorder.logs.String(), `operation "set" on entity "@blob@a" has a 2097154-byte input`)
 	assert.Contains(t, logs.String(), `operation \"set\" on entity \"@blob@a\" has a 2097154-byte input`)
 
 	require.NoError(t, c.SignalEntity(ctx, id, "set", api.WithSignalInput("small")))

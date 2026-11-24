@@ -47,6 +47,7 @@ type Server struct {
 	healthPingInterval     time.Duration
 	maxEntityWorkItemBytes int
 	logger                 api.Logger
+	reportDroppedSignal    func(message string)
 
 	mu           sync.Mutex
 	instances    map[string]*instance
