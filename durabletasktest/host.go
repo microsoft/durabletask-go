@@ -29,6 +29,12 @@
 // Durable entities are supported, including entity critical sections:
 // signals and calls to a locked entity from outside its critical section wait
 // until the lock is released.
+// An entity operation is dispatched in a work item with the entity's state, so
+// an operation's input and the entity's state must fit together in a 4 MiB
+// work item.
+// SignalEntity returns an error wrapping [api.ErrInvalidArgument] if a signal
+// doesn't fit with the entity's current state. Calls that don't fit when they
+// are dispatched fail; signals are dropped, and the host logs a warning.
 package durabletasktest
 
 import (
@@ -65,8 +71,9 @@ type options struct {
 	clientOptions []client.TaskHubGrpcClientOption
 }
 
-// WithLogger sets the logger used by the worker and client. By default, the
-// host discards log output.
+// WithLogger sets the logger used by the worker, client, and in-memory
+// service. The service logs a warning when it drops an entity signal. By
+// default, the host discards log output.
 func WithLogger(logger api.Logger) Option {
 	return func(o *options) { o.logger = logger }
 }
@@ -128,7 +135,7 @@ func NewHost(ctx context.Context, registry *task.TaskRegistry, opts ...Option) (
 	}
 
 	h := &Host{
-		backend:  inmemory.NewServer(),
+		backend:  inmemory.NewServer(inmemory.WithLogger(o.logger)),
 		server:   grpc.NewServer(),
 		listener: bufconn.Listen(bufferSize),
 	}

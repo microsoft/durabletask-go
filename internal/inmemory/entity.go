@@ -84,14 +84,19 @@ func (s *Server) deliverEntityLocked(targetID string, event *protos.HistoryEvent
 	s.pumpEntityLocked(e)
 }
 
-// signalEntityLocked delivers a signal now or, if it is scheduled for later, when it is due.
-func (s *Server) signalEntityLocked(targetID string, signal *protos.EntityOperationSignaledEvent) {
-	event := &protos.HistoryEvent{
+// newSignalEvent returns the message that delivers a signal to an entity.
+func newSignalEvent(signal *protos.EntityOperationSignaledEvent) *protos.HistoryEvent {
+	return &protos.HistoryEvent{
 		EventId:   -1,
 		Timestamp: timestamppb.Now(),
 		EventType: &protos.HistoryEvent_EntityOperationSignaled{EntityOperationSignaled: signal},
 	}
-	if at := signal.GetScheduledTime(); at != nil && at.AsTime().After(time.Now()) {
+}
+
+// signalEntityLocked delivers a signal message now or, if it is scheduled for
+// later, when it is due.
+func (s *Server) signalEntityLocked(targetID string, event *protos.HistoryEvent) {
+	if at := event.GetEntityOperationSignaled().GetScheduledTime(); at != nil && at.AsTime().After(time.Now()) {
 		s.startServerTimerLocked(at.AsTime(), func() { s.deliverEntityLocked(targetID, event) })
 		return
 	}
@@ -225,12 +230,13 @@ func (s *Server) lockRequestActiveLocked(request *protos.EntityLockRequestedEven
 // takeBatch removes the signals and calls that are ready to run, stopping at
 // the next lock or unlock message or at the first operation that would make
 // the work item larger than maxBytes; that operation stays queued for the next
-// batch. An operation that can't fit even in an otherwise empty work item is
-// removed and returned in rejected so that it can't stall the entity.
+// batch. An operation that can't fit even in a work item with no other
+// operations is removed and returned in rejected so that it can't stall the
+// entity. baseSize is the work item's size before operations are added, as
+// returned by entityWorkItemBaseSize.
 func (e *entity) takeBatch(baseSize, maxBytes int) (batch, rejected []*protos.HistoryEvent) {
 	var kept []*protos.HistoryEvent
-	// Adding operations can lengthen the EntityRequest and WorkItem length prefixes.
-	size := baseSize + 2*binary.MaxVarintLen32
+	size := baseSize
 	stop := len(e.queue)
 	for i, event := range e.queue {
 		if !e.canProcess(event) {
@@ -260,22 +266,56 @@ func (e *entity) takeBatch(baseSize, maxBytes int) (batch, rejected []*protos.Hi
 }
 
 // rejectOversizedOperationsLocked fails calls whose request can't fit in an
-// entity work item. Oversized signals are dropped.
-func (s *Server) rejectOversizedOperationsLocked(e *entity, events []*protos.HistoryEvent) {
+// entity work item with the entity's state, and logs a warning for each such
+// signal, which has no caller to notify. baseSize is the size of the entity's
+// work item before operations are added.
+func (s *Server) rejectOversizedOperationsLocked(e *entity, events []*protos.HistoryEvent, baseSize int) {
 	for _, event := range events {
+		message := s.oversizedOperationMessage(e.id, e.state, event, baseSize)
 		called := event.GetEntityOperationCalled()
 		if called == nil {
+			s.logger.Warnf("in-memory durable task service dropped entity signal %s: %s",
+				event.GetEntityOperationSignaled().GetRequestId(), message)
 			continue
 		}
 		s.respondToCallerLocked(called, &protos.HistoryEvent{EventId: -1, Timestamp: timestamppb.Now(), EventType: &protos.HistoryEvent_EntityOperationFailed{
 			EntityOperationFailed: &protos.EntityOperationFailedEvent{
-				RequestId: called.GetRequestId(),
-				FailureDetails: failureDetails("EntityOperationTooLarge",
-					"operation %q on entity %q exceeds the %d-byte entity work item limit",
-					called.GetOperation(), e.id, s.maxEntityWorkItemBytes),
+				RequestId:      called.GetRequestId(),
+				FailureDetails: failureDetails("EntityOperationTooLarge", "%s", message),
 			},
 		}})
 	}
+}
+
+// newEntityWorkItem returns a work item for an entity with no operations.
+func newEntityWorkItem(entityID string, state *wrapperspb.StringValue, token string) *protos.WorkItem {
+	return &protos.WorkItem{
+		Request: &protos.WorkItem_EntityRequestV2{EntityRequestV2: &protos.EntityRequest{
+			InstanceId:  entityID,
+			EntityState: state,
+		}},
+		CompletionToken: token,
+	}
+}
+
+// entityWorkItemBaseSize returns the size of an entity work item with no
+// operations, plus room for its EntityRequest and WorkItem length prefixes to
+// lengthen as operations are added.
+func entityWorkItemBaseSize(item *protos.WorkItem) int {
+	return proto.Size(item) + 2*binary.MaxVarintLen32
+}
+
+// oversizedOperationMessage describes an operation that can't fit in an entity
+// work item with the entity's state.
+func (s *Server) oversizedOperationMessage(entityID string, state *wrapperspb.StringValue, event *protos.HistoryEvent, baseSize int) string {
+	operation, input := event.GetEntityOperationSignaled().GetOperation(), event.GetEntityOperationSignaled().GetInput()
+	if called := event.GetEntityOperationCalled(); called != nil {
+		operation, input = called.GetOperation(), called.GetInput()
+	}
+	return fmt.Sprintf("operation %q on entity %q has a %d-byte input and the entity has %d bytes of state; "+
+		"together they need a %d-byte work item, which exceeds the %d-byte entity work item limit",
+		operation, entityID, len(input.GetValue()), len(state.GetValue()),
+		baseSize+operationRequestSize(event), s.maxEntityWorkItemBytes)
 }
 
 // operationRequestSize returns the bytes an operation adds to an EntityRequest.
@@ -295,15 +335,10 @@ func (s *Server) nextEntityWorkItemLocked(filters *protos.WorkItemFilters, strea
 			return s.nextEntityWorkItemLocked(filters, streamID)
 		}
 		token := newID()
-		item := &protos.WorkItem{
-			Request: &protos.WorkItem_EntityRequestV2{EntityRequestV2: &protos.EntityRequest{
-				InstanceId:  e.id,
-				EntityState: e.state,
-			}},
-			CompletionToken: token,
-		}
-		events, rejected := e.takeBatch(proto.Size(item), s.maxEntityWorkItemBytes)
-		s.rejectOversizedOperationsLocked(e, rejected)
+		item := newEntityWorkItem(e.id, e.state, token)
+		baseSize := entityWorkItemBaseSize(item)
+		events, rejected := e.takeBatch(baseSize, s.maxEntityWorkItemBytes)
+		s.rejectOversizedOperationsLocked(e, rejected, baseSize)
 		if len(events) == 0 {
 			// Rejecting operations can leave a lock or unlock message ready.
 			s.pumpEntityLocked(e)
@@ -412,12 +447,12 @@ func (s *Server) CompleteEntityTask(_ context.Context, result *protos.EntityBatc
 		switch a := action.GetOperationActionType().(type) {
 		case *protos.OperationAction_SendSignal:
 			signal := a.SendSignal
-			s.signalEntityLocked(signal.GetInstanceId(), &protos.EntityOperationSignaledEvent{
+			s.signalEntityLocked(signal.GetInstanceId(), newSignalEvent(&protos.EntityOperationSignaledEvent{
 				RequestId:     newID(),
 				Operation:     signal.GetName(),
 				Input:         signal.GetInput(),
 				ScheduledTime: signal.GetScheduledTime(),
-			})
+			}))
 		case *protos.OperationAction_StartNewOrchestration:
 			start := a.StartNewOrchestration
 			id := start.GetInstanceId()
@@ -542,7 +577,7 @@ func (s *Server) sendEntityMessageLocked(inst *instance, id int32, action *proto
 		inst.history = append(inst.history, event)
 		signal := proto.CloneOf(m.EntityOperationSignaled)
 		signal.TargetInstanceId = nil
-		s.signalEntityLocked(m.EntityOperationSignaled.GetTargetInstanceId().GetValue(), signal)
+		s.signalEntityLocked(m.EntityOperationSignaled.GetTargetInstanceId().GetValue(), newSignalEvent(signal))
 	case *protos.SendEntityMessageAction_EntityOperationCalled:
 		event.EventType = &protos.HistoryEvent_EntityOperationCalled{EntityOperationCalled: m.EntityOperationCalled}
 		inst.history = append(inst.history, event)
@@ -608,12 +643,23 @@ func (s *Server) SignalEntity(_ context.Context, req *protos.SignalEntityRequest
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.signalEntityLocked(id, &protos.EntityOperationSignaledEvent{
+	event := newSignalEvent(&protos.EntityOperationSignaledEvent{
 		RequestId:     requestID,
 		Operation:     req.GetName(),
 		Input:         req.GetInput(),
 		ScheduledTime: req.GetScheduledTime(),
 	})
+	// Reject a signal that can't be dispatched with the entity's current state.
+	// The work item's completion token is a UUID, like every other token.
+	var state *wrapperspb.StringValue
+	if e, ok := s.entities[id]; ok {
+		state = e.state
+	}
+	baseSize := entityWorkItemBaseSize(newEntityWorkItem(id, state, newID()))
+	if baseSize+operationRequestSize(event) > s.maxEntityWorkItemBytes {
+		return nil, status.Error(codes.InvalidArgument, s.oversizedOperationMessage(id, state, event, baseSize))
+	}
+	s.signalEntityLocked(id, event)
 	return &protos.SignalEntityResponse{}, nil
 }
 

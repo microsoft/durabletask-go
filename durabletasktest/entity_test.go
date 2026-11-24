@@ -1,7 +1,10 @@
 package durabletasktest_test
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -414,4 +417,91 @@ func TestRewindKeepsEntityResults(t *testing.T) {
 	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, completed.RuntimeStatus)
 	assert.Equal(t, "1", completed.SerializedOutput)
 	assert.Equal(t, 1, counterValue(t, host, "rewind"))
+}
+
+// blob is an entity whose state is the input of its last "set" operation. Its
+// "send" operation signals the blob entity named by the input to set a 2 MiB value.
+func blob(ctx *task.EntityContext) (any, error) {
+	var value string
+	if err := ctx.GetInput(&value); err != nil {
+		return nil, err
+	}
+	if ctx.Operation == "send" {
+		return nil, ctx.SignalEntity(api.NewEntityID("blob", value), "set", strings.Repeat("x", 2<<20))
+	}
+	return nil, ctx.SetState(value)
+}
+
+func newBlobHost(t *testing.T, opts ...durabletasktest.Option) *durabletasktest.Host {
+	t.Helper()
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddEntityN("blob", blob))
+	return durabletasktest.New(t, r, opts...)
+}
+
+func waitForBlob(t *testing.T, host *durabletasktest.Host, id api.EntityID, want string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		metadata, err := host.Client().GetEntity(testContext(t), id)
+		require.NoError(t, err)
+		var value string
+		return metadata != nil && metadata.ReadState(&value) == nil && value == want
+	}, 10*time.Second, 10*time.Millisecond, "entity %v never reached the expected state", id)
+}
+
+func TestSignalEntityRejectsSignalThatDoesNotFitWithState(t *testing.T) {
+	host := newBlobHost(t)
+	c := host.Client()
+	ctx := testContext(t)
+	id := api.NewEntityID("blob", "a")
+
+	state := strings.Repeat("s", 3<<20)
+	require.NoError(t, c.SignalEntity(ctx, id, "set", api.WithSignalInput(state)))
+	waitForBlob(t, host, id, state)
+
+	err := c.SignalEntity(ctx, id, "set", api.WithSignalInput(strings.Repeat("x", 2<<20)))
+	require.ErrorIs(t, err, api.ErrInvalidArgument)
+	assert.ErrorContains(t, err, "exceeds the 4194304-byte entity work item limit")
+
+	require.NoError(t, c.SignalEntity(ctx, id, "set", api.WithSignalInput("small")))
+	waitForBlob(t, host, id, "small")
+}
+
+// lockedBuffer is a bytes.Buffer that is safe for concurrent use.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestDroppedEntitySignalIsLogged(t *testing.T) {
+	var logs lockedBuffer
+	host := newBlobHost(t, durabletasktest.WithLogger(api.NewSlogLogger(slog.New(slog.NewTextHandler(&logs, nil)))))
+	c := host.Client()
+	ctx := testContext(t)
+	id := api.NewEntityID("blob", "a")
+
+	state := strings.Repeat("s", 3<<20)
+	require.NoError(t, c.SignalEntity(ctx, id, "set", api.WithSignalInput(state)))
+	waitForBlob(t, host, id, state)
+
+	// A signal from another entity can only be checked when it's dispatched.
+	require.NoError(t, c.SignalEntity(ctx, api.NewEntityID("blob", "sender"), "send", api.WithSignalInput("a")))
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "dropped entity signal") },
+		10*time.Second, 10*time.Millisecond)
+	assert.Contains(t, logs.String(), `operation \"set\" on entity \"@blob@a\" has a 2097154-byte input`)
+
+	require.NoError(t, c.SignalEntity(ctx, id, "set", api.WithSignalInput("small")))
+	waitForBlob(t, host, id, "small")
 }

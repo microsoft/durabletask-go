@@ -9,6 +9,7 @@ package inmemory
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -46,6 +47,7 @@ type Server struct {
 
 	healthPingInterval     time.Duration
 	maxEntityWorkItemBytes int
+	logger                 api.Logger
 
 	mu           sync.Mutex
 	instances    map[string]*instance
@@ -118,11 +120,21 @@ type activityLease struct {
 	streamID uint64
 }
 
+// ServerOption configures a [Server].
+type ServerOption func(*Server)
+
+// WithLogger sets the logger the service uses to report messages that it
+// drops. By default, the service discards log output.
+func WithLogger(logger api.Logger) ServerOption {
+	return func(s *Server) { s.logger = logger }
+}
+
 // NewServer creates an empty in-memory service.
-func NewServer() *Server {
-	return &Server{
+func NewServer(opts ...ServerOption) *Server {
+	s := &Server{
 		healthPingInterval:     defaultHealthPingInterval,
 		maxEntityWorkItemBytes: defaultMaxEntityWorkItemBytes,
+		logger:                 api.NewSlogLogger(slog.New(slog.DiscardHandler)),
 		instances:              make(map[string]*instance),
 		orchLeases:             make(map[string]*orchestrationLease),
 		actLeases:              make(map[string]*activityLease),
@@ -131,6 +143,10 @@ func NewServer() *Server {
 		lockRequests:           make(map[string]string),
 		changed:                make(chan struct{}),
 	}
+	for _, configure := range opts {
+		configure(s)
+	}
+	return s
 }
 
 // Register registers the service with a gRPC server.

@@ -669,6 +669,12 @@ The in-memory service has these limits:
   can advance timers without waiting in real time while the test goroutines are
   blocked. The `durabletasktest` tests include a 24-hour timer example.
 - State is kept in memory only. It is discarded when the host closes.
+- An entity operation's input and the entity's state must fit together in a
+  4 MiB work item. `SignalEntity` returns an error wrapping
+  `api.ErrInvalidArgument` if a signal doesn't fit with the entity's current
+  state. Operations that don't fit when they're dispatched, such as scheduled
+  signals or signals sent after the state grew, are rejected: calls fail, and
+  signals are dropped with a warning logged through `durabletasktest.WithLogger`.
 
 ## Development
 

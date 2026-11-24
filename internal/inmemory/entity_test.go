@@ -1,7 +1,9 @@
 package inmemory
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
 )
@@ -347,7 +350,8 @@ func TestEntityWorkItemsAreBoundedBySize(t *testing.T) {
 }
 
 func TestOversizedEntityOperationsAreRejected(t *testing.T) {
-	s := NewServer()
+	var logs bytes.Buffer
+	s := NewServer(WithLogger(api.NewSlogLogger(slog.New(slog.NewTextHandler(&logs, nil)))))
 	defer s.Close()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -388,6 +392,13 @@ func TestOversizedEntityOperationsAreRejected(t *testing.T) {
 	require.NotNil(t, failed, "the oversized call fails instead of being dispatched")
 	assert.Equal(t, "call-1", failed.GetRequestId())
 	assert.Equal(t, "EntityOperationTooLarge", failed.GetFailureDetails().GetErrorType())
+
+	log := logs.String()
+	assert.Contains(t, log, "level=WARN", "the dropped signal is logged")
+	assert.Contains(t, log, "dropped entity signal "+oversized.GetEntityOperationSignaled().GetRequestId())
+	assert.Contains(t, log, `operation \"oversized\" on entity \"@counter@a\" has a 600-byte input and the entity has 600 bytes of state`)
+	assert.Contains(t, log, "exceeds the 1024-byte entity work item limit")
+	assert.NotContains(t, log, "oversizedCall", "calls fail instead of being logged")
 }
 
 func TestReleaseStreamRequeuesEntityWorkItems(t *testing.T) {
