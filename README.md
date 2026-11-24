@@ -640,7 +640,7 @@ For more information, read the [export history guide](./exporthistory/README.md)
 
 ## Testing orchestrations
 
-The `durabletasktest` package runs your orchestrations and activities in your test process. It starts an in-memory Durable Task service, a worker for your registry, and a connected client. The parts talk over an in-memory gRPC transport, so the test needs no emulator, network port, or Azure resource. The worker, executor, and client are the same code that runs against DTS.
+The `durabletasktest` package runs your orchestrations, activities, and entities in your test process. It starts an in-memory Durable Task service, a worker for your registry, and a connected client. The parts talk over an in-memory gRPC transport, so the test needs no emulator, network port, or Azure resource. The worker, executor, and client are the same code that runs against DTS.
 
 ```go
 func TestGreeting(t *testing.T) {
@@ -659,7 +659,7 @@ func TestGreeting(t *testing.T) {
 }
 ```
 
-To isolate an orchestration from its dependencies, register stub activities and sub-orchestrators in the test registry. You can use the client to raise events, suspend, resume, terminate, restart, rewind, query, and purge instances, and read history.
+To isolate an orchestration from its dependencies, register stub activities and sub-orchestrators in the test registry. You can use the client to raise events, suspend, resume, terminate, restart, rewind, query, and purge instances, and read history. Register entities in the same registry to test entity calls, signals, and critical sections. You can use the client to signal, get, query, and clean entities.
 
 `RewindInstance` enqueues recovery of a failed orchestration, preserving successful work and recursively recovering failed sub-orchestrations. Wait for completion to observe recovery. Outstanding timers retain their deadlines, and activities can run again if their results are unavailable. Purged children without retained results are recreated from their recorded inputs without their previous history; conflicting child IDs prevent rewind. The same worker [history-safety limitations](./durabletaskscheduler/README.md#rewind) apply.
 
@@ -668,9 +668,16 @@ The in-memory service has these limits:
 - Timers use the Go runtime clock. `testing/synctest`
   can advance timers without waiting in real time while the test goroutines are
   blocked. The `durabletasktest` tests include a 24-hour timer example.
-- Durable entities aren't supported. Entity client calls return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails. The service has no task hub name, so a query filtered by `TaskHubNames` also returns `api.ErrFeatureNotSupported`.
+- The service has no task hub name, so an instance query filtered by `TaskHubNames` returns `api.ErrFeatureNotSupported`.
 - State is kept in memory only. It is discarded when the host closes.
-- Requests and worker completions are limited to 4 MiB, as in DTS. Larger client requests fail with `ResourceExhausted`. An activity whose completion is larger fails once with the non-retriable error type `ActivityResponseTooLarge` instead of running again.
+- Requests and worker completions are limited to 4 MiB, as in DTS. Larger client requests fail with `ResourceExhausted`. An activity whose completion is larger fails once with the non-retriable error type `ActivityResponseTooLarge` instead of running again. An entity batch whose result is larger isn't applied: the entity's state is unchanged, its calls fail with the non-retriable error type `EntityResultTooLarge`, and its signals are dropped with a warning.
+- An entity operation's input and the entity's state must fit together in a
+  4 MiB work item. `SignalEntity` returns an error wrapping
+  `api.ErrInvalidArgument` if a signal doesn't fit with the entity's current
+  state. Operations that don't fit when they're dispatched, such as scheduled
+  signals or signals sent after the state grew, are rejected: calls fail, and
+  signals are dropped with a warning logged through `durabletasktest.WithLogger`
+  and, for a host created with `durabletasktest.New`, the test log.
 
 ## Development
 

@@ -282,6 +282,7 @@ func (s *Server) applyRewindLocked(inst *instance, action *protos.RewindOrchestr
 	}
 	inst.rewind = nil
 	s.reconcileRewindTasksLocked(inst, oldExecutionID, childResults)
+	s.rebindEntityExecutionLocked(inst.id, oldExecutionID, inst.executionID)
 
 	for _, event := range unfinishedSubOrchestrations(inst.history) {
 		created := event.GetSubOrchestrationInstanceCreated()

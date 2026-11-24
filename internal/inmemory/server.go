@@ -2,12 +2,14 @@
 //
 // The service keeps all orchestration state in process memory and serves the
 // same gRPC protocol as the Durable Task Scheduler, so the regular client and
-// worker can run against it. Timers fire in real time. Entities are not supported.
+// worker can run against it, including durable entities and rewind. Timers fire
+// in real time.
 package inmemory
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -33,13 +35,19 @@ const (
 	defaultQueryPageSize         = 100
 	maxOrchestrationWorkItemSize = 4 << 20
 	maxHistoryChunkSize          = 4 << 20
+
+	// defaultMaxEntityWorkItemBytes matches the 4 MiB message limit of DTS.
+	defaultMaxEntityWorkItemBytes = maxMessageSize
 )
 
 // Server is an in-memory implementation of the TaskHubSidecarService.
 type Server struct {
 	protos.UnimplementedTaskHubSidecarServiceServer
 
-	healthPingInterval time.Duration
+	healthPingInterval     time.Duration
+	maxEntityWorkItemBytes int
+	logger                 api.Logger
+	reportDroppedSignal    func(message string)
 
 	mu           sync.Mutex
 	instances    map[string]*instance
@@ -47,6 +55,11 @@ type Server struct {
 	actQueue     []*activityItem
 	orchLeases   map[string]*orchestrationLease
 	actLeases    map[string]*activityLease
+	entities     map[string]*entity
+	entityQueue  []*entity
+	entityLeases map[string]*entityLease
+	lockRequests map[string]string // critical section ID to requesting execution ID
+	timers       []*time.Timer
 	changed      chan struct{}
 	closed       bool
 	nextStreamID uint64
@@ -107,15 +120,33 @@ type activityLease struct {
 	streamID uint64
 }
 
+// ServerOption configures a [Server].
+type ServerOption func(*Server)
+
+// WithLogger sets the logger the service uses to report messages that it
+// drops. By default, the service discards log output.
+func WithLogger(logger api.Logger) ServerOption {
+	return func(s *Server) { s.logger = logger }
+}
+
 // NewServer creates an empty in-memory service.
-func NewServer() *Server {
-	return &Server{
-		healthPingInterval: defaultHealthPingInterval,
-		instances:          make(map[string]*instance),
-		orchLeases:         make(map[string]*orchestrationLease),
-		actLeases:          make(map[string]*activityLease),
-		changed:            make(chan struct{}),
+func NewServer(opts ...ServerOption) *Server {
+	s := &Server{
+		healthPingInterval:     defaultHealthPingInterval,
+		maxEntityWorkItemBytes: defaultMaxEntityWorkItemBytes,
+		logger:                 api.NewSlogLogger(slog.New(slog.DiscardHandler)),
+		instances:              make(map[string]*instance),
+		orchLeases:             make(map[string]*orchestrationLease),
+		actLeases:              make(map[string]*activityLease),
+		entities:               make(map[string]*entity),
+		entityLeases:           make(map[string]*entityLease),
+		lockRequests:           make(map[string]string),
+		changed:                make(chan struct{}),
 	}
+	for _, configure := range opts {
+		configure(s)
+	}
+	return s
 }
 
 // Register registers the service with a gRPC server.
@@ -134,6 +165,10 @@ func (s *Server) Close() {
 	for _, inst := range s.instances {
 		inst.stopTimers()
 	}
+	for _, t := range s.timers {
+		t.Stop()
+	}
+	s.timers = nil
 	s.notifyLocked()
 }
 

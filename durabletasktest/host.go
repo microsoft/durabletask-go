@@ -1,7 +1,7 @@
-// Package durabletasktest runs orchestrations and activities in process for tests.
+// Package durabletasktest runs orchestrations, activities, and entities in process for tests.
 //
 // A [Host] starts an in-memory Durable Task service, a worker for the
-// orchestrators and activities in a [task.TaskRegistry], and a client
+// orchestrators, activities, and entities in a [task.TaskRegistry], and a client
 // connected to the same service. Communication uses an in-memory gRPC
 // transport, so no network ports or external services are required.
 //
@@ -26,9 +26,18 @@
 // again if their results are unavailable. Purged children without retained
 // results are recreated without their previous history; conflicting child IDs
 // prevent rewind.
-// Durable entities are not supported: entity client operations fail with
-// [api.ErrFeatureNotSupported], and an orchestration that calls, signals, or
-// locks an entity fails.
+// Durable entities are supported, including entity critical sections:
+// signals and calls to a locked entity from outside its critical section wait
+// until the lock is released.
+// An entity operation is dispatched in a work item with the entity's state, so
+// an operation's input and the entity's state must fit together in a 4 MiB
+// work item.
+// SignalEntity returns an error wrapping [api.ErrInvalidArgument] if a signal
+// doesn't fit with the entity's current state. Calls that don't fit when they
+// are dispatched fail; signals are dropped, and the host logs a warning, which
+// [New] also reports with [testing.TB.Log].
+// An entity batch whose result exceeds 4 MiB isn't applied, and its calls fail
+// with the non-retriable error type EntityResultTooLarge.
 package durabletasktest
 
 import (
@@ -64,13 +73,15 @@ const maxReceiveMessageSize = 64 << 20
 type Option func(*options)
 
 type options struct {
-	logger        api.Logger
-	workerOptions []client.TaskHubGrpcWorkerOption
-	clientOptions []client.TaskHubGrpcClientOption
+	logger              api.Logger
+	workerOptions       []client.TaskHubGrpcWorkerOption
+	clientOptions       []client.TaskHubGrpcClientOption
+	reportDroppedSignal func(message string)
 }
 
-// WithLogger sets the logger used by the worker and client. By default, the
-// host discards log output.
+// WithLogger sets the logger used by the worker, client, and in-memory
+// service. The service logs a warning when it drops an entity signal. By
+// default, the host discards log output.
 func WithLogger(logger api.Logger) Option {
 	return func(o *options) { o.logger = logger }
 }
@@ -97,10 +108,14 @@ type Host struct {
 }
 
 // New starts a [Host] for a test and closes it when the test and its subtests finish.
-// It stops the test with [testing.TB.Fatal] if the host can't start.
+// It stops the test with [testing.TB.Fatal] if the host can't start. The host
+// also reports entity signals that the service drops with [testing.TB.Log].
 func New(tb testing.TB, registry *task.TaskRegistry, opts ...Option) *Host {
 	tb.Helper()
-	host, err := NewHost(tb.Context(), registry, opts...)
+	logDroppedSignals := func(o *options) {
+		o.reportDroppedSignal = func(message string) { tb.Log(message) }
+	}
+	host, err := NewHost(tb.Context(), registry, append([]Option{logDroppedSignals}, opts...)...)
 	if err != nil {
 		tb.Fatalf("failed to start durable task test host: %v", err)
 	}
@@ -132,7 +147,8 @@ func NewHost(ctx context.Context, registry *task.TaskRegistry, opts ...Option) (
 	}
 
 	h := &Host{
-		backend:  inmemory.NewServer(),
+		backend: inmemory.NewServer(inmemory.WithLogger(o.logger),
+			inmemory.WithDroppedSignalReporter(o.reportDroppedSignal)),
 		server:   grpc.NewServer(inmemory.ServerOptions()...),
 		listener: bufconn.Listen(bufferSize),
 	}

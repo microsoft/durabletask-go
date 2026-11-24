@@ -577,23 +577,6 @@ func TestInstanceManagement(t *testing.T) {
 	assert.True(t, result.IsComplete)
 }
 
-func TestUnsupportedFeatures(t *testing.T) {
-	r := task.NewTaskRegistry()
-	require.NoError(t, r.AddOrchestratorN("CallsEntity", func(ctx *task.OrchestrationContext) (any, error) {
-		return nil, ctx.CallEntity(api.NewEntityID("counter", "a"), "add").Await(nil)
-	}))
-	host := durabletasktest.New(t, r)
-	ctx := testContext(t)
-
-	metadata := run(t, host, "CallsEntity")
-	require.Equal(t, api.RUNTIME_STATUS_FAILED, metadata.RuntimeStatus)
-	require.NotNil(t, metadata.FailureDetails)
-	assert.Contains(t, metadata.FailureDetails.ErrorMessage, "not supported")
-
-	err := host.Client().SignalEntity(ctx, api.NewEntityID("counter", "a"), "add")
-	assert.ErrorIs(t, err, api.ErrFeatureNotSupported)
-}
-
 func TestRewindRecovery(t *testing.T) {
 	for _, mode := range []string{"activity", "child", "purged-child", "nested-child"} {
 		t.Run(mode, func(t *testing.T) {
