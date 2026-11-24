@@ -36,7 +36,7 @@ jobs:
             test-kind: coverage
             test-command: >-
               go test ./... -count=1 -timeout=20m
-              -coverpkg=./api,./task,./client,./durabletaskscheduler,./exporthistory,./payload,./internal/contextprop,./internal/failure,./internal/grpcerrors,./internal/helpers,./internal/historyconv,./internal/largepayload,./internal/tagcodec
+              -coverpkg=./api,./task,./client,./durabletaskscheduler,./durabletasktest,./exporthistory,./payload,./internal/contextprop,./internal/failure,./internal/grpcerrors,./internal/helpers,./internal/historyconv,./internal/inmemory,./internal/largepayload,./internal/tagcodec
           - go-version: '1.27.x'
             test-kind: race
             test-command: go test -race ./... -count=1 -timeout=30m

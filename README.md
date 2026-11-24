@@ -53,6 +53,7 @@ Use these features for large systems or for special conditions.
 | Distributed tracing | Emit OpenTelemetry spans from your process. DTS emits the durable spans. |
 | Replay-hazard analysis | Find nondeterministic orchestrator code with `cmd/orchestratorvet`. |
 | History export (preview) | Copy terminal orchestration histories to Azure Blob Storage. |
+| In-process testing | Run orchestrations in a test with an in-memory service and `durabletasktest`. |
 
 ## Quick start
 
@@ -637,6 +638,38 @@ Each exported object is an opaque gzip file. The name ends with `.jsonl.gz`. The
 
 For more information, read the [export history guide](./exporthistory/README.md). See also the [sample](./samples/exporthistory).
 
+## Testing orchestrations
+
+The `durabletasktest` package runs your orchestrations and activities in your test process. It starts an in-memory Durable Task service, a worker for your registry, and a connected client. The parts talk over an in-memory gRPC transport, so the test needs no emulator, network port, or Azure resource. The worker, executor, and client are the same code that runs against DTS.
+
+```go
+func TestGreeting(t *testing.T) {
+    registry := task.NewTaskRegistry()
+    registry.AddOrchestratorN("Greeting", greeting)
+    registry.AddActivityN("SayHello", func(ctx task.ActivityContext) (any, error) {
+        return "Hello, test!", nil // Stub the real activity.
+    })
+
+    host := durabletasktest.New(t, registry) // Closed when the test ends.
+    id, err := host.Client().ScheduleNewOrchestration(t.Context(), "Greeting")
+    require.NoError(t, err)
+    metadata, err := host.Client().WaitForOrchestrationCompletion(t.Context(), id)
+    require.NoError(t, err)
+    require.Equal(t, api.RUNTIME_STATUS_COMPLETED, metadata.RuntimeStatus)
+}
+```
+
+To isolate an orchestration from its dependencies, register stub activities and sub-orchestrators in the test registry. You can use the client to raise events, suspend, resume, terminate, restart, query, and purge instances, and read history.
+
+The in-memory service has these limits:
+
+- Timers use the Go runtime clock. `testing/synctest`
+  can advance timers without waiting in real time while the test goroutines are
+  blocked. The `durabletasktest` tests include a 24-hour timer example.
+- Durable entities and rewind aren't supported. Entity client calls and `RewindInstance` return `api.ErrFeatureNotSupported`. An orchestration that calls, signals, or locks an entity fails. The service has no task hub name, so a query filtered by `TaskHubNames` also returns `api.ErrFeatureNotSupported`.
+- State is kept in memory only. It is discarded when the host closes.
+- Requests and worker completions are limited to 4 MiB, as in DTS. Larger client requests fail with `ResourceExhausted`. An activity whose completion is larger fails once with the non-retriable error type `ActivityResponseTooLarge` instead of running again.
+
 ## Development
 
 ### Clone the repository
@@ -671,7 +704,7 @@ The package tests are beside the code that they exercise. The `./tests` director
 Run the full suite with these commands:
 
 ```bash
-go test ./... -count=1 -coverpkg=./api,./task,./client,./durabletaskscheduler,./exporthistory,./payload,./internal/contextprop,./internal/failure,./internal/grpcerrors,./internal/helpers,./internal/historyconv,./internal/largepayload,./internal/tagcodec
+go test ./... -count=1 -coverpkg=./api,./task,./client,./durabletaskscheduler,./durabletasktest,./exporthistory,./payload,./internal/contextprop,./internal/failure,./internal/grpcerrors,./internal/helpers,./internal/historyconv,./internal/inmemory,./internal/largepayload,./internal/tagcodec
 (cd cmd/orchestratorvet && go test ./...)
 (cd samples/distributedtracing && go test ./...)
 ```
