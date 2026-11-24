@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/client"
@@ -221,6 +224,41 @@ func TestEventsLargerThanOneMessageAreDeliveredAcrossTurns(t *testing.T) {
 	var total int
 	require.NoError(t, metadata.ReadOutput(&total))
 	assert.Equal(t, 2*len(payload), total)
+}
+
+func TestOversizedActivityResultFailsOnce(t *testing.T) {
+	var executions atomic.Int32
+	r := task.NewTaskRegistry()
+	require.NoError(t, r.AddActivityN("Big", func(task.ActivityContext) (any, error) {
+		executions.Add(1)
+		return strings.Repeat("x", 5<<20), nil
+	}))
+	require.NoError(t, r.AddOrchestratorN("CallsBig", func(ctx *task.OrchestrationContext) (any, error) {
+		err := ctx.CallActivity("Big").Await(nil)
+		var failed *task.TaskFailedError
+		if !errors.As(err, &failed) {
+			return nil, fmt.Errorf("expected a task failure, got %w", err)
+		}
+		return failed.FailureDetails, nil
+	}))
+	host := durabletasktest.New(t, r)
+
+	metadata := run(t, host, "CallsBig")
+	require.Equal(t, api.RUNTIME_STATUS_COMPLETED, metadata.RuntimeStatus)
+	var failure api.FailureDetails
+	require.NoError(t, metadata.ReadOutput(&failure))
+	assert.Equal(t, api.ErrorType("ActivityResponseTooLarge"), failure.ErrorType)
+	assert.Contains(t, failure.ErrorMessage, "4194304-byte")
+	assert.True(t, failure.NonRetriable())
+	assert.Equal(t, int32(1), executions.Load())
+}
+
+func TestRequestsOverMessageLimitAreRejected(t *testing.T) {
+	host := durabletasktest.New(t, task.NewTaskRegistry())
+
+	_, err := host.Client().ScheduleNewOrchestration(testContext(t), "Any",
+		api.WithInput(strings.Repeat("x", 5<<20)))
+	assert.Equal(t, codes.ResourceExhausted, status.Code(err))
 }
 
 func TestNewHostPreservesStartupContextAndDetachesAfterStart(t *testing.T) {

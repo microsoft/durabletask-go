@@ -50,6 +50,10 @@ const bufferSize = 64 << 10
 
 const defaultCloseTimeout = 5 * time.Second
 
+// maxReceiveMessageSize matches the default receive limit of DTS connections.
+// Like them, the host's connections set no send limit.
+const maxReceiveMessageSize = 64 << 20
+
 // Option configures a [Host].
 type Option func(*options)
 
@@ -123,7 +127,7 @@ func NewHost(ctx context.Context, registry *task.TaskRegistry, opts ...Option) (
 
 	h := &Host{
 		backend:  inmemory.NewServer(),
-		server:   grpc.NewServer(),
+		server:   grpc.NewServer(inmemory.ServerOptions()...),
 		listener: bufconn.Listen(bufferSize),
 	}
 	h.backend.Register(h.server)
@@ -236,6 +240,7 @@ func (h *Host) dial() (*grpc.ClientConn, error) {
 			return h.listener.DialContext(ctx)
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxReceiveMessageSize)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create in-memory connection: %w", err)

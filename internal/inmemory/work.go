@@ -328,7 +328,10 @@ func (s *Server) CompleteActivityTask(_ context.Context, resp *protos.ActivityRe
 		return &protos.CompleteTaskResponse{}, nil
 	}
 	taskID := item.request.GetTaskId()
-	if resp.GetFailureDetails() != nil {
+	if failure := oversizedCompletionFailure(errorTypeActivityResponseTooLarge, "activity response", resp); failure != nil {
+		// Fail the task rather than store a result over the receive limit.
+		s.deliverLocked(inst, helpers.NewTaskFailedEvent(taskID, failure))
+	} else if resp.GetFailureDetails() != nil {
 		s.deliverLocked(inst, helpers.NewTaskFailedEvent(taskID, resp.GetFailureDetails()))
 	} else {
 		s.deliverLocked(inst, helpers.NewTaskCompletedEvent(taskID, resp.GetResult()))
