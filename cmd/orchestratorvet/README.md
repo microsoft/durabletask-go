@@ -88,9 +88,11 @@ creation, send, receive, range, and close, and `select` statements. The check
 keys on the package that declares a method, so an embedded `sync.Mutex` is
 recognized through the embedding type.
 
-Not reported: `ctx.Go`, `ctx.NewWaitGroup`, `ctx.Select` with `task.OnTask` or
-`task.OnEvent`, `task.NewEventChannel`, and `ctx.WaitForSingleEvent`. These are
-scheduled by the deterministic orchestration scheduler.
+Not reported: `ctx.Go`, `ctx.NewWaitGroup`, `ctx.Select` with `task.OnTask`,
+`task.OnEvent`, `task.OnSend`, or `task.OnReceive`, `task.NewChannel`,
+`task.NewEventChannel`, and `ctx.WaitForSingleEvent`. SDK channel operations
+are also safe: they yield through the deterministic orchestration scheduler,
+not native Go channel synchronization.
 
 ### External I/O
 

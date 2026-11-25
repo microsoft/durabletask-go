@@ -45,6 +45,7 @@ type coroutine struct {
 	stopOnce  sync.Once
 	state     coroutineState
 	scope     *cancellationScope
+	selection *selection
 }
 
 func (c *coroutine) run() {

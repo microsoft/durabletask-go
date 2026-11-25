@@ -1,5 +1,13 @@
 package task
 
+// IsCanceled reports applied cancellation of this orchestration scope.
+// WithCancel's cancel function queues cancellation for the next scheduler
+// boundary, so IsCanceled need not become true immediately after calling it.
+func (ctx *OrchestrationContext) IsCanceled() bool {
+	ctx.effectContext()
+	return ctx.scope.isCanceled()
+}
+
 type cancellationScope struct {
 	parent      *cancellationScope
 	parentIndex int

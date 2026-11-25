@@ -1,14 +1,89 @@
 package task
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
-// SelectCase is a durable selection case created by OnTask or OnEvent.
+// SelectCase is a durable selection case created by OnTask, OnEvent,
+// OnReceive, or OnSend. Applications may embed it in their own types;
+// embedded cases retain the underlying SDK case's selection behavior.
 type SelectCase interface {
 	owner() *OrchestrationContext
-	ready() (bool, uint64)
-	subscribe(*coroutine)
-	unsubscribe(*coroutine)
+	ready(*selection) (bool, uint64)
+	subscribe(*selection)
+	unsubscribe(*selection)
+	commit(*selection) bool
 	invoke()
+	channelNotifier() channelNotifier
+	underlyingCase() SelectCase
+}
+
+// A selection owns all its registrations. A rendezvous commits both selections
+// before either handler runs, withdrawing their losing cases atomically.
+type selection struct {
+	ctx       *OrchestrationContext
+	coroutine *coroutine
+	cases     []SelectCase
+	selected  SelectCase
+	handler   func()
+	cleaned   bool
+}
+
+func (s *selection) pending() bool {
+	return s.selected == nil && !s.ctx.scope.isCanceled() && !s.coroutine.scope.isCanceled()
+}
+
+func (s *selection) preferred() SelectCase {
+	var selected SelectCase
+	var selectedOrder uint64
+	for _, candidate := range s.cases {
+		ready, order := candidate.ready(s)
+		if ready && (selected == nil || order < selectedOrder) {
+			selected = candidate
+			selectedOrder = order
+		}
+	}
+	return selected
+}
+
+func (s *selection) finish(candidate SelectCase, handler func()) {
+	s.selected = candidate
+	s.handler = handler
+	s.cleanup()
+	s.ctx.scheduler.makeRunnable(s.coroutine)
+}
+
+func (s *selection) cleanup() {
+	if s.cleaned {
+		return
+	}
+	s.cleaned = true
+	for _, candidate := range s.cases {
+		candidate.unsubscribe(s)
+	}
+	s.ctx.scope.removeWaiter(s.coroutine)
+	s.notifyChannels()
+}
+
+type channelNotifier interface {
+	notify()
+}
+
+func (s *selection) notifyChannels() {
+	var notified map[channelNotifier]struct{}
+	for _, candidate := range s.cases {
+		if channel := candidate.channelNotifier(); channel != nil {
+			if _, exists := notified[channel]; exists {
+				continue
+			}
+			if notified == nil {
+				notified = make(map[channelNotifier]struct{})
+			}
+			notified[channel] = struct{}{}
+			channel.notify()
+		}
+	}
 }
 
 type taskSelectCase struct {
@@ -30,16 +105,21 @@ func (c *taskSelectCase) owner() *OrchestrationContext {
 	return c.state.orchestrationCtx.engineContext()
 }
 
-func (c *taskSelectCase) ready() (bool, uint64) {
+func (c *taskSelectCase) ready(*selection) (bool, uint64) {
 	return c.state.isCompleted, c.state.completionID
 }
 
-func (c *taskSelectCase) subscribe(coroutine *coroutine) {
-	c.state.addWaiter(coroutine)
+func (c *taskSelectCase) subscribe(s *selection) {
+	c.state.addWaiter(s.coroutine)
 }
 
-func (c *taskSelectCase) unsubscribe(coroutine *coroutine) {
-	c.state.removeWaiter(coroutine)
+func (c *taskSelectCase) unsubscribe(s *selection) {
+	c.state.removeWaiter(s.coroutine)
+}
+
+func (c *taskSelectCase) commit(s *selection) bool {
+	s.finish(c, c.invoke)
+	return true
 }
 
 func (c *taskSelectCase) invoke() {
@@ -47,6 +127,10 @@ func (c *taskSelectCase) invoke() {
 		c.handler(c.task)
 	}
 }
+
+func (*taskSelectCase) channelNotifier() channelNotifier { return nil }
+
+func (c *taskSelectCase) underlyingCase() SelectCase { return c }
 
 // WhenAny blocks until the first task completes and returns that task. If
 // multiple tasks are ready, the task completed first in orchestration history wins.
@@ -89,11 +173,23 @@ func (ctx *OrchestrationContext) WhenAll(tasks ...Task) error {
 
 // Select waits until one case is ready and invokes its handler.
 // All cases must belong to the same orchestration, including its child scopes.
+// Task and event cases are ordered by history; channel cases are ordered by
+// deterministic scheduler readiness. Argument order breaks ties, not priority.
+// Losing cases do not receive values or send messages.
+// Repeated cases are treated as their first occurrence.
 func (ctx *OrchestrationContext) Select(cases ...SelectCase) {
 	ctx.selectCase(cases)
 }
 
 func (ctx *OrchestrationContext) selectCase(cases []SelectCase) SelectCase {
+	selected, err := ctx.selectCaseErr(cases)
+	if err != nil {
+		panic(err)
+	}
+	return selected
+}
+
+func (ctx *OrchestrationContext) selectCaseErr(cases []SelectCase) (SelectCase, error) {
 	engine := ctx.effectContext()
 	if len(cases) == 0 {
 		panic("Select requires at least one case")
@@ -103,40 +199,70 @@ func (ctx *OrchestrationContext) selectCase(cases []SelectCase) SelectCase {
 		panic("Select called outside orchestrator execution")
 	}
 	current := scheduler.mustCurrent()
-
-	for {
-		if current.scope.isCanceled() || ctx.scope.isCanceled() {
-			panic(ErrTaskCanceled)
+	if current.scope.isCanceled() || ctx.scope.isCanceled() {
+		return nil, ErrTaskCanceled
+	}
+	taskOrEventOnly := true
+	for _, candidate := range cases {
+		if candidate.owner() != engine {
+			panic("Select case belongs to a different orchestration")
 		}
-		for _, candidate := range cases {
-			if candidate.owner() != engine {
-				panic("Select case belongs to a different orchestration")
-			}
+		if candidate.channelNotifier() != nil {
+			taskOrEventOnly = false
 		}
+	}
+	if taskOrEventOnly {
+		// Ready task/event cases need no snapshot or waiter registrations.
 		var selected SelectCase
 		var selectedOrder uint64
 		for _, candidate := range cases {
-			ready, order := candidate.ready()
-			if ready && (selected == nil || order < selectedOrder) {
-				selected = candidate
-				selectedOrder = order
+			if ready, order := candidate.ready(nil); ready &&
+				(selected == nil || order < selectedOrder) {
+				selected, selectedOrder = candidate, order
 			}
 		}
 		if selected != nil {
 			selected.invoke()
-			return selected
+			return selected, nil
 		}
-
-		ctx.scope.addWaiter(current)
-		for _, candidate := range cases {
-			candidate.subscribe(current)
+	}
+	s := &selection{ctx: ctx, coroutine: current, cases: slices.Clone(cases)}
+	seen := make(map[SelectCase]struct{}, len(cases))
+	s.cases = slices.DeleteFunc(s.cases, func(candidate SelectCase) bool {
+		underlying := candidate.underlyingCase()
+		if _, exists := seen[underlying]; exists {
+			return true
+		}
+		seen[underlying] = struct{}{}
+		return false
+	})
+	current.selection = s
+	defer func() {
+		s.cleanup()
+		current.selection = nil
+	}()
+	ctx.scope.addWaiter(current)
+	for _, candidate := range s.cases {
+		candidate.subscribe(s)
+	}
+	s.notifyChannels()
+	for {
+		// A committed rendezvous is not undone by cancellation applied before
+		// the other coroutine resumes.
+		if s.selected != nil {
+			if s.handler != nil {
+				s.handler()
+			}
+			return s.selected, nil
+		}
+		if !s.pending() {
+			return nil, ErrTaskCanceled
+		}
+		if candidate := s.preferred(); candidate != nil && candidate.commit(s) {
+			continue
 		}
 		current.state = coroutineWaiting
 		current.yield()
-		for _, candidate := range cases {
-			candidate.unsubscribe(current)
-		}
-		ctx.scope.removeWaiter(current)
 	}
 }
 

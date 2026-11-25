@@ -311,6 +311,80 @@ Obey these rules when you write a retry handler:
 
 Full sample: [samples/retries](./samples/retries).
 
+### Selectable coroutine channels
+
+Use `task.NewChannel[T](ctx, capacity)` to pass values between `ctx.Go` branches
+inside one orchestration. Capacity zero requires a sender/receiver rendezvous;
+positive capacity provides a bounded FIFO buffer. This is separate from
+`task.NewEventChannel`, which receives events raised by clients or other
+orchestrations.
+
+```go
+results := task.NewChannel[int](ctx, 0)
+ctx.Go(func(branch *task.OrchestrationContext) {
+	var value int
+	if err := branch.CallActivity("Calculate").Await(&value); err != nil {
+		panic(err)
+	}
+	results.Send(branch, value)
+})
+value := results.Receive(ctx)
+```
+
+`Send` and `Receive` are the durable equivalents of Go's `ch <- value` and
+`value := <-ch`. `SendErr` and `ReceiveErr` return `task.ErrTaskCanceled` if the
+waiting scope is canceled before the operation commits; the convenience forms
+panic on cancellation. A committed exchange is not undone by later
+cancellation. Values are passed by assignment without serialization, like Go
+channels; do not mutate shared values concurrently or make replay-unsafe values
+in orchestration code.
+
+Use the existing selector to wait for channel operations alongside durable
+tasks and external events:
+
+```go
+ctx.Select(
+	task.OnReceive(results, func(value int) { /* process value */ }),
+	task.OnEvent(task.NewEventChannel[string](ctx, "Stop"), func(string) {
+		/* request cancellation of branch operations */
+	}),
+	task.OnTask(timer, func(task.Task) { /* handle timeout */ }),
+)
+```
+
+`task.OnSend(channel, value, handler)` is the send equivalent. Only the winning
+case sends or consumes a value. For an unbuffered exchange, both selections
+commit their channel cases before either callback runs. Each callback executes
+in its own selecting coroutine. Task and external event readiness is ordered
+by history; channel readiness is ordered deterministically by the SDK scheduler.
+Argument order breaks ties, but does not give a stop event priority over an
+earlier ready result. A repeated case within one `Select` is treated as its
+first occurrence and registered only once; cases can also be reused by later calls.
+
+Channel waits yield to the SDK, allowing other branches to schedule activities.
+When all branches are waiting and available history is exhausted, the execution
+unloads and its durable actions are dispatched. Replay reconstructs branches,
+buffers, and exchanges; channels do not keep goroutines alive between turns.
+Never use native Go channels or native `select` inside an orchestrator.
+
+If channel operations are waiting with no runnable coroutine, pending durable
+task, or external event wait, the SDK fails the orchestration with
+`task.ErrOrchestrationDeadlock` rather than leaving an unrecoverable local
+cycle silently stuck. Detection is conservative: pending durable work prevents
+this diagnosis even if application logic will still be unable to progress.
+It cannot detect arbitrary application loops that never yield. Channels have
+no close operation; use known result counts, explicit completion messages, or
+cancellation to finish receivers.
+
+`ctx.IsCanceled()` inspects applied cancellation of the durable scope, not the
+host Go context. Cancellation requested by a `WithCancel` cancel function is
+applied at the next scheduler boundary. Canceling a scope releases its pending
+channel operations without closing the shared channel or canceling other
+scopes. It does not guarantee an already-dispatched activity stops remotely.
+Join uncanceled coroutine wrappers when cleanup must finish before returning.
+
+Full sample: [samples/coroutines](./samples/coroutines).
+
 ### Deferred work and cooperative cleanup
 
 A root or child coroutine's defers can schedule and await durable work during
