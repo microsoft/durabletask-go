@@ -1,7 +1,9 @@
 // Package tracingtree provides the application-process OpenTelemetry plumbing
 // used by the Durable Task Scheduler tracing tests: a process-wide in-memory
 // exporter and the caller span whose W3C context the SDK propagates to DTS.
-// Durable operation spans are emitted by DTS service-side, not by the Go worker.
+// DTS persists and propagates trace context but does not emit durable operation
+// spans, and without explicit tracing options the Go client and worker emit
+// none either.
 package tracingtree
 
 import (
@@ -17,8 +19,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// attributeInstanceID is the instance-ID attribute DTS stamps on its
-// service-side durable operation spans. It is used only in diagnostic output.
+// attributeInstanceID is the instance-ID attribute on Durable Task spans. It is
+// used only in diagnostic output.
 const attributeInstanceID = "durabletask.task.instance_id"
 
 var (

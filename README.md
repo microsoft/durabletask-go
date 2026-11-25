@@ -50,7 +50,7 @@ Use these features for large systems or for special conditions.
 | Data converters | Replace the default JSON serialization of your payloads. |
 | Large payloads | Keep large payloads in Azure Blob Storage and send a reference token. |
 | Tags and trace context | Attach user tags to actions. Send the caller trace context to DTS. |
-| Distributed tracing | Emit OpenTelemetry spans from your process. DTS emits the durable spans. |
+| [Distributed tracing](./tracing/README.md) | Opt in to replay-aware client and worker OpenTelemetry spans through your application's provider. DTS doesn't emit durable spans itself. |
 | Replay-hazard analysis | Find nondeterministic orchestrator code with `cmd/orchestratorvet`. |
 | History export (preview) | Copy terminal orchestration histories to Azure Blob Storage. |
 
@@ -604,7 +604,7 @@ Activity contexts expose the activity's own name, version, and task ID in
 from native history fields, including after sub-orchestration starts and
 ContinueAsNew version changes.
 
-The client sends the sampled caller trace context when it schedules an orchestration or signals an entity. The worker adds separate action trace contexts for the service-owned activity and sub-orchestration spans. The worker does not emit duplicate local Durable Task spans. V2 entity requests do not carry per-operation trace context, so entity-emitted actions cannot inherit it.
+The client sends the sampled caller trace context when it schedules an orchestration or signals an entity. By default, the worker propagates action trace contexts without emitting Durable Task spans. DTS persists and forwards trace context but doesn't emit durable spans either. Opt-in tracing adds replay-aware client and worker spans through your application's provider. V2 entity requests do not carry per-operation trace context, so entity execution spans are independent roots.
 
 Use `task.OrchestrationOptions.MaxEventsPerTurn` to limit the new events in one turn. If the worker uses only part of a batch, it sets `numEventsProcessed`. DTS then keeps the remaining events for the next replay. This count obeys the DTS work-item rules. The orchestration control markers do not count against the limit.
 
@@ -629,45 +629,109 @@ accounts. See [large payload configuration](./durabletaskscheduler/README.md#lar
 
 ## Distributed tracing
 
-The SDK sends the W3C trace context of a sampled caller when it schedules an orchestration. DTS owns the spans for the orchestrations, activities, timers, and sub-orchestrations. Your application code can use standard [OpenTelemetry](https://opentelemetry.io/) instrumentation. Use it for caller spans, custom activity spans, and outbound dependencies.
-
-When DTS supplies an activity trace parent, the SDK restores it on
-`ActivityContext.Context()` without creating another durable-operation span.
-Application instrumentation can therefore attach outbound requests to the
-service-owned trace.
-
-This example sends the traces of your process to an [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) over OTLP/HTTP. Configure the DTS telemetry separately for the service-owned spans.
+Tracing is opt-in. Without tracing options, the SDK propagates W3C trace context
+but emits no spans. DTS persists and forwards that context, but it doesn't emit
+durable orchestration, activity, or timer spans or export spans to your
+backend. To see durable spans next to your application telemetry, enable SDK
+tracing with an OpenTelemetry provider that your application owns:
 
 ```go
-func ConfigureOTLPTracing(ctx context.Context) (*trace.TracerProvider, error) {
-	exp, err := otlptracehttp.New(
-		ctx,
+func ConfigureOTLPTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
+	exp, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpoint("localhost:4318"),
 		otlptracehttp.WithInsecure(),
 	)
 	if err != nil {
 		return nil, err
 	}
+	res, err := resource.New(ctx,
+		resource.WithAttributes(semconv.ServiceName("sample-app")),
+		resource.WithFromEnv(),
+		resource.WithTelemetrySDK(),
+	)
+	if err != nil {
+		return nil, err
+	}
 
-	// NOTE: Do not use the simple span processor in production.
-	//       Use the batch span processor in production.
-	processor := trace.NewSimpleSpanProcessor(exp)
-	// processor := trace.NewBatchSpanProcessor(exp)
-
-	tp := trace.NewTracerProvider(
-		trace.WithSpanProcessor(processor),
-		trace.WithSampler(trace.AlwaysSample()),
-		trace.WithResource(resource.NewWithAttributes(
-			"durabletask.io",
-			attribute.KeyValue{Key: "service.name", Value: attribute.StringValue("sample-app")},
-		)),
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exp),
+		tracing.WithIDGenerator(nil),
+		tracing.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
+		sdktrace.WithResource(res),
 	)
 	otel.SetTracerProvider(tp)
 	return tp, nil
 }
 ```
 
-The [distributed tracing sample](./samples/distributedtracing) starts a caller span before `ScheduleNewOrchestration`. DTS then joins its service-side spans to the same trace. The sample also instruments an HTTP request from an activity.
+Pass the provider to each surface you want to trace, and shut down in order:
+the worker, then the client, then the provider.
+
+```go
+func run(ctx context.Context) (err error) {
+	tp, err := ConfigureOTLPTracing(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err = errors.Join(err, tp.Shutdown(shutdownCtx))
+	}()
+
+	worker, err := durabletaskscheduler.NewWorker(options, registry, logger,
+		durabletaskclient.WithWorkerTracerProvider(tp))
+	if err != nil {
+		return err
+	}
+	managementClient, err := durabletaskscheduler.NewClient(ctx, options, logger,
+		durabletaskclient.WithTracerProvider(tp))
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, managementClient.Close()) }()
+	if err := worker.Start(ctx); err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err = errors.Join(err, worker.Shutdown(shutdownCtx))
+	}()
+
+	// Schedule and wait for orchestrations.
+	return nil
+}
+```
+
+Deferred calls run in reverse order, so the worker shuts down first, the client
+closes next, and the provider flushes last. The worker provider must use
+**both** tracing wrappers. They let the worker reconstruct completed spans with
+persisted identities and consistent sampling decisions across replay. The worker
+rejects a provider that is missing either wrapper with an error that wraps
+`tracing.ErrUnsupportedTracerProvider`.
+
+The trace tree is caller -> create orchestration PRODUCER -> orchestration
+SERVER -> activity or sub-orchestration CLIENT -> execution SERVER, plus timer
+INTERNAL and event-send PRODUCER spans. Each orchestration execution has one
+logical span that's exported when the execution finishes, not one span per
+replay. Activity spans are active in `ActivityContext.Context()`, so your HTTP
+and database spans nest under them. Telemetry is best effort in both
+directions: retried or redelivered work can export duplicate spans, and spans
+can be lost if a completion is accepted but its reply is lost.
+
+Entity spans follow DurableTask.Core names and kinds. V2 entity execution spans
+are independent roots because entity operations carry no parent context. Event
+receipt emits no CONSUMER span and doesn't join the sender's trace. If another
+component also emits durable spans for the same work into your backend, enable
+only one source.
+
+The [tracing guide](./tracing/README.md) has the full span catalog, the
+difference between logical and execution-turn spans, the limitations, and a
+parity table for the .NET, Python, and JavaScript SDKs. The
+[distributed tracing sample](./samples/distributedtracing) exports durable and
+application HTTP spans to a real OTLP collector and verifies that the collector
+received them.
 
 ## History export (preview)
 

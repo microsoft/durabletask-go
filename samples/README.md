@@ -29,7 +29,7 @@ operation is not evidence that a feature works end to end.
 | [observability](observability) | Tags/context, replay-safe logs and metric hooks | None |
 | [worker](worker) | Concurrency, graceful drain, restart/recovery and connection ownership | None |
 | [authentication](authentication) | Azure connection-string and programmatic identity authentication | Azure DTS and an authorized identity |
-| [distributedtracing](distributedtracing) | Application spans, caller propagation and actual OTLP receipt | OTLP collector and readable trace capture |
+| [distributedtracing](distributedtracing) | Opt-in SDK durable spans, application spans, caller propagation and actual OTLP receipt | OTLP collector and readable trace capture |
 | [exporthistory](exporthistory) | Export jobs and downloaded JSON/JSONL objects | Blob storage and an explicitly isolated Go-only hub |
 | [replayanalysis](replayanalysis) | Analyzer diagnostics and safe runnable counterparts | Local `cmd/orchestratorvet` sources |
 | [serviceoperations](serviceoperations) | Hub-wide filtered purge and empty-entity maintenance | Deletes data; read the sample's warning |

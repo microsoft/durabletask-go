@@ -1,5 +1,5 @@
-// Command distributedtracing propagates an application caller span into DTS and
-// verifies that a real OTLP/HTTP collector received application spans.
+// Command distributedtracing exports replay-aware DTS worker and client spans
+// alongside application spans to a real OTLP/HTTP collector.
 package main
 
 import (
@@ -17,16 +17,19 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/microsoft/durabletask-go/api"
+	durabletaskclient "github.com/microsoft/durabletask-go/client"
+	"github.com/microsoft/durabletask-go/durabletaskscheduler"
 	"github.com/microsoft/durabletask-go/samples/internal/dtssample"
 	"github.com/microsoft/durabletask-go/task"
+	"github.com/microsoft/durabletask-go/tracing"
 )
 
 const callerSpanName = "schedule_distributed_trace_sample"
@@ -69,15 +72,35 @@ func run() (err error) {
 		return fmt.Errorf("register activity: %w", err)
 	}
 
-	app, err := dtssample.Start(ctx, registry)
+	options, err := dtssample.Options()
 	if err != nil {
 		return err
+	}
+	managementClient, err := durabletaskscheduler.NewClient(ctx, options, api.DefaultLogger(),
+		durabletaskclient.WithTracerProvider(tp))
+	if err != nil {
+		return fmt.Errorf("create client: %w", err)
+	}
+	defer func() { err = errors.Join(err, managementClient.Close()) }()
+	worker, err := durabletaskscheduler.NewWorker(options, registry, api.DefaultLogger(),
+		durabletaskclient.WithAutoWorkItemFilters(),
+		durabletaskclient.WithWorkerTracerProvider(tp))
+	if err != nil {
+		return fmt.Errorf("create worker: %w", err)
+	}
+	if err := worker.Start(ctx); err != nil {
+		return fmt.Errorf("start worker: %w", err)
+	}
+	shutdownWorker := func() error {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		return worker.Shutdown(shutdownCtx)
 	}
 	var ownedIDs []api.InstanceID
 	cleanupDone := false
 	defer func() {
 		if !cleanupDone {
-			err = errors.Join(err, dtssample.Cleanup(app.Client, ownedIDs...), app.Shutdown())
+			err = errors.Join(err, dtssample.Cleanup(managementClient, ownedIDs...), shutdownWorker())
 		}
 	}()
 
@@ -89,7 +112,7 @@ func run() (err error) {
 	traceID := callerSpan.SpanContext().TraceID().String()
 	instanceID := dtssample.NewInstanceID("distributedtracing")
 	ownedIDs = append(ownedIDs, instanceID)
-	if _, err := app.Client.ScheduleNewOrchestration(callerCtx, "DistributedTraceSampleOrchestrator",
+	if _, err := managementClient.ScheduleNewOrchestration(callerCtx, "DistributedTraceSampleOrchestrator",
 		api.WithInstanceID(instanceID),
 		api.WithInput(tracedTarget.URL),
 		api.WithTags(map[string]string{"sample": "distributedtracing"})); err != nil {
@@ -98,14 +121,14 @@ func run() (err error) {
 	}
 	callerSpan.End()
 
-	metadata, err := app.Client.WaitForOrchestrationCompletion(ctx, instanceID, api.WithFetchPayloads(true))
+	metadata, err := managementClient.WaitForOrchestrationCompletion(ctx, instanceID, api.WithFetchPayloads(true))
 	if err != nil {
 		return fmt.Errorf("wait for orchestration: %w", err)
 	}
 	if err := dtssample.RequireCompleted(metadata); err != nil {
 		return err
 	}
-	history, err := app.Client.GetOrchestrationHistory(ctx, instanceID, api.HistoryQuery{ExecutionID: metadata.ExecutionID})
+	history, err := managementClient.GetOrchestrationHistory(ctx, instanceID, api.HistoryQuery{ExecutionID: metadata.ExecutionID})
 	if err != nil {
 		return fmt.Errorf("read orchestration history: %w", err)
 	}
@@ -118,14 +141,26 @@ func run() (err error) {
 	}
 	log.Printf("Orchestration completed: %s", metadataEnc)
 
-	cleanupErr := dtssample.Cleanup(app.Client, ownedIDs...)
-	appErr := app.Shutdown()
-	traceErr := shutdownTracer(tp)
+	cleanupErr := dtssample.Cleanup(managementClient, ownedIDs...)
+	workerErr := shutdownWorker()
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer flushCancel()
+	traceErr := tp.ForceFlush(flushCtx)
 	cleanupDone = true
 	receiptCtx, receiptCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer receiptCancel()
-	receiptErr := waitForCollectorReceipt(receiptCtx, traceFile, traceID, []string{callerSpanName, "local_trace_target"})
-	return errors.Join(cleanupErr, appErr, traceErr, receiptErr)
+	receiptErr := waitForCollectorReceipt(receiptCtx, traceFile, traceID, []expectedSpan{
+		{name: callerSpanName, kind: oteltrace.SpanKindClient},
+		{name: "create_orchestration:DistributedTraceSampleOrchestrator", kind: oteltrace.SpanKindProducer},
+		{name: "orchestration:DistributedTraceSampleOrchestrator", kind: oteltrace.SpanKindServer},
+		{name: "activity:DoWorkActivity", kind: oteltrace.SpanKindClient},
+		{name: "activity:DoWorkActivity", kind: oteltrace.SpanKindServer},
+		{name: "orchestration:DistributedTraceSampleOrchestrator:timer", kind: oteltrace.SpanKindInternal},
+		{name: "activity:CallHttpEndpointActivity", kind: oteltrace.SpanKindClient},
+		{name: "activity:CallHttpEndpointActivity", kind: oteltrace.SpanKindServer},
+		{name: "local_trace_target", kind: oteltrace.SpanKindServer},
+	})
+	return errors.Join(cleanupErr, workerErr, traceErr, receiptErr)
 }
 
 func ConfigureOTLPTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
@@ -137,13 +172,20 @@ func ConfigureOTLPTracing(ctx context.Context) (*sdktrace.TracerProvider, error)
 	if err != nil {
 		return nil, err
 	}
+	// OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES override the service name.
+	res, err := resource.New(ctx,
+		resource.WithAttributes(semconv.ServiceName("distributedtracing-sample")),
+		resource.WithFromEnv(),
+		resource.WithTelemetrySDK(),
+	)
+	if err != nil {
+		return nil, errors.Join(err, exp.Shutdown(ctx))
+	}
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithSpanProcessor(sdktrace.NewBatchSpanProcessor(exp)),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-		sdktrace.WithResource(resource.NewWithAttributes(
-			"durabletask.io",
-			attribute.String("service.name", "distributedtracing-sample"),
-		)),
+		tracing.WithIDGenerator(nil),
+		tracing.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
+		sdktrace.WithResource(res),
 	)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
@@ -247,13 +289,27 @@ func requireHistoryTraceContext(events []*api.HistoryEvent, traceID string) erro
 	return nil
 }
 
-func waitForCollectorReceipt(ctx context.Context, path string, traceID string, spanNames []string) error {
+// expectedSpan is a span the collector must receive. An unspecified kind
+// matches any kind.
+type expectedSpan struct {
+	name string
+	kind oteltrace.SpanKind
+}
+
+func (s expectedSpan) String() string {
+	if s.kind == oteltrace.SpanKindUnspecified {
+		return s.name
+	}
+	return s.name + " (" + s.kind.String() + ")"
+}
+
+func waitForCollectorReceipt(ctx context.Context, path string, traceID string, expected []expectedSpan) error {
 	var lastErr error
 	var missing []string
 	for {
 		body, err := os.ReadFile(path)
 		if err == nil {
-			missing, lastErr = missingSpansForTrace(string(body), traceID, spanNames)
+			missing, lastErr = missingSpansForTrace(string(body), traceID, expected)
 			if lastErr == nil && len(missing) == 0 {
 				return nil
 			}
@@ -266,40 +322,40 @@ func waitForCollectorReceipt(ctx context.Context, path string, traceID string, s
 				return fmt.Errorf("collector trace file %s could not be verified: %w", path, lastErr)
 			}
 			return fmt.Errorf("collector trace file %s did not contain trace %s spans %v; missing %v: %w",
-				path, traceID, spanNames, missing, ctx.Err())
+				path, traceID, expected, missing, ctx.Err())
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
 }
 
-func traceFileContains(body, traceID string, spanNames []string) bool {
-	missing, err := missingSpansForTrace(body, traceID, spanNames)
+func traceFileContains(body, traceID string, expected []expectedSpan) bool {
+	missing, err := missingSpansForTrace(body, traceID, expected)
 	return err == nil && len(missing) == 0
 }
 
-func missingSpansForTrace(body, traceID string, spanNames []string) ([]string, error) {
+func missingSpansForTrace(body, traceID string, expected []expectedSpan) ([]string, error) {
 	spans, err := traceSpansFromCollectorFile(body)
-	if err != nil {
-		return spanNames, err
-	}
-	found := map[string]struct{}{}
-	for _, span := range spans {
-		if strings.EqualFold(span.traceID, traceID) {
-			found[span.name] = struct{}{}
-		}
-	}
 	var missing []string
-	for _, name := range spanNames {
-		if _, ok := found[name]; !ok {
-			missing = append(missing, name)
+	for _, want := range expected {
+		found := false
+		for _, span := range spans {
+			if strings.EqualFold(span.traceID, traceID) && span.name == want.name &&
+				(want.kind == oteltrace.SpanKindUnspecified || span.kind == want.kind) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, want.String())
 		}
 	}
-	return missing, nil
+	return missing, err
 }
 
 type collectedSpan struct {
 	traceID string
 	name    string
+	kind    oteltrace.SpanKind
 }
 
 func traceSpansFromCollectorFile(body string) ([]collectedSpan, error) {
@@ -325,7 +381,7 @@ func collectSpans(value any, spans *[]collectedSpan) {
 		traceID := stringField(typed, "traceId", "traceID", "trace_id")
 		name := stringField(typed, "name")
 		if traceID != "" && name != "" {
-			*spans = append(*spans, collectedSpan{traceID: traceID, name: name})
+			*spans = append(*spans, collectedSpan{traceID: traceID, name: name, kind: spanKind(typed["kind"])})
 		}
 		for _, child := range typed {
 			collectSpans(child, spans)
@@ -335,6 +391,30 @@ func collectSpans(value any, spans *[]collectedSpan) {
 			collectSpans(child, spans)
 		}
 	}
+}
+
+// spanKind decodes an OTLP JSON span kind, which is an enum number such as 2
+// or, from some encoders, an enum name such as "SPAN_KIND_SERVER". OTLP and
+// the OpenTelemetry Go API number span kinds the same way.
+func spanKind(value any) oteltrace.SpanKind {
+	switch typed := value.(type) {
+	case float64:
+		return oteltrace.SpanKind(typed)
+	case string:
+		switch typed {
+		case "SPAN_KIND_INTERNAL":
+			return oteltrace.SpanKindInternal
+		case "SPAN_KIND_SERVER":
+			return oteltrace.SpanKindServer
+		case "SPAN_KIND_CLIENT":
+			return oteltrace.SpanKindClient
+		case "SPAN_KIND_PRODUCER":
+			return oteltrace.SpanKindProducer
+		case "SPAN_KIND_CONSUMER":
+			return oteltrace.SpanKindConsumer
+		}
+	}
+	return oteltrace.SpanKindUnspecified
 }
 
 func stringField(fields map[string]any, names ...string) string {

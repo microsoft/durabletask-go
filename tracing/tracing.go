@@ -1,8 +1,16 @@
 // Package tracing configures opt-in OpenTelemetry spans for Durable Task
 // clients and workers.
 //
+// The tracing guide at
+// https://github.com/microsoft/durabletask-go/blob/main/tracing/README.md
+// describes the span catalog, logical orchestration spans, service-side
+// telemetry, and parity with the Durable Task .NET, Python, and JavaScript
+// SDKs. The samples/distributedtracing module in the same repository exports
+// these spans to an OTLP collector.
+//
 // By default clients and workers only propagate W3C trace context and emit no
-// spans. Enable worker spans with client.WithWorkerTracerProvider and a
+// spans. Enable worker spans with
+// [github.com/microsoft/durabletask-go/client.WithWorkerTracerProvider] and a
 // provider built with [WithIDGenerator] and [WithSampler]:
 //
 //	provider := sdktrace.NewTracerProvider(
@@ -12,11 +20,12 @@
 //	)
 //	worker, err := durabletaskscheduler.NewWorker(..., client.WithWorkerTracerProvider(provider))
 //
-// Enable client spans with client.WithTracerProvider. Client spans are
-// started live and never reconstructed, so any provider works, including
-// otel.GetTracerProvider(), the global delegating provider. The client and
-// worker can also share one provider configured with [WithIDGenerator] and
-// [WithSampler]:
+// Enable client spans with
+// [github.com/microsoft/durabletask-go/client.WithTracerProvider]. Client
+// spans are started live and never reconstructed, so any provider works,
+// including otel.GetTracerProvider(), the global delegating provider. The
+// client and worker can also share one provider configured with
+// [WithIDGenerator] and [WithSampler]:
 //
 //	c, err := durabletaskscheduler.NewClient(ctx, options, logger, client.WithTracerProvider(provider))
 //
