@@ -5,6 +5,7 @@ package loops
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -120,6 +121,85 @@ func opaqueLoop(ctx *task.OrchestrationContext) (any, error) {
 	}
 }
 
+// pollWithoutYield checks completion but never lets the task complete.
+func pollWithoutYield(ctx *task.OrchestrationContext) (any, error) {
+	work := ctx.CallActivity("work")
+	polls := 0
+	for !task.IsCompleted(work) { // want `loop polls task.IsCompleted without awaiting`
+		polls++
+		_ = strings.Repeat("a", polls)
+	}
+	for !(task.IsCompleted(work)) { // want `loop polls task.IsCompleted without awaiting`
+	}
+	return polls, work.Await(nil)
+}
+
+// spinCheckingCompletion treats IsCompleted as a pure read inside the body.
+func spinCheckingCompletion(ctx *task.OrchestrationContext) (any, error) {
+	work := ctx.CallActivity("work")
+	ready := 0
+	for { // want `unbounded orchestrator loop never awaits a durable task`
+		if task.IsCompleted(work) {
+			ready++
+		}
+	}
+}
+
+// pollingLoopsThatProgress are not reported: each can make durable progress,
+// leave the loop, or observe a different task.
+func pollingLoopsThatProgress(ctx *task.OrchestrationContext) (any, error) {
+	other := ctx.CallActivity("other")
+	work := ctx.CallActivity("work")
+	for !task.IsCompleted(work) {
+		_ = ctx.CreateTimer(time.Second).Await(nil)
+	}
+	wait := func(yield func() bool) {
+		_ = ctx.CreateTimer(time.Second).Await(nil)
+		yield()
+	}
+	for !task.IsCompleted(work) {
+		for range wait {
+		}
+	}
+	pollWithGenericIterator(work, wait)
+	waitValues := func(yield func(int) bool) {
+		_ = ctx.CreateTimer(time.Second).Await(nil)
+		yield(0)
+	}
+	for !task.IsCompleted(work) {
+		_ = slices.Collect(waitValues)
+	}
+	for !task.IsCompleted(work) {
+		break
+	}
+	for !task.IsCompleted(work) {
+		work = other
+	}
+	swapped := ctx.CallActivity("swapped")
+	pointer := &swapped
+	for !task.IsCompleted(swapped) {
+		*pointer = other
+	}
+	captured := ctx.CallActivity("captured")
+	swap := func() { captured = other }
+	for !task.IsCompleted(captured) {
+		swap()
+	}
+	tasks := []task.Task{work}
+	for !task.IsCompleted(tasks[0]) {
+	}
+	for i := 0; !task.IsCompleted(work) && i < 3; i++ {
+	}
+	return nil, nil
+}
+
+func pollWithGenericIterator[F ~func(func() bool)](work task.Task, wait F) {
+	for !task.IsCompleted(work) {
+		for range wait {
+		}
+	}
+}
+
 func register() {
 	registry := task.NewTaskRegistry()
 	_ = registry.AddOrchestrator(spinForever)
@@ -131,4 +211,7 @@ func register() {
 	_ = registry.AddOrchestrator(continueAsNewLoop)
 	_ = registry.AddOrchestrator(boundedLoops)
 	_ = registry.AddOrchestrator(opaqueLoop)
+	_ = registry.AddOrchestrator(pollWithoutYield)
+	_ = registry.AddOrchestrator(spinCheckingCompletion)
+	_ = registry.AddOrchestrator(pollingLoopsThatProgress)
 }

@@ -179,6 +179,40 @@ func runRepeatedEventChannelScenario(
 	if !reflect.DeepEqual(output, expected) {
 		return fmt.Errorf("repeated event output = %#v, want %#v", output, expected)
 	}
+
+	stopID := dtssample.NewInstanceID("externalevents-stop")
+	*ownedIDs = append(*ownedIDs, stopID)
+	if _, err := client.ScheduleNewOrchestration(
+		ctx,
+		"RepeatedEventChannelOrch",
+		api.WithInstanceID(stopID),
+		api.WithInput(3),
+	); err != nil {
+		return fmt.Errorf("failed to schedule stop event orchestration: %w", err)
+	}
+	if _, err := client.WaitForOrchestrationStart(ctx, stopID); err != nil {
+		return fmt.Errorf("failed to wait for stop event orchestration start: %w", err)
+	}
+	if err := client.RaiseEvent(ctx, stopID, "Stop"); err != nil {
+		return fmt.Errorf("failed to raise stop event: %w", err)
+	}
+	if err := client.RaiseEvent(ctx, stopID, "Checkpoint", api.WithEventPayload(events[0])); err != nil {
+		return fmt.Errorf("failed to raise final checkpoint: %w", err)
+	}
+	stopped, err := client.WaitForOrchestrationCompletion(ctx, stopID, api.WithFetchPayloads(true))
+	if err != nil {
+		return fmt.Errorf("failed to wait for stopped orchestration: %w", err)
+	}
+	if err := dtssample.RequireCompleted(stopped); err != nil {
+		return err
+	}
+	var stoppedOutput []string
+	if err := stopped.ReadOutput(&stoppedOutput); err != nil {
+		return fmt.Errorf("failed to decode stopped output: %w", err)
+	}
+	if want := []string{"01:received"}; !reflect.DeepEqual(stoppedOutput, want) {
+		return fmt.Errorf("stopped output = %#v, want %#v", stoppedOutput, want)
+	}
 	return nil
 }
 
@@ -303,14 +337,23 @@ func ExternalEventOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	return fmt.Sprintf("Hello, %s!", nameInput), nil
 }
 
+// RepeatedEventChannelOrchestrator checks for stop requests between checkpoints.
+// A pending checkpoint wait is not interrupted by a stop request.
 func RepeatedEventChannelOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 	var count int
 	if err := ctx.GetInput(&count); err != nil {
 		return nil, err
 	}
 	channel := task.NewEventChannel[checkpointEvent](ctx, "Checkpoint")
+	stop := ctx.WaitForSingleEvent("Stop", -1)
 	results := make([]string, 0, count)
 	for range count {
+		if task.IsCompleted(stop) {
+			if err := stop.Await(nil); err != nil {
+				return nil, err
+			}
+			break
+		}
 		event, err := channel.ReceiveErr(ctx)
 		if err != nil {
 			return nil, err

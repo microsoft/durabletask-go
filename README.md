@@ -229,6 +229,8 @@ func UpdateDevicesOrchestrator(ctx *task.OrchestrationContext) (any, error) {
 
 Full sample: [samples/parallel](./samples/parallel).
 
+To check whether a task has finished without blocking, call `task.IsCompleted(t)`. A task counts as finished when it succeeds, fails, or is canceled. The check doesn't consume the result, so call `Await` to read it. The check reflects the current replay position. After `WhenAny` or `Select` wakes on a completion, only the selected task is guaranteed to be complete. Other completions in the same batch become visible only after the orchestration waits again. A loop that only polls never lets a task finish, so wait with `Await`, `WhenAny`, or `Select`. The [externalevents](./samples/externalevents) sample checks for a stop request between checkpoints.
+
 ### Pattern 3: External events
 
 An orchestration can wait for input from an external system. For example, an approval workflow waits for a signal from a user. Use the `WaitForSingleEvent` method to stop the orchestration until the event comes.

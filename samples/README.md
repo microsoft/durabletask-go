@@ -14,7 +14,7 @@ operation is not evidence that a feature works end to end.
 | [parallel](parallel) | Fan-out/fan-in, WhenAll/WhenAny, aggregation | None |
 | [coroutines](coroutines) | Durable coroutines, wait groups, selection, cancellation scopes | None |
 | [timers](timers) | Durable delays, scheduled starts, timer splitting, deterministic time/IDs | None |
-| [externalevents](externalevents) | Typed and repeated events, timeouts, cross-instance events | Piped or interactive input |
+| [externalevents](externalevents) | Typed and repeated events, task readiness, timeouts, cross-instance events | Piped or interactive input |
 | [suborchestrations](suborchestrations) | Child workflows, results, IDs, metadata and failures | None |
 | [retries](retries) | Controlled retries, retry handlers, typed/non-retriable failures | None |
 | [rewind](rewind) | Failed-activity recovery, renewed execution identity and preserved successful work | Rewind-capable DTS service |

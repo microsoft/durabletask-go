@@ -26,6 +26,34 @@ type Task interface {
 	Await(v any) error
 }
 
+// IsCompleted reports whether a task has completed successfully, failed, or
+// been canceled. It does not block, consume the result, or advance history.
+// Call Await to retrieve the result or error.
+//
+// The result reflects the current replay position, not necessarily all events
+// already present in history. Completions are applied one at a time, so when
+// WhenAny or Select wakes on a completion, only the selected task is guaranteed
+// complete; other tasks completing in the same batch are not observed until the
+// orchestration waits again. Polling does not yield to the orchestration
+// scheduler, so a loop that only polls never makes progress; use Await,
+// WhenAny, or Select to wait.
+//
+// IsCompleted panics for nil or custom Task implementations, and when called
+// outside an orchestration coroutine. It supports tasks returned by the
+// orchestration context.
+func IsCompleted(t Task) bool {
+	state, ok := taskState(t)
+	if !ok || state == nil {
+		panic(fmt.Sprintf("task type %T cannot be checked for completion", t))
+	}
+	scheduler := state.orchestrationCtx.engineContext().scheduler
+	if scheduler == nil {
+		panic("IsCompleted called outside orchestrator execution")
+	}
+	scheduler.mustCurrent()
+	return state.isCompleted
+}
+
 type completableTask struct {
 	orchestrationCtx   *OrchestrationContext
 	isCompleted        bool
