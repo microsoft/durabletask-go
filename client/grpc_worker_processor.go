@@ -12,6 +12,7 @@ import (
 
 	"github.com/microsoft/durabletask-go/api"
 	"github.com/microsoft/durabletask-go/internal/contextprop"
+	"github.com/microsoft/durabletask-go/internal/dttrace"
 	"github.com/microsoft/durabletask-go/internal/failure"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/largepayload"
@@ -260,8 +261,19 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 		}
 	}
 
+	executeCtx := ctx
+	var orchestrationTrace *dttrace.Orchestration
+	if w.options.tracer != nil {
+		orchestrationTrace = w.options.tracer.StartOrchestration(
+			request.InstanceId,
+			request.OrchestrationTraceContext,
+			pastEvents,
+			request.NewEvents,
+		)
+		executeCtx = dttrace.WithOrchestration(ctx, orchestrationTrace)
+	}
 	results, err := w.executor.ExecuteOrchestrator(
-		ctx,
+		executeCtx,
 		api.InstanceID(request.InstanceId),
 		pastEvents,
 		request.NewEvents,
@@ -313,13 +325,18 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 		if response.OrchestrationTraceContext == nil {
 			response.OrchestrationTraceContext = request.OrchestrationTraceContext
 		}
-		if err := populateOrchestratorActionTraceContexts(
-			response.Actions,
-			pastEvents,
-			request.NewEvents,
-		); err != nil {
-			w.logger.Warnf("%s: failed to populate action trace contexts: %v", request.InstanceId, err)
+		if !orchestrationTrace.Enabled() {
+			if err := populateOrchestratorActionTraceContexts(
+				response.Actions,
+				pastEvents,
+				request.NewEvents,
+			); err != nil {
+				w.logger.Warnf("%s: failed to populate action trace contexts: %v", request.InstanceId, err)
+			}
 		}
+	}
+	if orchestrationTrace.Enabled() {
+		orchestrationTrace.PrepareResponse(response)
 	}
 	if err := largepayload.TransformOrchestratorResponse(ctx, w.options.largePayloads, response); err != nil {
 		w.logger.Errorf("%s: failed to externalize orchestration response payloads: %v", request.InstanceId, err)
@@ -339,7 +356,11 @@ func (w *TaskHubGrpcWorker) processOrchestration(
 		}
 		w.logger.Errorf("%s: failed to complete orchestration work item: %v", request.InstanceId, err)
 		w.abandonOrchestration(ctx, client, completionToken)
+		return
 	}
+	// Spans describe the response the backend accepted, after any worker-side
+	// rewrite such as the oversized-response failure.
+	orchestrationTrace.Emit(response)
 }
 
 // failOversizedOrchestratorResponse converts a response that modern DTS cannot
@@ -530,7 +551,22 @@ func (w *TaskHubGrpcWorker) processActivity(
 		request.ParentTraceContext,
 	)
 	event.GetTaskScheduled().Tags = contextprop.Clone(request.Tags)
-	result, err := w.executor.ExecuteActivity(ctx, api.InstanceID(request.OrchestrationInstance.InstanceId), event)
+	executeCtx := ctx
+	var activityTrace *dttrace.Activity
+	if w.options.tracer != nil {
+		activityTrace = w.options.tracer.NewActivity(
+			request.Name,
+			request.Version.GetValue(),
+			request.OrchestrationInstance.InstanceId,
+			request.TaskId,
+			request.ParentTraceContext,
+		)
+		executeCtx = dttrace.WithActivity(ctx, activityTrace)
+	}
+	result, err := w.executor.ExecuteActivity(executeCtx, api.InstanceID(request.OrchestrationInstance.InstanceId), event)
+	// The span reports the activity's own outcome; whether that outcome reaches
+	// the backend does not change it. Rejected work never starts a span.
+	activityTrace.End(result, err)
 	var delayed workItemAbandonDelayError
 	if errors.As(err, &delayed) {
 		w.logger.Warnf(

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/dttrace"
 	"github.com/microsoft/durabletask-go/internal/failure"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/protos"
@@ -178,15 +179,20 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 		return nil, fmt.Errorf("unexpected event type for ExecuteActivity: %v", e.EventType)
 	}
 	activityVersion := ts.GetVersion().GetValue()
-	if versionErr := te.versioning.check(activityVersion); versionErr != nil &&
-		!allowsUnversionedTask(te.unversionedActivities, ts.GetName(), activityVersion) {
-		if te.versioning.FailureStrategy == VersionFailureReject {
-			return nil, versionErr
-		}
-		return helpers.NewTaskFailedEvent(e.EventId, versionFailureDetails(versionErr)), nil
+	versionErr := te.versioning.check(activityVersion)
+	if versionErr != nil && allowsUnversionedTask(te.unversionedActivities, ts.GetName(), activityVersion) {
+		versionErr = nil
+	}
+	if versionErr != nil && te.versioning.FailureStrategy == VersionFailureReject {
+		return nil, versionErr
 	}
 	ctx = api.ContextWithFields(ctx, te.contextFields)
 	ctx = helpers.ContextWithTraceContext(ctx, ts.GetParentTraceContext())
+	// The activity span covers only work this executor reports a result for.
+	ctx = dttrace.StartActivitySpan(ctx)
+	if versionErr != nil {
+		return helpers.NewTaskFailedEvent(e.EventId, versionFailureDetails(versionErr)), nil
+	}
 	ctx = api.ContextWithFields(ctx, api.ContextFields(tagcodec.DecodeContextFields(ts.GetTags())))
 	orchestrationInfo, _ := api.OrchestrationContextInfoFromContext(ctx)
 	if orchestrationInfo.InstanceID == "" {
@@ -243,7 +249,7 @@ func (te *taskExecutor) ExecuteActivity(ctx context.Context, id api.InstanceID, 
 
 // ExecuteOrchestrator implements Executor and executes an orchestrator function in the current goroutine.
 func (te *taskExecutor) ExecuteOrchestrator(
-	_ context.Context,
+	ctx context.Context,
 	id api.InstanceID,
 	oldEvents []*protos.HistoryEvent,
 	newEvents []*protos.HistoryEvent,
@@ -301,6 +307,7 @@ func (te *taskExecutor) ExecuteOrchestrator(
 		te.converter,
 		entitiesSupported,
 	)
+	orchestrationCtx.trace = dttrace.OrchestrationFromContext(ctx)
 	actions := orchestrationCtx.start()
 	te.reportHistoryMetric(orchestrationCtx)
 

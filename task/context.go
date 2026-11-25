@@ -6,6 +6,7 @@ import (
 	"maps"
 
 	"github.com/microsoft/durabletask-go/api"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type taskLoggerKey struct{}
@@ -25,9 +26,15 @@ func mergeStringMaps[M ~map[string]string](base, overrides M) M {
 // Context returns a replay-stable Go context containing only persisted
 // orchestration identity and caller fields. Host values, deadlines, and
 // cancellation are intentionally excluded from deterministic orchestrator code.
+// When worker tracing is enabled it also carries the non-recording logical
+// orchestration span context for correlation; spans started from it are not
+// replay-aware.
 func (ctx *OrchestrationContext) Context() context.Context {
 	engine := ctx.engineContext()
 	base := api.ContextWithFields(context.Background(), engine.contextFields)
+	if spanContext := engine.trace.SpanContext(); spanContext.IsValid() {
+		base = trace.ContextWithSpanContext(base, spanContext)
+	}
 	return api.WithOrchestrationContextInfo(base, api.OrchestrationContextInfo{
 		InstanceID:       engine.ID,
 		Name:             engine.Name,
