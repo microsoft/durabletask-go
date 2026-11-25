@@ -1,9 +1,9 @@
 // Package tracing configures opt-in OpenTelemetry spans for Durable Task
-// workers.
+// clients and workers.
 //
-// By default workers only propagate W3C trace context and emit no spans.
-// Enable spans with client.WithWorkerTracerProvider and a provider built with
-// [WithIDGenerator] and [WithSampler]:
+// By default clients and workers only propagate W3C trace context and emit no
+// spans. Enable worker spans with client.WithWorkerTracerProvider and a
+// provider built with [WithIDGenerator] and [WithSampler]:
 //
 //	provider := sdktrace.NewTracerProvider(
 //		tracing.WithIDGenerator(nil),
@@ -11,6 +11,21 @@
 //		sdktrace.WithBatcher(exporter),
 //	)
 //	worker, err := durabletaskscheduler.NewWorker(..., client.WithWorkerTracerProvider(provider))
+//
+// Enable client spans with client.WithTracerProvider. Client spans are
+// started live and never reconstructed, so any provider works, including
+// otel.GetTracerProvider(), the global delegating provider. The client and
+// worker can also share one provider configured with [WithIDGenerator] and
+// [WithSampler]:
+//
+//	c, err := durabletaskscheduler.NewClient(ctx, options, logger, client.WithTracerProvider(provider))
+//
+// The client emits a PRODUCER span named "create_orchestration:<name>" (with
+// an "@(<version>)" suffix when versioned) for each ScheduleNewOrchestration
+// call and parents the new orchestration to it, and a PRODUCER span named
+// "orchestration_event:<event>" for each RaiseEvent call. Both are children of
+// the span in the call's context, and failed calls, including payload
+// externalization failures, record an error status.
 //
 // The application owns the provider's resource, sampling policy, processors,
 // exporter, and shutdown. Spans use the "Microsoft.DurableTask"

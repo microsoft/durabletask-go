@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/microsoft/durabletask-go/api"
+	"github.com/microsoft/durabletask-go/internal/dttrace"
 	"github.com/microsoft/durabletask-go/internal/failure"
 	"github.com/microsoft/durabletask-go/internal/helpers"
 	"github.com/microsoft/durabletask-go/internal/largepayload"
@@ -30,6 +31,7 @@ type TaskHubGrpcClient struct {
 	largePayloads  *api.LargePayloadOptions
 	defaultVersion string
 	converter      api.DataConverter
+	tracer         *dttrace.ClientTracer
 
 	listenerMu sync.Mutex
 	listener   *TaskHubGrpcWorker
@@ -72,6 +74,24 @@ func WithDataConverter(converter api.DataConverter) TaskHubGrpcClientOption {
 	}
 }
 
+// WithTracerProvider enables Durable Task PRODUCER spans for
+// ScheduleNewOrchestration ("create_orchestration:<name>") and RaiseEvent
+// ("orchestration_event:<name>"). Spans are children of the span in the call's
+// context, and a scheduled orchestration is parented to its
+// create_orchestration span. Failed calls mark the span as an error.
+//
+// Any provider is accepted, including otel.GetTracerProvider();
+// tracing.WithIDGenerator and tracing.WithSampler are
+// required only for worker tracing, and a provider configured with them can be
+// shared with the worker. The application owns the provider's configuration and
+// shutdown. Without this option, or with a nil provider, the client emits no
+// spans and only propagates the caller's sampled trace context.
+func WithTracerProvider(provider trace.TracerProvider) TaskHubGrpcClientOption {
+	return func(c *TaskHubGrpcClient) {
+		c.tracer = dttrace.NewClientTracer(provider)
+	}
+}
+
 // NewTaskHubGrpcClient creates a client that can be used to manage orchestrations over a borrowed gRPC connection.
 // The caller retains ownership of the connection; this client neither closes nor recreates it. DTS applications that
 // want an owned, resilient management channel should use durabletaskscheduler.NewClient.
@@ -89,7 +109,7 @@ func NewTaskHubGrpcClient(cc grpc.ClientConnInterface, logger api.Logger, opts .
 }
 
 // ScheduleNewOrchestration schedules a new orchestration instance with a specified set of options for execution.
-func (c *TaskHubGrpcClient) ScheduleNewOrchestration(ctx context.Context, orchestrator string, opts ...api.NewOrchestrationOptions) (api.InstanceID, error) {
+func (c *TaskHubGrpcClient) ScheduleNewOrchestration(ctx context.Context, orchestrator string, opts ...api.NewOrchestrationOptions) (_ api.InstanceID, err error) {
 	req := &protos.CreateInstanceRequest{Name: orchestrator}
 	for _, configure := range opts {
 		if err := configure(req, c.converter); err != nil {
@@ -110,7 +130,12 @@ func (c *TaskHubGrpcClient) ScheduleNewOrchestration(ctx context.Context, orches
 			req.InstanceId = uuid.NewString()
 		}
 	}
-	var err error
+	var span trace.Span
+	if c.tracer != nil {
+		ctx, span = c.tracer.StartCreateOrchestration(ctx, req.Name, req.Version.GetValue(),
+			req.InstanceId, req.ExecutionId.GetValue())
+		defer func() { dttrace.EndClientSpan(span, err) }()
+	}
 	req.Input, err = largepayload.Externalize(ctx, c.largePayloads, req.Input)
 	if err != nil {
 		return api.EmptyInstanceID, fmt.Errorf("failed to externalize orchestration input: %w", err)
@@ -118,9 +143,15 @@ func (c *TaskHubGrpcClient) ScheduleNewOrchestration(ctx context.Context, orches
 
 	// Propagate the caller's distributed trace context so the service can parent the
 	// orchestration's trace to the code that scheduled it. Without this, every
-	// orchestration starts a brand new, disconnected trace.
+	// orchestration starts a brand new, disconnected trace. A traced client
+	// propagates its PRODUCER span even when unsampled so downstream spans keep
+	// the sampling decision.
 	if req.ParentTraceContext == nil {
-		req.ParentTraceContext = helpers.TraceContextFromSpan(trace.SpanFromContext(ctx))
+		if span != nil {
+			req.ParentTraceContext = helpers.TraceContextFromSpanContext(span.SpanContext())
+		} else {
+			req.ParentTraceContext = helpers.TraceContextFromSpan(trace.SpanFromContext(ctx))
+		}
 	}
 
 	resp, err := c.client.StartInstance(ctx, req)
@@ -221,14 +252,18 @@ func (c *TaskHubGrpcClient) TerminateOrchestration(ctx context.Context, id api.I
 }
 
 // RaiseEvent sends an asynchronous event notification to a waiting orchestration.
-func (c *TaskHubGrpcClient) RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, opts ...api.RaiseEventOptions) error {
+func (c *TaskHubGrpcClient) RaiseEvent(ctx context.Context, id api.InstanceID, eventName string, opts ...api.RaiseEventOptions) (err error) {
 	req := &protos.RaiseEventRequest{InstanceId: string(id), Name: eventName}
 	for _, configure := range opts {
 		if err := configure(req, c.converter); err != nil {
 			return fmt.Errorf("failed to configure raise event request: %w", api.WrapInvalidArgument(err))
 		}
 	}
-	var err error
+	if c.tracer != nil {
+		var span trace.Span
+		ctx, span = c.tracer.StartRaiseEvent(ctx, eventName, string(id))
+		defer func() { dttrace.EndClientSpan(span, err) }()
+	}
 	req.Input, err = largepayload.Externalize(ctx, c.largePayloads, req.Input)
 	if err != nil {
 		return fmt.Errorf("failed to externalize event payload: %w", err)
