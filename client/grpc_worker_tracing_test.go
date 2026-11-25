@@ -131,10 +131,348 @@ func (b *fakeOrchestrationBackend) dispatch(
 			b.scheduled[action.Id] = created.ParentTraceContext
 			b.history = append(b.history, helpers.NewSubOrchestrationCreatedEvent(
 				action.Id, created.Name, created.Version, created.Input, created.InstanceId, created.ParentTraceContext))
+		case action.GetSendEvent() != nil:
+			sent := action.GetSendEvent()
+			b.history = append(b.history, helpers.NewSendEventEvent(
+				action.Id, sent.GetInstance().GetInstanceId(), sent.GetName(), sent.GetData()))
 		}
 	}
 	b.traceContext = response.OrchestrationTraceContext
 	return response
+}
+
+func TestWorkerTracingEventSendAndReceipt(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Sender", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SendEvent("receiver", "approval", "approved"); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	require.NoError(t, registry.AddOrchestratorN("Receiver", func(ctx *task.OrchestrationContext) (any, error) {
+		var value string
+		err := ctx.WaitForSingleEvent("approval", -1).Await(&value)
+		return value, err
+	}))
+	parent, parentTrace := newTraceParent(trace.FlagsSampled)
+
+	t.Run("send", func(t *testing.T) {
+		started := helpers.NewExecutionStartedEvent("Sender", "sender", nil, nil, parentTrace, nil)
+		h := newTracingHarness(t, registry, true)
+		response := newFakeOrchestrationBackend("sender", started).dispatch(t, h)
+		events := spansNamed(h.spans(), "orchestration_event:approval")
+		require.Len(t, events, 1)
+		span := events[0]
+		require.Equal(t, trace.SpanKindProducer, span.SpanKind())
+		require.Equal(t, parent.TraceID(), span.SpanContext().TraceID())
+		require.Equal(t, response.OrchestrationTraceContext.SpanID.GetValue(), span.Parent().SpanID().String())
+		require.Equal(t, "vendor=value", span.SpanContext().TraceState().String())
+		require.Equal(t, "Microsoft.DurableTask", span.InstrumentationScope().Name)
+		require.Equal(t, "event", spanAttribute(span, "durabletask.type"))
+		require.Equal(t, "approval", spanAttribute(span, "durabletask.task.name"))
+		require.Equal(t, "sender", spanAttribute(span, "durabletask.task.instance_id"))
+		require.Equal(t, started.GetExecutionStarted().GetOrchestrationInstance().GetExecutionId().GetValue(),
+			spanAttribute(span, "durabletask.task.execution_id"))
+		require.Equal(t, "receiver", spanAttribute(span, "durabletask.event.target_instance_id"))
+		require.Empty(t, spanAttribute(span, "durabletask.task.task_id"))
+		require.Empty(t, spanAttribute(span, "durabletask.task.version"))
+		require.True(t, span.StartTime().Equal(span.EndTime()))
+		require.Equal(t, `"approved"`, response.Actions[0].GetSendEvent().GetData().GetValue())
+	})
+
+	t.Run("acknowledgement-as-new-event", func(t *testing.T) {
+		// An acknowledgement delivered as new history must not export the send
+		// a second time, even when replay regenerates the corresponding action.
+		h := newTracingHarness(t, registry, true)
+		backend := newFakeOrchestrationBackend("sender", helpers.NewExecutionStartedEvent(
+			"Sender", "sender", nil, nil, parentTrace, nil))
+		backend.dispatch(t, h)
+		ack := backend.history[len(backend.history)-1]
+		require.NotNil(t, ack.GetEventSent())
+		backend.history = backend.history[:len(backend.history)-1]
+		backend.dispatch(t, h, ack)
+		backend.dispatch(t, h, helpers.NewEventRaisedEvent("finish", nil))
+		require.Len(t, spansNamed(h.spans(), "orchestration_event:approval"), 1)
+	})
+
+	t.Run("receipt", func(t *testing.T) {
+		// Receipt stays in the receiver's independently scheduled trace. The
+		// protocol has no sender trace context to propagate or link here.
+		h := newTracingHarness(t, registry, true)
+		receiverParent := parent.WithTraceID(trace.TraceID{9}).WithSpanID(trace.SpanID{9})
+		receiver := newFakeOrchestrationBackend("receiver", helpers.NewExecutionStartedEvent(
+			"Receiver", "receiver", nil, nil, helpers.TraceContextFromSpanContext(receiverParent), nil))
+		receiver.dispatch(t, h, helpers.NewEventRaisedEvent("approval", wrapperspb.String(`"approved"`)))
+		received := spansNamed(h.spans(), "orchestration:Receiver")
+		require.Len(t, received, 1)
+		require.Equal(t, receiverParent, received[0].Parent())
+		require.Empty(t, received[0].Links())
+		require.Empty(t, spansNamed(h.spans(), "orchestration_event:approval"))
+		for _, span := range h.spans() {
+			require.NotEqual(t, trace.SpanKindConsumer, span.SpanKind())
+		}
+	})
+}
+
+func TestWorkerTracingEventSendRejectedCompletionExportsNothing(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Sender", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SendEvent("receiver", "approval", nil); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	_, parentTrace := newTraceParent(trace.FlagsSampled)
+	h := newTracingHarness(t, registry, true)
+	h.client.completeOrchestratorErr = status.Error(grpccodes.InvalidArgument, "rejected")
+	h.worker.processOrchestration(context.Background(), h.client, "token", &protos.OrchestratorRequest{
+		InstanceId: "sender",
+		NewEvents: []*protos.HistoryEvent{
+			helpers.NewOrchestratorStartedEvent(),
+			helpers.NewExecutionStartedEvent("Sender", "sender", nil, nil, parentTrace, nil),
+		},
+	})
+	require.Len(t, h.client.orchestrationCompletions, 1)
+	require.NotNil(t, h.client.orchestrationCompletions[0].Actions[0].GetSendEvent())
+	require.Equal(t, 1, h.client.orchestrationAbandons)
+	require.Empty(t, h.spans())
+}
+
+func TestWorkerTracingEventSendWithContinueAsNew(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Relay", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SendEvent("receiver", "approval", nil); err != nil {
+			return nil, err
+		}
+		ctx.ContinueAsNew(nil)
+		return nil, nil
+	}))
+	_, parentTrace := newTraceParent(trace.FlagsSampled)
+	h := newTracingHarness(t, registry, true)
+	response := newFakeOrchestrationBackend("relay", helpers.NewExecutionStartedEvent(
+		"Relay", "relay", nil, nil, parentTrace, nil)).dispatch(t, h)
+	require.Len(t, response.Actions, 2)
+	require.NotNil(t, response.Actions[0].GetSendEvent())
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
+		response.Actions[1].GetCompleteOrchestration().GetOrchestrationStatus())
+	orchestrations := spansNamed(h.spans(), "orchestration:Relay")
+	require.Len(t, orchestrations, 1)
+	events := spansNamed(h.spans(), "orchestration_event:approval")
+	require.Len(t, events, 1)
+	// The send belongs to the execution that made it, not the next execution
+	// whose fresh identity the response persists.
+	require.Equal(t, orchestrations[0].SpanContext().SpanID(), events[0].Parent().SpanID())
+	require.NotEqual(t, response.OrchestrationTraceContext.SpanID.GetValue(), events[0].Parent().SpanID().String())
+}
+
+func TestWorkerTracingEventSendEmitsOnceAtResponseTime(t *testing.T) {
+	h := newTracingHarness(t, task.NewTaskRegistry(), true)
+	_, parentTrace := newTraceParent(trace.FlagsSampled)
+	o := h.worker.options.tracer.StartOrchestration("sender", nil, []*protos.HistoryEvent{
+		helpers.NewExecutionStartedEvent("Sender", "sender", nil, nil, parentTrace, nil),
+	})
+	recorded := helpers.NewSendEventAction("receiver", "recorded", nil)
+	recorded.Id = 0
+	unrecorded := helpers.NewSendEventAction("receiver", "unrecorded", nil)
+	unrecorded.Id = 1
+	o.RecordSendEvent(recorded, false)
+	response := &protos.OrchestratorResponse{Actions: []*protos.OrchestratorAction{recorded, unrecorded}}
+	o.PrepareResponse(response)
+	prepared := time.Now()
+	time.Sleep(20 * time.Millisecond)
+
+	o.Emit(response)
+	o.Emit(response)
+	o.RecordSendEvent(recorded, false)
+	require.Len(t, spansNamed(h.spans(), "orchestration_event:recorded"), 1)
+	fallback := spansNamed(h.spans(), "orchestration_event:unrecorded")
+	require.Len(t, fallback, 1)
+	// A send without a recorded span is stamped when the response is prepared,
+	// not after the completion call and its retries.
+	require.False(t, fallback[0].StartTime().After(prepared))
+}
+
+func TestWorkerTracingEventSendAckDeferredByTurnBudget(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("Sender", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SendEvent("receiver", "approval", nil); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	_, parentTrace := newTraceParent(trace.FlagsSampled)
+	backend := newFakeOrchestrationBackend("sender", helpers.NewExecutionStartedEvent(
+		"Sender", "sender", nil, nil, parentTrace, nil))
+	h := newTracingHarness(t, registry, true,
+		task.WithOrchestrationOptions(task.OrchestrationOptions{MaxEventsPerTurn: 1}))
+	response := backend.dispatch(t, h)
+	require.Len(t, spansNamed(h.spans(), "orchestration_event:approval"), 1)
+
+	// Deliver the accepted send's acknowledgement behind an unrelated event.
+	ack := backend.history[len(backend.history)-1]
+	require.NotNil(t, ack.GetEventSent())
+	backend.history = backend.history[:len(backend.history)-1]
+	deferred := backend.dispatch(t, h, helpers.NewEventRaisedEvent("unrelated", nil), ack)
+	require.Equal(t, int32(1), deferred.GetNumEventsProcessed().GetValue())
+	require.Len(t, deferred.Actions, 1)
+	require.Equal(t, response.Actions[0].Id, deferred.Actions[0].Id)
+	require.NotNil(t, deferred.Actions[0].GetSendEvent())
+	require.Len(t, spansNamed(h.spans(), "orchestration_event:approval"), 1,
+		"a replayed send must not export again while its acknowledgement is deferred")
+
+	// The real backend deduplicates the replayed send; retain only the original
+	// acknowledgement, still pending delivery, rather than the fake's new one.
+	backend.history = backend.history[:len(backend.history)-1]
+	backend.dispatch(t, h)
+	backend.dispatch(t, h, helpers.NewEventRaisedEvent("finish", nil))
+	require.Len(t, spansNamed(h.spans(), "orchestration_event:approval"), 1)
+}
+
+func TestWorkerTracingEventSendSameBatch(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("BatchSend", func(ctx *task.OrchestrationContext) (any, error) {
+		if err := ctx.SendEvent("receiver", "approval", nil); err != nil {
+			return nil, err
+		}
+		return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+	}))
+	_, parentTrace := newTraceParent(trace.FlagsSampled)
+	started := helpers.NewExecutionStartedEvent("BatchSend", "sender", nil, nil, parentTrace, nil)
+	sent := helpers.NewSendEventEvent(0, "receiver", "approval", wrapperspb.String(""))
+	h := newTracingHarness(t, registry, true)
+	request := &protos.OrchestratorRequest{
+		InstanceId: "sender",
+		NewEvents:  []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent(), started, sent},
+	}
+	h.worker.processOrchestration(context.Background(), h.client, "token", request)
+	require.Empty(t, h.client.orchestrationCompletions[0].Actions)
+	require.Len(t, spansNamed(h.spans(), "orchestration_event:approval"), 1)
+	request.PastEvents = request.NewEvents
+	request.NewEvents = []*protos.HistoryEvent{helpers.NewOrchestratorStartedEvent()}
+	request.OrchestrationTraceContext = h.client.orchestrationCompletions[0].OrchestrationTraceContext
+	h.worker.processOrchestration(context.Background(), h.client, "token", request)
+	require.Empty(t, h.client.orchestrationCompletions[1].Actions)
+	require.Len(t, spansNamed(h.spans(), "orchestration_event:approval"), 1)
+}
+
+func TestWorkerTracingEventsBufferingAndTurnBudget(t *testing.T) {
+	for name, test := range map[string]struct {
+		waitForReady bool
+		suspend      bool
+		// release lets held receipts reach the orchestrator; nil when the turn
+		// budget alone defers the second receipt.
+		release     *protos.HistoryEvent
+		heldMessage string
+	}{
+		"event-budget": {},
+		"suspended": {
+			suspend:     true,
+			release:     helpers.NewResumeOrchestrationEvent(""),
+			heldMessage: "buffered receipts must not manufacture send spans",
+		},
+		"buffered": {
+			waitForReady: true,
+			release:      helpers.NewEventRaisedEvent("ready", nil),
+			heldMessage:  "receipts without a waiter must not manufacture send spans",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			registry := task.NewTaskRegistry()
+			require.NoError(t, registry.AddOrchestratorN("Relay", func(ctx *task.OrchestrationContext) (any, error) {
+				if test.waitForReady {
+					if err := ctx.WaitForSingleEvent("ready", -1).Await(nil); err != nil {
+						return nil, err
+					}
+				}
+				for range 2 {
+					if err := ctx.WaitForSingleEvent("next", -1).Await(nil); err != nil {
+						return nil, err
+					}
+					if err := ctx.SendEvent("receiver", "forwarded", nil); err != nil {
+						return nil, err
+					}
+				}
+				return nil, ctx.WaitForSingleEvent("finish", -1).Await(nil)
+			}))
+			_, parentTrace := newTraceParent(trace.FlagsSampled)
+			backend := newFakeOrchestrationBackend("relay", helpers.NewExecutionStartedEvent(
+				"Relay", "relay", nil, nil, parentTrace, nil))
+			h := newTracingHarness(t, registry, true,
+				task.WithOrchestrationOptions(task.OrchestrationOptions{MaxEventsPerTurn: 1}))
+			backend.dispatch(t, h)
+			if test.suspend {
+				backend.dispatch(t, h, helpers.NewSuspendOrchestrationEvent(""))
+			}
+			backend.dispatch(t, h, helpers.NewEventRaisedEvent("next", nil), helpers.NewEventRaisedEvent("next", nil))
+			want := 0
+			if test.release == nil {
+				want = 1
+			}
+			require.Len(t, spansNamed(h.spans(), "orchestration_event:forwarded"), want)
+			backend.dispatch(t, h)
+			if test.release != nil {
+				require.Empty(t, h.spans(), test.heldMessage)
+				backend.dispatch(t, h, test.release)
+			}
+			require.Len(t, spansNamed(h.spans(), "orchestration_event:forwarded"), 2)
+			backend.dispatch(t, h, helpers.NewEventRaisedEvent("finish", nil))
+			require.Len(t, spansNamed(h.spans(), "orchestration_event:forwarded"), 2)
+		})
+	}
+}
+
+func TestWorkerTracingEventsDisabledOrMissingContext(t *testing.T) {
+	_, sampled := newTraceParent(trace.FlagsSampled)
+	_, unsampled := newTraceParent(0)
+	for name, test := range map[string]struct {
+		enabled bool
+		parent  *protos.TraceContext
+		// wantRoot means the orchestration roots a new trace and the send nests
+		// under it; otherwise nothing is exported.
+		wantRoot bool
+	}{
+		"disabled":        {parent: sampled},
+		"missing-context": {enabled: true, wantRoot: true},
+		"unsampled":       {enabled: true, parent: unsampled},
+	} {
+		t.Run(name, func(t *testing.T) {
+			registry := task.NewTaskRegistry()
+			require.NoError(t, registry.AddOrchestratorN("Send", func(ctx *task.OrchestrationContext) (any, error) {
+				return nil, ctx.SendEvent("receiver", "approval", 42)
+			}))
+			h := newTracingHarness(t, registry, test.enabled)
+			response := newFakeOrchestrationBackend("sender", helpers.NewExecutionStartedEvent(
+				"Send", "sender", nil, nil, test.parent, nil)).dispatch(t, h)
+			if test.wantRoot {
+				events := spansNamed(h.spans(), "orchestration_event:approval")
+				require.Len(t, events, 1)
+				require.Equal(t, response.OrchestrationTraceContext.SpanID.GetValue(), events[0].Parent().SpanID().String())
+				require.Len(t, spansNamed(h.spans(), "orchestration:Send"), 1)
+				require.False(t, spansNamed(h.spans(), "orchestration:Send")[0].Parent().IsValid())
+			} else {
+				require.Empty(t, h.spans())
+			}
+			require.Len(t, response.Actions, 2)
+			require.Equal(t, "approval", response.Actions[0].GetSendEvent().GetName())
+			require.Equal(t, "42", response.Actions[0].GetSendEvent().GetData().GetValue())
+		})
+	}
+}
+
+func TestWorkerTracingDiscardedSendDoesNotExport(t *testing.T) {
+	registry := task.NewTaskRegistry()
+	require.NoError(t, registry.AddOrchestratorN("LargeSend", func(ctx *task.OrchestrationContext) (any, error) {
+		return nil, ctx.SendEvent("receiver", "approval", string(make([]byte, 4096)))
+	}))
+	_, parentTrace := newTraceParent(trace.FlagsSampled)
+	h := newTracingHarness(t, registry, true)
+	h.worker.options.maxOrchestratorCompletionBytes = 1024
+	response := newFakeOrchestrationBackend("sender", helpers.NewExecutionStartedEvent(
+		"LargeSend", "sender", nil, nil, parentTrace, nil)).dispatch(t, h)
+	require.Len(t, response.Actions, 1)
+	require.Equal(t, protos.OrchestrationStatus_ORCHESTRATION_STATUS_FAILED,
+		response.Actions[0].GetCompleteOrchestration().GetOrchestrationStatus())
+	require.Empty(t, spansNamed(h.spans(), "orchestration_event:approval"))
 }
 
 func newTraceParent(flags trace.TraceFlags) (trace.SpanContext, *protos.TraceContext) {

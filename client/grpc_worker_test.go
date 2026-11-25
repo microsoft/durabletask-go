@@ -97,6 +97,7 @@ type fakeSchedulerClient struct {
 	orchestrationCompletions []*protos.OrchestratorResponse
 	activityCompletions      []*protos.ActivityResponse
 	entityCompletions        []*protos.EntityBatchResult
+	completeOrchestratorErr  error
 	activityCompletionErr    error
 	entityCompletionErr      error
 	orchestrationAbandons    int
@@ -130,7 +131,7 @@ func (c *fakeSchedulerClient) CompleteOrchestratorTask(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.orchestrationCompletions = append(c.orchestrationCompletions, response)
-	return &protos.CompleteTaskResponse{}, nil
+	return &protos.CompleteTaskResponse{}, c.completeOrchestratorErr
 }
 
 func (c *fakeSchedulerClient) CompleteActivityTask(
