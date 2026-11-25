@@ -2,6 +2,7 @@ package orchestratorgo_test
 
 import (
 	"fmt"
+	"go/types"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +86,13 @@ func helper%d_%d(value int) int {
 		}
 	}
 	builder.WriteString("}\n")
+	if !register {
+		builder.WriteString("\nfunc Exported(ctx *task.OrchestrationContext) {\n")
+		for i := 0; i < orchestrators; i++ {
+			fmt.Fprintf(&builder, "\t_, _ = orchestrator%d(ctx)\n", i)
+		}
+		builder.WriteString("}\n")
+	}
 	return builder.String()
 }
 
@@ -115,14 +123,17 @@ func loadBenchmarkPass(b *testing.B, source string) *analysis.Pass {
 	}
 	pkg := loaded[0]
 	return &analysis.Pass{
-		Analyzer:   orchestratorgo.Analyzer,
-		Fset:       pkg.Fset,
-		Files:      pkg.Syntax,
-		Pkg:        pkg.Types,
-		TypesInfo:  pkg.TypesInfo,
-		TypesSizes: pkg.TypesSizes,
-		Report:     func(analysis.Diagnostic) {},
-		ResultOf:   map[*analysis.Analyzer]any{},
+		Analyzer:         orchestratorgo.Analyzer,
+		Fset:             pkg.Fset,
+		Files:            pkg.Syntax,
+		Pkg:              pkg.Types,
+		TypesInfo:        pkg.TypesInfo,
+		TypesSizes:       pkg.TypesSizes,
+		Report:           func(analysis.Diagnostic) {},
+		ResultOf:         map[*analysis.Analyzer]any{},
+		Module:           &analysis.Module{Path: "bench"},
+		ImportObjectFact: func(types.Object, analysis.Fact) bool { return false },
+		ExportObjectFact: func(types.Object, analysis.Fact) {},
 	}
 }
 
@@ -157,8 +168,8 @@ func BenchmarkAnalyzerCallGraphDepth(b *testing.B) {
 	}
 }
 
-// BenchmarkAnalyzerNoOrchestrators measures the cost of the early exit taken by
-// the overwhelming majority of packages, which register nothing at all.
+// BenchmarkAnalyzerNoOrchestrators measures summary construction without
+// registrations.
 func BenchmarkAnalyzerNoOrchestrators(b *testing.B) {
 	runAnalyzerBenchmark(b, generateBenchmarkPackage(8, 4, false))
 }

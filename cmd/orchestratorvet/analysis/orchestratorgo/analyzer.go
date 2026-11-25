@@ -2,8 +2,8 @@
 // package registers with task.TaskRegistry.
 //
 // The analyzer starts from every proven registration in the package under
-// analysis, follows the call graph through same-package named functions,
-// methods, resolvable function variables, and the nested function literals
+// analysis, follows the call graph through named functions, methods,
+// resolvable function variables, and the nested function literals
 // whose bodies are proven to execute -- through a direct call whose callee
 // resolves to the literal, a call through a single-assignment variable, a raw go or
 // defer call, or the callback argument of an explicitly modeled invoker such
@@ -32,13 +32,15 @@
 //   - registration forms that task.TaskRegistry rejects or that derive unstable
 //     names, and registered orchestrators invoked as plain Go calls.
 //
-// The analyzer stays silent whenever proof is unavailable. Dynamic registration,
-// wildcard registration, cross-package registration, functions reached only
-// through values it cannot resolve, and code outside orchestrator reachability
-// are all left alone.
+// Same-module imports contribute replay-hazard summaries via analysis facts.
+// These summaries do not establish registry completeness or loop progress.
+// The analyzer stays silent when it cannot resolve a call or registration to
+// a body or a known hazard, and outside registered orchestrator reachability.
 package orchestratorgo
 
 import (
+	"go/token"
+
 	"golang.org/x/tools/go/analysis"
 )
 
@@ -46,10 +48,11 @@ var includeTestFiles bool
 
 // Analyzer reports replay hazards in registered durable task orchestrators.
 var Analyzer = &analysis.Analyzer{
-	Name: "orchestratorgo",
-	Doc:  "report nondeterministic and replay-unsafe code in durable task orchestrators",
-	URL:  "https://github.com/microsoft/durabletask-go/tree/main/cmd/orchestratorvet/analysis/orchestratorgo",
-	Run:  run,
+	Name:      "orchestratorgo",
+	Doc:       "report nondeterministic and replay-unsafe code in durable task orchestrators",
+	URL:       "https://github.com/microsoft/durabletask-go/tree/main/cmd/orchestratorvet/analysis/orchestratorgo",
+	Run:       run,
+	FactTypes: []analysis.Fact{new(hazardFact)},
 }
 
 func init() {
@@ -63,8 +66,12 @@ func init() {
 
 func run(pass *analysis.Pass) (any, error) {
 	index := newPackageIndex(pass)
+	facts := newHazardFacts(index)
+	if facts != nil {
+		facts.export()
+	}
 	registry := collectRegistrations(pass, index)
-	if len(registry.roots) == 0 {
+	if len(registry.roots) == 0 && len(registry.importedRoots) == 0 {
 		return nil, nil
 	}
 	reach := reachableFunctions(index, registry.roots)
@@ -75,8 +82,18 @@ func run(pass *analysis.Pass) (any, error) {
 		registry: registry,
 		reported: make(map[reportKey]bool),
 	}
+	if facts != nil {
+		for _, root := range registry.importedRoots {
+			facts.report(check, root.pos, root.function)
+		}
+	}
 	for _, node := range reach.order {
 		check.checkFunction(node)
+		if facts != nil {
+			index.forEachTarget(node, func(pos token.Pos, target functionTarget) {
+				facts.report(check, pos, target.imported)
+			})
+		}
 	}
 	check.reportClockDiagnostics()
 	return nil, nil
