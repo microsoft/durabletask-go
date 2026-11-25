@@ -62,6 +62,40 @@
 //   - Event receipt does not emit a consumer span. The event protocol carries
 //     no trace context, so sends cannot parent or link the receiving
 //     orchestration to the sender's event span.
+//   - Entity spans are named "entity:<name>:<operation>" and carry the
+//     DurableTask.Core "durabletask.task.operation" attribute ("call_entity"
+//     or "signal_entity") and the "durabletask.entity.operation" attribute
+//     (the operation name) used by the Python and JavaScript SDKs.
+//     Orchestrator entity signals emit PRODUCER spans under the orchestration
+//     when accepted, following the same replay rules as SendEvent. Entity
+//     calls emit CLIENT spans when the dispatch that consumes their
+//     completion is accepted. Replayed history emits neither.
+//   - Entity operation executions emit SERVER spans for calls and CONSUMER
+//     spans for signals. Each operation's span identity and sampling decision
+//     are reserved before the batch runs, and the operation's handler context
+//     carries that identity as a non-recording span context, so application
+//     spans started from EntityContext.Context() nest under it. Signals and
+//     orchestrations started by the operation carry it as their parent trace
+//     context. The span itself is reconstructed with the operation's result
+//     timestamps and exported only after the backend accepts the batch
+//     result; rejected, abandoned, or lost batches export nothing, and spans
+//     the application started under it may then reference a parent that is
+//     never exported. Successful operations leave the status unset; failed
+//     operations and failed batches record an error status and the
+//     "durabletask.entity.error_message" attribute. Durable Task Scheduler
+//     does not currently forward the parent trace context of entity-started
+//     signals and orchestrations.
+//   - V2 entity messages carry no trace context, so entity execution spans are
+//     independent trace roots, sampled by the provider's root policy, rather
+//     than children of the calling orchestration or client span. Their IDs
+//     come from the base generator passed to [WithIDGenerator]. No synthetic
+//     parent or span link is added.
+//   - Client SignalEntity emits no span. It propagates the caller's trace
+//     context on the request only when that context is sampled, like the
+//     Durable Task .NET gRPC client. The Python SDK also emits no client span
+//     for signals; the JavaScript SDK emits a "signal_entity" PRODUCER span.
+//   - Entity lock acquisition and release emit no spans, matching
+//     DurableTask.Core; entity calls made inside a critical section are traced.
 //   - Abandoned orchestration dispatches export no orchestration telemetry.
 //   - Telemetry is best effort, not exactly once, in both directions. A
 //     completion the backend retries may export its spans again. A completion
@@ -114,8 +148,8 @@ func WithIDGenerator(base sdktrace.IDGenerator) sdktrace.TracerProviderOption {
 }
 
 // NewSampler wraps base so Durable Task can learn sampling decisions for
-// reconstructed root orchestration spans without starting spans. All other
-// spans are sampled exactly as base decides. A nil base uses
+// reconstructed root orchestration and entity operation spans without starting
+// spans. All other spans are sampled exactly as base decides. A nil base uses
 // sdktrace.ParentBased(sdktrace.AlwaysSample()), the OpenTelemetry SDK default.
 // The result must be the provider's top-level sampler: pass a composite such
 // as sdktrace.ParentBased as base instead of nesting this sampler inside it.

@@ -1150,6 +1150,7 @@ func (ctx *OrchestrationContext) SignalEntity(entityID api.EntityID, operationNa
 		options.scheduledTime,
 	)
 	engine.pendingActions[action.Id] = action
+	engine.trace.RecordEntitySignal(action, entityID, engine.IsReplaying)
 	return nil
 }
 
@@ -1550,6 +1551,9 @@ func (ctx *OrchestrationContext) onEntityOperationSent(eventID int32, requestID 
 	}
 	if sentRequestID != requestID {
 		return fmt.Errorf("entity operation request ID changed from %q to %q", sentRequestID, requestID)
+	}
+	if message.GetEntityOperationSignaled() != nil {
+		ctx.trace.ConfirmEntitySignal(eventID, ctx.IsReplaying)
 	}
 	delete(ctx.pendingActions, eventID)
 	return nil
